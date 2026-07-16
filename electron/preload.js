@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('api', {
     listLocal: invoke('fs:listLocal'),
     listRemote: invoke('fs:listRemote'),
     upload: invoke('fs:upload'),
+    uploadDirectory: invoke('fs:uploadDirectory'),
     download: invoke('fs:download'),
     readFile: invoke('fs:readFile'),
     saveText: invoke('fs:saveText'),

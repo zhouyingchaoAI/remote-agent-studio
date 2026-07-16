@@ -55,7 +55,25 @@ export default function FilePanel({ hostId }) {
   };
 
   const upload = async () => {
-    if (!selLocal || selLocal.isDir) return;
+    if (!selLocal) return;
+    if (selLocal.isDir) {
+      const localPath = joinPath(local.path, selLocal.name, localSep);
+      const remotePath = joinPath(remote.path, selLocal.name);
+      const id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      setTransfers((ts) => [...ts, {
+        id, name: selLocal.name, dir: '↑', kind: 'directory', transferred: 0, total: 0, localPath, remotePath
+      }]);
+      try {
+        const result = await window.api.files.uploadDirectory({ hostId, localPath, remotePath, transferId: id });
+        setTransfers((ts) => ts.map((t) => t.id === id ? {
+          ...t, done: true, skippedSymlinks: result.skippedSymlinks
+        } : t));
+        loadRemote(remote.path);
+      } catch (e) {
+        setTransfers((ts) => ts.map((t) => t.id === id ? { ...t, error: e.message } : t));
+      }
+      return;
+    }
     await uploadOne(joinPath(local.path, selLocal.name, localSep), selLocal.name, selLocal.size);
   };
 
@@ -63,7 +81,8 @@ export default function FilePanel({ hostId }) {
   const retryTransfer = async (t) => {
     setTransfers((ts) => ts.map((x) => x.id === t.id ? { ...x, error: null, transferred: 0 } : x));
     try {
-      if (t.dir === '↑') await window.api.files.upload({ hostId, localPath: t.localPath, remotePath: t.remotePath, transferId: t.id });
+      if (t.dir === '↑' && t.kind === 'directory') await window.api.files.uploadDirectory({ hostId, localPath: t.localPath, remotePath: t.remotePath, transferId: t.id });
+      else if (t.dir === '↑') await window.api.files.upload({ hostId, localPath: t.localPath, remotePath: t.remotePath, transferId: t.id });
       else await window.api.files.download({ hostId, remotePath: t.remotePath, localPath: t.localPath, transferId: t.id });
       setTransfers((ts) => ts.map((x) => x.id === t.id ? { ...x, done: true } : x));
       if (t.dir === '↑') loadRemote(remote.path); else loadLocal(local.path);
@@ -131,7 +150,7 @@ export default function FilePanel({ hostId }) {
             : setPreview({ hostId: 'local', path: joinPath(local.path, e.name, localSep), name: e.name })}
           onSelect={setSelLocal} />
         <div className="file-actions">
-          <button className="btn" title="上传" onClick={upload} disabled={!selLocal || selLocal.isDir}>→</button>
+          <button className="btn" title={selLocal?.isDir ? '递归上传文件夹' : '上传'} onClick={upload} disabled={!selLocal}>→</button>
           <button className="btn" title="下载" onClick={download} disabled={!selRemote || selRemote.isDir}>←</button>
           <button className="btn" title="远程新建文件夹" onClick={() => setNewDirName('')}>📁+</button>
           <button className="btn danger" title="删除远程" onClick={removeRemote} disabled={!selRemote}>🗑</button>
@@ -182,6 +201,7 @@ export default function FilePanel({ hostId }) {
               ) : t.done ? <span className="ok">完成</span>
                 : <progress value={t.transferred} max={t.total || 1} />}
               <span className="muted small">{fmtSize(t.transferred)} / {fmtSize(t.total)}</span>
+              {t.skippedSymlinks > 0 && <span className="muted small">已跳过 {t.skippedSymlinks} 个链接</span>}
             </div>
           ))}
         </div>

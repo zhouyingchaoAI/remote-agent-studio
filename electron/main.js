@@ -9,6 +9,7 @@ const { Installer } = require('./ssh/Installer');
 const { AgentSession } = require('./ssh/AgentSession');
 const { LocalExecutor } = require('./LocalExecutor');
 const { AttachmentService } = require('./chat/AttachmentService');
+const { buildLocalDirectoryManifest } = require('./fileTransfer');
 const {
   loadHosts, saveHosts, loadConvos, saveConvos, loadProxies, saveProxy,
   loadKnownHosts, saveKnownHost, loadSettings, saveSettings, loadTasks, saveTasks
@@ -623,6 +624,28 @@ ipcMain.handle('fs:upload', async (_e, { hostId, localPath, remotePath, transfer
   await s.ssh.upload(localPath, remotePath, (p) =>
     send('transfer:progress', { hostId, transferId, ...p }));
   return true;
+});
+
+ipcMain.handle('fs:uploadDirectory', async (_e, { hostId, localPath, remotePath, transferId }) => {
+  const s = getSession(hostId);
+  const manifest = await buildLocalDirectoryManifest(localPath);
+  const madeDirectories = new Set();
+  let completed = 0;
+  await s.ssh.mkdirRemote(remotePath);
+
+  for (const file of manifest.files) {
+    const destination = path.posix.join(remotePath, file.relativePath);
+    const parent = path.posix.dirname(destination);
+    if (!madeDirectories.has(parent)) {
+      await s.ssh.mkdirRemote(parent);
+      madeDirectories.add(parent);
+    }
+    await s.ssh.upload(file.absolutePath, destination, ({ transferred }) =>
+      send('transfer:progress', { hostId, transferId, transferred: completed + transferred, total: manifest.total }));
+    completed += file.size;
+    send('transfer:progress', { hostId, transferId, transferred: completed, total: manifest.total });
+  }
+  return { files: manifest.files.length, skippedSymlinks: manifest.skippedSymlinks };
 });
 
 ipcMain.handle('fs:download', async (_e, { hostId, remotePath, localPath, transferId }) => {
