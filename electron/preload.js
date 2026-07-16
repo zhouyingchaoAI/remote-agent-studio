@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('api', {
     saveImage: invoke('clipboard:saveImage')
   },
   shell: { openExternal: invoke('shell:openExternal') },
+  settings: { get: invoke('settings:get'), save: invoke('settings:save') },
   hosts: { list: invoke('hosts:list'), save: invoke('hosts:save') },
   ssh: {
     connect: invoke('ssh:connect'),

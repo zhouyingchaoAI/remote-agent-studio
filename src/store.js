@@ -27,6 +27,16 @@ export const useStore = create((set, get) => ({
   queued: {},           // convId -> [{id,text,files}] 排队待发送的消息
   setupLogs: {},        // hostId -> string
   envInfo: {},          // hostId -> {os,node,npm,codex,claude}
+  settings: { theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5 },
+  showSettings: false,
+
+  setShowSettings: (v) => set({ showSettings: v }),
+  applySettings: (patch) => {
+    set((s) => ({ settings: { ...s.settings, ...patch } }));
+    const next = useStore.getState().settings;
+    if (patch.theme) document.documentElement.setAttribute('data-theme', next.theme);
+    window.api.settings.save(patch).catch(() => {});
+  },
 
   setHosts: (hosts) => set({ hosts }),
   setActiveHost: (id) => set({ activeHostId: id }),
@@ -272,14 +282,23 @@ export function isAwaitingConfirm(text = '') {
   return /(请(您)?(确认|审阅|过目)|等待(您的)?(确认|指示|回复)|是否(继续|执行|同意|采纳|需要)|需要我(继续|开始|执行|修改)吗|可以开始吗|要不要我|确认后(我|再|立即)|请回复(序号|确认)|如无异议)/.test(tail);
 }
 
-/** 全自动模式的连续自动确认计数(内存态,人工发言即重置) */
+/** 全自动模式的防失控状态(内存态,人工发言即重置) */
 const MAX_AUTO_REPLIES = 5;
-const autoReplyCounts = new Map();
-export function resetAutoReplies(convId) { autoReplyCounts.delete(convId); }
-export function bumpAutoReplies(convId) {
-  const n = (autoReplyCounts.get(convId) || 0) + 1;
-  autoReplyCounts.set(convId, n);
-  return n;
+const autoReplyState = new Map(); // convId -> { n, last }
+export function resetAutoReplies(convId) { autoReplyState.delete(convId); }
+/**
+ * 判定是否允许自动确认:
+ * - 模型重复发出同一确认请求 -> 拒绝(大概率陷入循环/幻觉流程)
+ * - 连续自动确认达到上限 -> 拒绝
+ */
+export function evaluateAutoConfirm(convId, promptText) {
+  const st = autoReplyState.get(convId) || { n: 0, last: '' };
+  const sig = String(promptText || '').trim().slice(0, 120);
+  const cap = useStore.getState().settings.autoConfirmCap || MAX_AUTO_REPLIES;
+  if (st.last && sig === st.last) return { ok: false, reason: 'repeat' };
+  if (st.n >= cap) return { ok: false, reason: 'limit' };
+  autoReplyState.set(convId, { n: st.n + 1, last: sig });
+  return { ok: true };
 }
 export { MAX_AUTO_REPLIES };
 
@@ -343,6 +362,14 @@ export async function loadHosts() {
 export async function saveHosts(hosts) {
   useStore.getState().setHosts(hosts);
   await window.api.hosts.save(hosts.filter((h) => h.id !== 'local')); // 不持久化本地伪主机
+}
+
+export async function loadSettings() {
+  try {
+    const s = await window.api.settings.get();
+    useStore.setState({ settings: s });
+    document.documentElement.setAttribute('data-theme', s.theme || 'dark');
+  } catch (_) {}
 }
 
 export async function loadConversations() {

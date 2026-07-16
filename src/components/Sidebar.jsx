@@ -101,9 +101,12 @@ export default function Sidebar() {
           );
         })}
       </div>
-      <button className="btn ghost add-host" onClick={() => setEditingHost({})}>
-        + 添加主机
-      </button>
+      <div className="sidebar-footer">
+        <button className="btn ghost add-host" onClick={() => setEditingHost({})}>
+          + 添加主机
+        </button>
+        <button className="icon-btn" title="设置" onClick={() => useStore.getState().setShowSettings(true)}>⚙</button>
+      </div>
       {preview && (
         <FilePreview hostId={preview.hostId} filePath={preview.path} name={preview.name}
           onClose={() => setPreview(null)} />
@@ -139,7 +142,8 @@ function TreeNode({ hostId, path, name, depth, isDir = true, defaultOpen = false
     if (willOpen && entries == null) await load();
   };
 
-  React.useEffect(() => { if (defaultOpen && entries == null) load(); /* eslint-disable-line */ }, []);
+  // eslint-disable-next-line
+  React.useEffect(() => { if (defaultOpen && entries == null) load(); }, []);
 
   const childPath = (n) => (path === '~' ? `~/${n}` : `${path}/${n}`.replace(/\/+/g, '/'));
 

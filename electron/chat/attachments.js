@@ -70,6 +70,29 @@ function extractImagePaths(value) {
   return found;
 }
 
+/**
+ * 危险命令识别:用于 UI 高亮与全自动模式的强制刹车。
+ * 命中的是"不可逆/影响面大"的操作,不是所有写操作。
+ */
+const DANGEROUS_COMMAND_PATTERNS = [
+  /\brm\s+(-[a-z]*\s+)*(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)/i, // rm -rf / -fr
+  /\brm\s+-[a-z]*r[a-z]*\s+(\/|~|\$HOME)/i,                  // rm -r 根/家目录
+  /\bmkfs\b|\bdd\s+if=|\bshred\b/i,                          // 磁盘擦写
+  /:\(\)\s*\{.*\};:/,                                         // fork 炸弹
+  /\b(shutdown|reboot|halt|poweroff)\b/i,                    // 关机重启
+  />\s*\/dev\/sd[a-z]/i,                                      // 写裸盘
+  /\bchmod\s+-R\s+777\b|\bchown\s+-R\b/i,                    // 递归改权限/属主
+  /\bgit\s+push\s+.*(--force|-f)\b|\bgit\s+reset\s+--hard\b/i, // 强推/硬重置
+  /\bkubectl\s+delete\b|\bdocker\s+system\s+prune\b/i,       // 集群/容器批量删除
+  /\bcurl\b[^|]*\|\s*(sudo\s+)?(sh|bash)\b/i,                // 管道执行远程脚本
+  /\bDROP\s+(TABLE|DATABASE)\b|\bTRUNCATE\s+TABLE\b/i        // 破坏性 SQL
+];
+
+function isDangerousCommand(command) {
+  const c = String(command || '');
+  return DANGEROUS_COMMAND_PATTERNS.some((re) => re.test(c));
+}
+
 module.exports = {
   MAX_ATTACHMENT_BYTES,
   IMAGE_EXTENSIONS,
@@ -77,5 +100,7 @@ module.exports = {
   sanitizeFilename,
   uniqueRemoteNames,
   validateFiles,
-  extractImagePaths
+  extractImagePaths,
+  isDangerousCommand,
+  DANGEROUS_COMMAND_PATTERNS
 };

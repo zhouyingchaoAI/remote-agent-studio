@@ -543,8 +543,9 @@ function Message({ m, hostId, convId, onEnableSystemMode, isLast, running, onQui
       );
     case 'tool':
       return (
-        <div className="msg thin">
-          <span className="chip tool">🔧 {m.name}</span>
+        <div className={`msg thin ${m.dangerous ? 'tool-dangerous' : ''}`}>
+          <span className={`chip tool ${m.dangerous ? 'danger' : ''}`}>{m.dangerous ? '⚠️' : '🔧'} {m.name}</span>
+          {m.dangerous && <span className="danger-tag">危险操作</span>}
           {m.detail && <code className="tool-detail">{String(m.detail).slice(0, 200)}</code>}
           {m.diff && <EditDiff diff={m.diff} />}
         </div>
@@ -685,7 +686,8 @@ function SessionSetup({ hostId, onCancel }) {
   const [cwd, setCwd] = useState('');
   const [title, setTitle] = useState('');
   const [model, setModel] = useState('');
-  const [permissionMode, setPermissionMode] = useState('workspace');
+  const [permissionMode, setPermissionMode] = useState(
+    () => useStore.getState().settings.defaultPermissionMode || 'workspace');
 
   useEffect(() => {
     window.api.setup.detect(hostId)

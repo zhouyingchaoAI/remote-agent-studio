@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { useStore } from '../store.js';
 
 /** 终端页:多标签,每个标签一个独立远程 shell */
 export default function TerminalPanel({ hostId, active }) {
@@ -60,8 +61,9 @@ function TermView({ hostId, termId, active }) {
   const [contextMenu, setContextMenu] = useState(null);
 
   useEffect(() => {
+    const fontSize = useStore.getState().settings.terminalFontSize || 13;
     const term = new Terminal({
-      fontSize: 13,
+      fontSize,
       fontFamily: 'Menlo, Consolas, monospace',
       theme: { background: '#0b0d12' },
       cursorBlink: true

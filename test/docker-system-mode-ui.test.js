@@ -6,7 +6,8 @@ const path = require('node:path');
 test('ChatPanel exposes the system-mode toggle, confirmation, badge, restart, and permission hint action', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'ChatPanel.jsx'), 'utf8');
 
-  assert.match(source, /const \[permissionMode, setPermissionMode\] = useState\('workspace'\)/);
+  assert.match(source, /const \[permissionMode, setPermissionMode\] = useState\(/);
+  assert.match(source, /defaultPermissionMode \|\| 'workspace'/);
   assert.match(source, /opts: \{ agent: conv\.agent, cwd: conv\.cwd, model: conv\.model, permissionMode \}/);
   assert.match(source, /\[conv\.id, permissionMode, conv\.model, conv\.agent\]/);
   assert.match(source, /updateConversationPermission/);

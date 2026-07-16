@@ -11,7 +11,7 @@ const { LocalExecutor } = require('./LocalExecutor');
 const { AttachmentService } = require('./chat/AttachmentService');
 const {
   loadHosts, saveHosts, loadConvos, saveConvos, loadProxies, saveProxy,
-  loadKnownHosts, saveKnownHost
+  loadKnownHosts, saveKnownHost, loadSettings, saveSettings
 } = require('./store');
 
 let win;
@@ -147,6 +147,10 @@ ipcMain.handle('clipboard:writeText', (_event, text) => {
   clipboard.writeText(typeof text === 'string' ? text : '');
   return true;
 });
+
+/* ---------------- 应用设置 ---------------- */
+ipcMain.handle('settings:get', () => loadSettings());
+ipcMain.handle('settings:save', (_e, s) => saveSettings(s));
 
 /* ---------------- 主机配置 ---------------- */
 ipcMain.handle('hosts:list', () => loadHosts());

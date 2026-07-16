@@ -21,8 +21,8 @@ class ErrorBoundary extends React.Component {
   }
 }
 import {
-  useStore, loadHosts, loadConversations, sendToAgent,
-  isAwaitingConfirm, bumpAutoReplies, MAX_AUTO_REPLIES
+  useStore, loadHosts, loadConversations, loadSettings, sendToAgent,
+  isAwaitingConfirm, evaluateAutoConfirm, MAX_AUTO_REPLIES
 } from './store.js';
 import Sidebar from './components/Sidebar.jsx';
 import HostForm from './components/HostForm.jsx';
@@ -30,6 +30,7 @@ import ChatPanel from './components/ChatPanel.jsx';
 import FilePanel from './components/FilePanel.jsx';
 import TerminalPanel from './components/TerminalPanel.jsx';
 import SetupPanel from './components/SetupPanel.jsx';
+import SettingsModal from './components/SettingsModal.jsx';
 
 const TABS = [
   { key: 'chat', label: '对话', icon: '💬' },
@@ -44,6 +45,7 @@ export default function App() {
   const status = statuses[activeHostId] || 'disconnected';
 
   useEffect(() => {
+    loadSettings();
     loadHosts();
     loadConversations();
     const offStatus = window.api.ssh.onStatus(({ hostId, status, detail }) =>
@@ -68,15 +70,30 @@ export default function App() {
         if (conv?.autoConfirm) {
           const lastReply = [...conv.messages].reverse()
             .find((m) => m.role === 'agent' && (m.kind === 'text' || m.kind === 'result') && m.text);
-          if (lastReply && isAwaitingConfirm(lastReply.text)) {
-            const n = bumpAutoReplies(convId);
-            if (n <= MAX_AUTO_REPLIES) {
+          // 全自动刹车:本轮若出现危险命令,不自动确认,提示人工复核
+          const sinceLastUser = [];
+          for (let i = conv.messages.length - 1; i >= 0; i -= 1) {
+            if (conv.messages[i].role === 'user') break;
+            sinceLastUser.push(conv.messages[i]);
+          }
+          const dangerHit = sinceLastUser.find((m) => m.dangerous);
+          if (dangerHit) {
+            st.pushMessage(convId, {
+              role: 'agent', kind: 'raw',
+              text: `🛑 全自动已暂停:本轮包含危险命令「${String(dangerHit.detail || '').slice(0, 80)}」,请人工确认后再继续。`,
+              ts: Date.now()
+            });
+          } else if (lastReply && isAwaitingConfirm(lastReply.text)) {
+            const verdict = evaluateAutoConfirm(convId, lastReply.text);
+            if (verdict.ok) {
               sendToAgent(conv.hostId, convId,
                 '确认,请继续执行;后续决策请自行选择最合理的方案,不要再次询问。', [], { auto: true });
             } else {
               st.pushMessage(convId, {
                 role: 'agent', kind: 'raw',
-                text: `🤖 全自动模式已连续自动确认 ${MAX_AUTO_REPLIES} 次,已暂停,请人工查看后继续。`,
+                text: verdict.reason === 'repeat'
+                  ? '🤖 模型重复发出同一确认请求,全自动已暂停(可能陷入循环或不可行的流程),请人工核实后再继续。'
+                  : `🤖 全自动模式已连续自动确认 ${MAX_AUTO_REPLIES} 次,已暂停,请人工查看后继续。`,
                 ts: Date.now()
               });
             }
@@ -99,6 +116,7 @@ export default function App() {
   return (
     <div className="app">
       <ErrorBoundary>
+      <SettingsModal />
       <Sidebar />
       <div className="main">
         {editingHost !== null ? (

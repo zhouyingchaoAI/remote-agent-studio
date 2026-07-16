@@ -125,7 +125,22 @@ function saveProxy(hostId, cfg) {
   fs.writeFileSync(proxyFile(), JSON.stringify(all, null, 2));
 }
 
+/* -------- 应用设置持久化(userData/settings.json) -------- */
+const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
+const DEFAULT_SETTINGS = { theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5 };
+
+function loadSettings() {
+  try { return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) }; }
+  catch (_) { return { ...DEFAULT_SETTINGS }; }
+}
+function saveSettings(settings) {
+  const merged = { ...loadSettings(), ...settings };
+  fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
+  fs.writeFileSync(settingsFile(), JSON.stringify(merged, null, 2));
+  return merged;
+}
+
 module.exports = {
   loadHosts, saveHosts, loadConvos, saveConvos, loadProxies, saveProxy,
-  loadKnownHosts, saveKnownHost
+  loadKnownHosts, saveKnownHost, loadSettings, saveSettings
 };

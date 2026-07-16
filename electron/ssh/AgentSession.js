@@ -9,7 +9,7 @@
 const { EventEmitter } = require('events');
 const path = require('path');
 const { shellQuote } = require('./SSHManager');
-const { extractImagePaths } = require('../chat/attachments');
+const { extractImagePaths, isDangerousCommand } = require('../chat/attachments');
 
 const AGENT_PATH = 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"; ' +
   'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1; ' +
@@ -281,7 +281,7 @@ class AgentSession extends EventEmitter {
         if (it === 'command_execution') {
           const output = (item.aggregated_output || '').slice(0, 4000);
           this._maybeEmitPermissionHint(output);
-          return this._emitMsg({ kind: 'tool', name: '执行命令', detail: item.command, output });
+          return this._emitMsg({ kind: 'tool', name: '执行命令', detail: item.command, output, dangerous: isDangerousCommand(item.command) });
         }
         if (it === 'file_change' || it === 'patch')
           return this._emitMsg({ kind: 'tool', name: '修改文件', detail: (item.changes || []).map(c => `${c.kind || ''} ${c.path || ''}`).join('\n') || item.path });
@@ -302,8 +302,10 @@ class AgentSession extends EventEmitter {
         return msg.delta ? this._emitMsg({ kind: 'reasoning_delta', text: msg.delta }) : undefined;
       case 'turn_diff':
         return msg.unified_diff ? this._emitMsg({ kind: 'diff', text: msg.unified_diff }) : undefined;
-      case 'exec_command_begin':
-        return this._emitMsg({ kind: 'tool', name: '执行命令', detail: Array.isArray(msg.command) ? msg.command.join(' ') : msg.command });
+      case 'exec_command_begin': {
+        const cmd = Array.isArray(msg.command) ? msg.command.join(' ') : msg.command;
+        return this._emitMsg({ kind: 'tool', name: '执行命令', detail: cmd, dangerous: isDangerousCommand(cmd) });
+      }
       case 'exec_command_end': {
         const output = (msg.aggregated_output || '').slice(0, 4000);
         this._maybeEmitPermissionHint(output);
@@ -344,7 +346,7 @@ class AgentSession extends EventEmitter {
             const input = b.input || {};
             const detail = input.command || input.file_path || input.pattern ||
               JSON.stringify(input).slice(0, 500);
-            const msg = { kind: 'tool', name: b.name, detail };
+            const msg = { kind: 'tool', name: b.name, detail, dangerous: isDangerousCommand(input.command) };
             // 文件编辑类工具:携带 old/new 内容供前端渲染红绿 diff
             if (/^(Edit|MultiEdit|Write)$/i.test(b.name || '')) {
               if (input.old_string != null || input.new_string != null) {

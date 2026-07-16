@@ -5,12 +5,18 @@
   "main": "electron/main.js",
   "author": "yingchaozhou",
   "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV=1 electron .\"",
     "build": "vite build",
     "start": "npm run build && electron .",
     "dist": "npm run build && electron-builder",
-    "test": "node --test"
+    "test": "node --test",
+    "lint": "eslint .",
+    "format": "prettier --write \"{electron,src,test,scripts}/**/*.{js,jsx}\"",
+    "format:check": "prettier --check \"{electron,src,test,scripts}/**/*.{js,jsx}\""
   },
   "dependencies": {
     "ssh2": "^1.16.0"
@@ -21,6 +27,8 @@
     "@xterm/xterm": "^5.5.0",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
+    "eslint": "^9.15.0",
+    "prettier": "^3.4.0",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
     "react": "^18.3.1",

@@ -1,4 +1,4 @@
-:root {
+:root, :root[data-theme="dark"] {
   --bg: #0f1117;
   --bg2: #161a23;
   --bg3: #1e2430;
@@ -10,6 +10,19 @@
   --green: #3ecf8e;
   --red: #ff5c5c;
   --yellow: #f0b429;
+}
+:root[data-theme="light"] {
+  --bg: #f6f7f9;
+  --bg2: #ffffff;
+  --bg3: #eceef2;
+  --border: #d6dae2;
+  --text: #1c2330;
+  --muted: #667085;
+  --accent: #2f6fed;
+  --accent2: #6a4bff;
+  --green: #1a9e6a;
+  --red: #d64545;
+  --yellow: #b7791f;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -307,6 +320,19 @@ progress { width: 140px; height: 6px; }
 .attachment-thumb-remove { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; line-height: 16px; padding: 0; border-radius: 50%; border: 1px solid var(--border); background: var(--bg3); color: var(--text); font-size: 12px; cursor: pointer; }
 .attachment-thumb-remove:hover { background: var(--red, #e5534b); }
 .usage-badge { white-space: nowrap; padding: 2px 8px; border: 1px solid var(--border); border-radius: 10px; }
+/* 危险命令高亮 */
+.tool-dangerous { border-left: 3px solid var(--red, #e5534b); padding-left: 8px; }
+.chip.tool.danger { color: #ff9b95; }
+.danger-tag { margin-left: 6px; font-size: 11px; color: #ff9b95; border: 1px solid rgba(229,83,75,0.5); border-radius: 4px; padding: 0 6px; }
+/* 设置弹窗 */
+.settings-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 300; }
+.settings-modal { width: min(440px, 92vw); background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.settings-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.settings-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.settings-row select { min-width: 170px; padding: 5px 8px; }
+.sidebar-footer { display: flex; align-items: center; gap: 6px; }
+.sidebar-footer .add-host { flex: 1; }
 .file-preview-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 200; }
 .file-preview { width: min(860px, 92vw); max-height: 86vh; display: flex; flex-direction: column; background: var(--panel, #171a22); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .file-preview-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
