@@ -387,6 +387,7 @@ progress { width: 140px; height: 6px; }
 .delivery-card details { margin: 12px 0; } .task-diff { max-height: 320px; overflow: auto; white-space: pre-wrap; }
 .task-audit-events { max-height: 220px; overflow: auto; } .risk-event { margin: 6px 0; font-family: Menlo, monospace; font-size: 12px; } .risk-event.system { color: #ff9b95; } .risk-event.external_side_effect { color: #ffe08a; }
 .risk-tag { margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: var(--bg3); color: var(--muted); font-size: 11px; } .risk-tag.system { color: #ff9b95; } .risk-tag.external_side_effect { color: #ffe08a; }
+.terminal-search { display: flex; align-items: center; gap: 3px; margin-right: 7px; } .terminal-search input { width: 165px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg2); color: var(--text); font-size: 12px; }
 .task-review { display: flex; gap: 8px; align-items: end; margin-top: 18px; } .task-review textarea { flex: 1; min-height: 56px; }
 
 /* remote dir picker */

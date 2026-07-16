@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
 import { useStore } from '../store.js';
 
@@ -58,7 +59,11 @@ function TermView({ hostId, termId, active }) {
   const wrapRef = useRef(null);
   const termRef = useRef(null);
   const fitRef = useRef(null);
+  const searchRef = useRef(null);
+  const searchInputRef = useRef(null);
   const [contextMenu, setContextMenu] = useState(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchValue, setSearchValue] = useState('');
 
   useEffect(() => {
     const fontSize = useStore.getState().settings.terminalFontSize || 13;
@@ -69,11 +74,14 @@ function TermView({ hostId, termId, active }) {
       cursorBlink: true
     });
     const fit = new FitAddon();
+    const search = new SearchAddon();
     term.loadAddon(fit);
+    term.loadAddon(search);
     term.open(boxRef.current);
     fit.fit();
     termRef.current = term;
     fitRef.current = fit;
+    searchRef.current = search;
 
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown' || !(event.ctrlKey || event.metaKey)) return true;
@@ -90,6 +98,12 @@ function TermView({ hostId, termId, active }) {
         window.api.clipboard.readText().then((text) => {
           if (text) term.paste(text);
         });
+        return false;
+      }
+      if (key === 'f') {
+        event.preventDefault();
+        event.stopPropagation();
+        setSearchOpen(true);
         return false;
       }
       return true;
@@ -124,6 +138,8 @@ function TermView({ hostId, termId, active }) {
     return () => {
       offData(); offClosed(); disp.dispose(); ro.disconnect();
       window.removeEventListener('resize', onResize);
+      if (searchRef.current === search) searchRef.current = null;
+      search.dispose();
       term.dispose();
     };
   }, [hostId, termId]);
@@ -144,6 +160,10 @@ function TermView({ hostId, termId, active }) {
   useEffect(() => {
     if (!active) setContextMenu(null);
   }, [active]);
+
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus();
+  }, [searchOpen]);
 
   const copySelection = async () => {
     const term = termRef.current;
@@ -180,11 +200,30 @@ function TermView({ hostId, termId, active }) {
       .catch((e) => term.write(`\x1b[31m${e.message}\x1b[0m\r\n`));
   };
 
+  const search = (forward) => {
+    const addon = searchRef.current;
+    if (!addon || !searchValue) return;
+    if (forward) addon.findNext(searchValue, { incremental: false });
+    else addon.findPrevious(searchValue, { incremental: false });
+  };
+
   return (
     <div className="terminal-wrap" ref={wrapRef} onMouseDown={() => setContextMenu(null)}>
       <div className="terminal-bar">
         <span className="muted small">远程终端(已自动加载代理与 codex/claude 路径)</span>
         <span className="flex1" />
+        {searchOpen && <div className="terminal-search">
+          <input ref={searchInputRef} value={searchValue} aria-label="搜索终端输出" placeholder="搜索终端输出"
+            onChange={(event) => setSearchValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') { event.preventDefault(); search(!event.shiftKey); }
+              if (event.key === 'Escape') { event.preventDefault(); setSearchOpen(false); termRef.current?.focus(); }
+            }} />
+          <button className="icon-btn" title="上一个匹配" onClick={() => search(false)}>↑</button>
+          <button className="icon-btn" title="下一个匹配" onClick={() => search(true)}>↓</button>
+          <button className="icon-btn" title="关闭搜索" onClick={() => { setSearchOpen(false); termRef.current?.focus(); }}>✕</button>
+        </div>}
+        <button className="btn small ghost" title="搜索终端输出 (⌘/Ctrl+F)" onClick={() => setSearchOpen(true)}>搜索</button>
         <button className="btn small" onClick={reconnect}>重连终端</button>
       </div>
       <div className="terminal-box" ref={boxRef} onContextMenu={openContextMenu} />

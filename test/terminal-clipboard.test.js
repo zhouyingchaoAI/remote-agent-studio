@@ -42,3 +42,13 @@ test('terminal provides a right-click copy and paste menu', () => {
   assert.match(source, />粘贴</);
   assert.match(styles, /\.terminal-context-menu/);
 });
+
+test('terminal provides an in-panel search control backed by xterm search', () => {
+  const source = read('src/components/TerminalPanel.jsx');
+  const pkg = read('package.json');
+  assert.match(pkg, /@xterm\/addon-search/);
+  assert.match(source, /SearchAddon/);
+  assert.match(source, /findNext/);
+  assert.match(source, /findPrevious/);
+  assert.match(source, /搜索终端输出/);
+});

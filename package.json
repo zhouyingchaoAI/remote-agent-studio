@@ -24,13 +24,14 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
     "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-search": "^0.16.0",
     "@xterm/xterm": "^5.5.0",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
-    "eslint": "^9.15.0",
-    "prettier": "^3.4.0",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
+    "eslint": "^9.15.0",
+    "prettier": "^3.4.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "vite": "^6.0.3",
@@ -45,8 +46,14 @@
       "dist/**/*",
       "package.json"
     ],
-    "mac": { "target": "dmg" },
-    "win": { "target": "nsis" },
-    "linux": { "target": "AppImage" }
+    "mac": {
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
   }
 }
