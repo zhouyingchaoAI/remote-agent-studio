@@ -61,9 +61,16 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false
     }
   });
+
+  // 所有外链均通过受限的 shell:openExternal IPC 打开，渲染器不能自行跳转或创建子窗口。
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', (event) => event.preventDefault());
 
   const revealWindow = () => {
     if (!win || win.isDestroyed()) return;
