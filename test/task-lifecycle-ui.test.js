@@ -25,8 +25,8 @@ test('application maps agent completion and failures into linked task status', (
 test('task panel exposes delivery evidence and review actions', () => {
   const panel = read('src/components/TaskPanel.jsx');
   assert.match(panel, /review_ready/);
-  assert.match(panel, /Accept/);
-  assert.match(panel, /Request changes/);
+  assert.match(panel, /t\('accept'\)/);
+  assert.match(panel, /t\('requestChanges'\)/);
   assert.match(panel, /dangerousCommands/);
   assert.match(panel, /auditEvents/);
   assert.match(read('src/App.jsx'), /TaskPanel/);
@@ -34,14 +34,14 @@ test('task panel exposes delivery evidence and review actions', () => {
 
 test('task view includes host-level token and cost summary', () => {
   const panel = read('src/components/TaskPanel.jsx');
-  assert.match(panel, /用量概览/);
+  assert.match(panel, /t\('usageOverview'\)/);
   assert.match(panel, /hostUsage/);
   assert.match(panel, /costUsd/);
 });
 
 test('running task can be stopped for human takeover from delivery view', () => {
   const panel = read('src/components/TaskPanel.jsx');
-  assert.match(panel, /停止并接管/);
+  assert.match(panel, /t\('stopTakeover'\)/);
   assert.match(panel, /window\.api\.agent\.cancel/);
   assert.match(panel, /'needs_input'/);
 });
