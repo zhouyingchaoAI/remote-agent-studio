@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 function normalizePermissionMode(value) {
   if (value === 'system' || value?.permissionMode === 'system') return 'system';
+  if (value === 'plan' || value?.permissionMode === 'plan') return 'plan';
   if (value === 'workspace' || value?.permissionMode === 'workspace') return 'workspace';
   return value?.autoApprove === true ? 'system' : 'workspace';
 }

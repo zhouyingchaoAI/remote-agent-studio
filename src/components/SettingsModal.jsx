@@ -39,6 +39,7 @@ export default function SettingsModal() {
             <span>新对话默认权限</span>
             <select value={settings.defaultPermissionMode} onChange={(e) => apply({ defaultPermissionMode: e.target.value })}>
               <option value="workspace">工作区(受限,推荐)</option>
+              <option value="plan">计划模式(只读)</option>
               <option value="system">系统权限(放开)</option>
             </select>
           </label>

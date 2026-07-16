@@ -336,6 +336,7 @@ function ChatView({ hostId, conv }) {
             if (r?.saved) useStore.getState().pushMessage(conv.id, { role: 'agent', kind: 'raw', text: `已导出到 ${r.path}`, ts: Date.now() });
           }}>⇩</button>
         {permissionMode === 'system' && <span className="badge system-mode">系统权限</span>}
+        {permissionMode === 'plan' && <span className="badge plan-mode">计划模式</span>}
         <label className="permission-switch auto-switch"
           title="全自动:模型请求确认时自动回复「确认,继续」,并提示模型自行决策;连续 5 次后暂停防失控">
           <input
@@ -353,6 +354,15 @@ function ChatView({ hostId, conv }) {
             onChange={(e) => changePermissionMode(e.target.checked ? 'system' : 'workspace')}
           />
           <span>System Mode</span>
+        </label>
+        <label className="permission-switch" title="只允许分析和制定计划，不允许修改文件或执行会产生副作用的命令">
+          <input
+            type="checkbox"
+            checked={permissionMode === 'plan'}
+            disabled={running}
+            onChange={(e) => changePermissionMode(e.target.checked ? 'plan' : 'workspace')}
+          />
+          <span>Plan Mode</span>
         </label>
       </div>
       <div className="chat-list" ref={listRef}>
@@ -759,6 +769,15 @@ function SessionSetup({ hostId, onCancel }) {
             System Mode
           </label>
           <p className="system-mode-notice">系统权限允许 Docker 与远程主机级命令，可能修改工作目录之外的文件或服务。</p>
+          <label className="row checkbox">
+            <input
+              type="checkbox"
+              checked={permissionMode === 'plan'}
+              onChange={(e) => setPermissionMode(e.target.checked ? 'plan' : 'workspace')}
+            />
+            Plan Mode（只读规划）
+          </label>
+          <p className="system-mode-notice">计划模式禁止修改文件和执行有副作用的命令，适合先获取方案与风险评估。</p>
         </div>
       </div>
       <button className="btn primary" onClick={start} disabled={env && !installed}>开始对话</button>

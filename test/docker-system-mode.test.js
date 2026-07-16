@@ -24,6 +24,13 @@ test('AgentSession keeps legacy autoApprove conversations in system mode', () =>
   );
 });
 
+test('AgentSession turns plan mode into read-only commands for both agents', () => {
+  const codex = new AgentSession(null, null, { agent: 'codex', cwd: '/workspace', permissionMode: 'plan' });
+  const claude = new AgentSession(null, null, { agent: 'claude', cwd: '/workspace', permissionMode: 'plan' });
+  assert.match(codex.buildCommand('inspect first'), /--sandbox read-only/);
+  assert.match(claude.buildCommand('inspect first'), /--permission-mode plan/);
+});
+
 test('Docker permission errors emit a system-mode hint only in workspace mode', () => {
   const workspace = session();
   const workspaceMessages = [];
@@ -72,4 +79,11 @@ test('store normalizes legacy permission mode and persists mode updates', () => 
   assert.match(source, /updateConversationPermission:\s*\(convId, mode\)/);
   assert.match(source, /permissionMode:\s*normalizePermissionMode\(mode\)/);
   assert.match(source, /normalizeConversation\(c\)/);
+});
+
+test('permission controls preserve the explicit plan mode', () => {
+  const store = fs.readFileSync(path.join(__dirname, '..', 'src', 'store.js'), 'utf8');
+  const session = fs.readFileSync(path.join(__dirname, '..', 'electron', 'ssh', 'AgentSession.js'), 'utf8');
+  assert.match(store, /permissionMode === 'plan'/);
+  assert.match(session, /permissionMode === 'plan'/);
 });

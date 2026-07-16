@@ -28,6 +28,7 @@ function filterStderrNoise(text) {
 
 function normalizePermissionMode(opts = {}) {
   if (opts.permissionMode === 'system') return 'system';
+  if (opts.permissionMode === 'plan') return 'plan';
   if (opts.permissionMode === 'workspace') return 'workspace';
   return opts.autoApprove === true ? 'system' : 'workspace';
 }
@@ -81,7 +82,7 @@ class AgentSession extends EventEmitter {
       if (agent === 'codex') {
         const approval = permissionMode === 'system'
           ? '--dangerously-bypass-approvals-and-sandbox'
-          : '--sandbox workspace-write';
+          : permissionMode === 'plan' ? '--sandbox read-only' : '--sandbox workspace-write';
         const modelArg = model ? `-m ${powershellQuote(model)}` : '';
         const images = attachments
           .filter((file) => file.kind === 'image' && file.remotePath)
@@ -102,7 +103,7 @@ class AgentSession extends EventEmitter {
       }
       const permission = permissionMode === 'system'
         ? '--dangerously-skip-permissions'
-        : '--permission-mode acceptEdits';
+        : permissionMode === 'plan' ? '--permission-mode plan' : '--permission-mode acceptEdits';
       const modelArg = model ? `--model ${powershellQuote(model)}` : '';
       const resume = this.claudeSessionId ? `--resume ${powershellQuote(this.claudeSessionId)}` : '';
       return `${cd}& claude.cmd -p --output-format stream-json --include-partial-messages --verbose ${permission} ${modelArg} ${resume} ${powershellQuote(fullPrompt)}`;
@@ -117,7 +118,7 @@ class AgentSession extends EventEmitter {
     if (agent === 'codex') {
       const approval = permissionMode === 'system'
         ? '--dangerously-bypass-approvals-and-sandbox'
-        : '--sandbox workspace-write';
+        : permissionMode === 'plan' ? '--sandbox read-only' : '--sandbox workspace-write';
       const m = model ? `-m ${shellQuote(model)}` : '';
       const images = attachments
         .filter((file) => file.kind === 'image' && file.remotePath)
@@ -139,7 +140,9 @@ class AgentSession extends EventEmitter {
       return wrap(`codex exec ${flags} ${q}`);
     }
     // claude
-    const perm = permissionMode === 'system' ? '--dangerously-skip-permissions' : '--permission-mode acceptEdits';
+    const perm = permissionMode === 'system'
+      ? '--dangerously-skip-permissions'
+      : permissionMode === 'plan' ? '--permission-mode plan' : '--permission-mode acceptEdits';
     const m = model ? `--model ${shellQuote(model)}` : '';
     const resume = this.claudeSessionId ? `--resume ${shellQuote(this.claudeSessionId)}` : '';
     return wrap(`claude -p --output-format stream-json --include-partial-messages --verbose ${perm} ${m} ${resume} ${q}`);

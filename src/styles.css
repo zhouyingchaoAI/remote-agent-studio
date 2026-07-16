@@ -383,6 +383,7 @@ progress { width: 140px; height: 6px; }
 .task-stop { margin-left: 8px; }
 .task-status { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--bg3); color: var(--muted); }
 .task-status.review_ready { color: #ffe08a; } .task-status.accepted { color: #83e1a4; } .task-status.failed { color: #ff9b95; }
+.plan-mode { color: #8cc8ff; }
 .delivery-card details { margin: 12px 0; } .task-diff { max-height: 320px; overflow: auto; white-space: pre-wrap; }
 .task-audit-events { max-height: 220px; overflow: auto; } .risk-event { margin: 6px 0; font-family: Menlo, monospace; font-size: 12px; } .risk-event.system { color: #ff9b95; } .risk-event.external_side_effect { color: #ffe08a; }
 .risk-tag { margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: var(--bg3); color: var(--muted); font-size: 11px; } .risk-tag.system { color: #ff9b95; } .risk-tag.external_side_effect { color: #ffe08a; }
