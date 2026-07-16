@@ -120,6 +120,23 @@ export const useStore = create((set, get) => ({
     persistTasks();
   },
 
+  finalizeTaskDelivery: (taskId) => {
+    set((s) => {
+      const task = s.tasks[taskId];
+      if (!task) return {};
+      const delivery = task.delivery || {};
+      const now = Date.now();
+      const deliveryPackage = {
+        generatedAt: now,
+        diffs: [...(delivery.diffs || [])], artifacts: [...(delivery.artifacts || [])],
+        usage: { ...(delivery.usage || {}) }, dangerousCommands: [...(delivery.dangerousCommands || [])],
+        auditEvents: [...(delivery.auditEvents || [])]
+      };
+      return { tasks: { ...s.tasks, [taskId]: { ...task, updatedAt: now, deliveryPackage } } };
+    });
+    persistTasks();
+  },
+
   reviewTask: (taskId, decision, note = '') => {
     set((s) => {
       const task = s.tasks[taskId];

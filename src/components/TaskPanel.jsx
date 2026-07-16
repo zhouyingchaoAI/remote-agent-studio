@@ -60,12 +60,14 @@ function UsageSummary({ usage, t }) {
 
 function DeliveryCard({ task, conversation, onOpen, onReview, onStop, onRetry, t }) {
   const delivery = task.delivery || {};
+  const deliveryPackage = task.deliveryPackage;
   const [note, setNote] = useState(task.review?.note || '');
   const canReview = task.status === 'review_ready' || task.status === 'changes_requested';
   return <div className="delivery-card">
     <div className="task-detail-head"><div><h2>{task.title}</h2><span className={`task-status ${task.status}`}>{labelStatus(task.status, t)}</span></div>
       <div><button className="btn ghost" onClick={onOpen}>{t('openChat')}</button>{task.status === 'running' && <button className="btn danger task-stop" onClick={onStop}>{t('stopTakeover')}</button>}</div></div>
     <p className="muted small">{conversation?.cwd || '~'} · {t('changes')} {delivery.diffs?.length || 0} · {t('artifacts')} {delivery.artifacts?.length || 0} · {t('dangerousOps')} {delivery.dangerousCommands?.length || 0}</p>
+    {deliveryPackage && <p className="muted small">交付包快照：{new Date(deliveryPackage.generatedAt).toLocaleString()} · {deliveryPackage.diffs.length} diff · {deliveryPackage.artifacts.length} artifact</p>}
     {delivery.diffs?.length > 0 && <details open><summary>{t('changeEvidence')}</summary><pre className="task-diff">{delivery.diffs.join('\n\n')}</pre></details>}
     {delivery.auditEvents?.length > 0 && <details open><summary>{t('securityAudit')}</summary><div className="task-audit-events">{delivery.auditEvents.map((event, index) =>
       <p key={`${event.ts || index}_${index}`} className={`risk-event ${event.level || 'workspace_write'}`}><b>{labelRisk(event.level || 'workspace_write', t)}</b> · {event.detail}</p>)}</div></details>}

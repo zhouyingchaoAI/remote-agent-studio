@@ -69,7 +69,7 @@ export default function App() {
           codexStarted: msg.codexStarted,
           lastTurnAgent: msg.agent
         });
-        if (linkedTask) st.updateTaskStatus(linkedTask.id, 'review_ready');
+        if (linkedTask) { st.finalizeTaskDelivery(linkedTask.id); st.updateTaskStatus(linkedTask.id, 'review_ready'); }
         // 有排队消息则自动发送下一条
         const next = st.shiftQueued(convId);
         const conv = st.conversations[convId];
