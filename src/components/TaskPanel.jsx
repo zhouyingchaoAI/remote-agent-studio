@@ -70,7 +70,7 @@ export default function TaskPanel({ hostId }) {
           const source = conversations[task.convId];
           const stageConversation = createConversation(task.hostId, {
             agent: source.agent, cwd: isolated.cwd, model: source.model, permissionMode: source.permissionMode,
-            title: `${task.title} · ${stage.role}`
+            title: `${task.title} · ${stage.role}`, projectContext: source.projectContext
           });
           startTaskStage(task.id, stage.id, { cwd: isolated.cwd, convId: stageConversation.id });
           setActiveConv(hostId, stageConversation.id);

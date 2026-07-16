@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   convos: { list: invoke('convos:list'), save: invoke('convos:save') },
   tasks: { list: invoke('tasks:list'), save: invoke('tasks:save') },
+  projects: { list: invoke('projects:list'), save: invoke('projects:save') },
   worktrees: { create: invoke('worktrees:create') },
   agent: {
     start: invoke('agent:start'),

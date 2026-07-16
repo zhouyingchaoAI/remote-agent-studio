@@ -21,7 +21,7 @@ class ErrorBoundary extends React.Component {
   }
 }
 import {
-  useStore, loadHosts, loadConversations, loadTasks, loadSettings, sendToAgent,
+  useStore, loadHosts, loadConversations, loadTasks, loadProjects, loadSettings, sendToAgent,
   isAwaitingConfirm, evaluateAutoConfirm, MAX_AUTO_REPLIES
 } from './store.js';
 import Sidebar from './components/Sidebar.jsx';
@@ -52,6 +52,7 @@ export default function App() {
     loadHosts();
     loadConversations();
     loadTasks();
+    loadProjects();
     const offStatus = window.api.ssh.onStatus(({ hostId, status, detail }) =>
       useStore.getState().setStatus(hostId, status, detail));
     const offLog = window.api.setup.onLog(({ hostId, text }) =>
@@ -77,7 +78,7 @@ export default function App() {
         // 有排队消息则自动发送下一条
         const next = st.shiftQueued(convId);
         const conv = st.conversations[convId];
-        if (next && conv) { sendToAgent(conv.hostId, convId, next.text, next.files || []); return; }
+        if (next && conv) { sendToAgent(conv.hostId, convId, next.text, next.files || [], { projectContext: next.projectContext }); return; }
         // 全自动模式:模型在等确认 -> 自动回复继续(连续 MAX 次后暂停防失控)
         if (conv?.autoConfirm) {
           const lastReply = [...conv.messages].reverse()

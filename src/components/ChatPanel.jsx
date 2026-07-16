@@ -205,7 +205,7 @@ function ChatView({ hostId, conv }) {
   const [taskTemplate, setTaskTemplate] = useState('implementation');
   const permissionMode = conv.permissionMode || (conv.autoApprove ? 'system' : 'workspace');
   const task = Object.values(tasks).find((item) => item.convId === conv.id && item.status !== 'archived');
-  const createTask = () => useStore.getState().createTask(hostId, conv.id, { title: conv.title, templateId: taskTemplate, cwd: conv.cwd });
+  const createTask = () => useStore.getState().createTask(hostId, conv.id, { title: conv.title, templateId: taskTemplate, cwd: conv.cwd, projectContext: conv.projectContext });
 
   // 进入对话/切换模型或权限时,在主进程(重新)初始化 agent 会话(带 resume 状态续聊)
   useEffect(() => {
@@ -233,7 +233,7 @@ function ChatView({ hostId, conv }) {
     if (running || !started) {
       useStore.getState().enqueuePrompt(conv.id, {
         id: `q_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        text: prompt, files
+        text: prompt, files, projectContext: conv.projectContext
       });
       return;
     }
@@ -737,11 +737,16 @@ function RemoteDirPicker({ hostId, value, onChange }) {
 
 function SessionSetup({ hostId, onCancel }) {
   const env = useStore((s) => s.envInfo[hostId]);
+  const projects = useStore((s) => Object.values(s.projects).filter((project) => project.hostId === hostId));
   const createConversation = useStore((s) => s.createConversation);
+  const createProject = useStore((s) => s.createProject);
   const [agent, setAgent] = useState('codex');
   const [cwd, setCwd] = useState('');
   const [title, setTitle] = useState('');
   const [model, setModel] = useState('');
+  const [selectedProjectId, setSelectedProjectId] = useState('');
+  const [projectRules, setProjectRules] = useState('');
+  const [projectSkills, setProjectSkills] = useState('');
   const [permissionMode, setPermissionMode] = useState(
     () => useStore.getState().settings.defaultPermissionMode || 'workspace');
 
@@ -752,12 +757,26 @@ function SessionSetup({ hostId, onCancel }) {
   }, [hostId]);
 
   const installed = env && (agent === 'codex' ? env.codex : env.claude);
+  const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  const selectProject = (id) => {
+    setSelectedProjectId(id);
+    const project = projects.find((item) => item.id === id);
+    if (!project) return;
+    setCwd(project.cwd); setAgent(project.defaultAgent || 'codex'); setModel(project.defaultModel || '');
+    setPermissionMode(project.permissionMode || 'workspace'); setProjectRules(project.rules || ''); setProjectSkills(project.skills || '');
+  };
+  const saveProjectContext = () => {
+    if (!cwd.trim()) return;
+    const project = createProject({ id: selectedProjectId || undefined, hostId, cwd: cwd.trim(), name: title.trim(), rules: projectRules.trim(), skills: projectSkills.trim(), defaultAgent: agent, defaultModel: model.trim(), permissionMode });
+    setSelectedProjectId(project.id);
+  };
 
   const start = () => {
     if (permissionMode === 'system' && !window.confirm(
       '系统权限允许 Docker 和主机级命令，并可修改工作目录之外的文件或服务。是否继续？'
     )) return;
-    createConversation(hostId, { agent, cwd: cwd.trim(), model: model.trim(), permissionMode, title: title.trim() });
+    const projectContext = selectedProject ? { ...selectedProject, rules: projectRules.trim(), skills: projectSkills.trim() } : null;
+    createConversation(hostId, { agent, cwd: cwd.trim(), model: model.trim(), permissionMode, title: title.trim(), projectContext });
   };
 
   return (
@@ -784,11 +803,18 @@ function SessionSetup({ hostId, onCancel }) {
         </p>
       )}
       <div className="form-grid">
+        <label>项目上下文
+          <select value={selectedProjectId} onChange={(e) => selectProject(e.target.value)}><option value="">不继承项目上下文</option>
+            {projects.map((project) => <option key={project.id} value={project.id}>{project.name} · {project.cwd}</option>)}</select>
+        </label>
         <label>对话名称(可选)<input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="留空则用目录名" /></label>
         <label>工作目录({hostId === 'local' ? '本机' : '远程'})
           <RemoteDirPicker hostId={hostId} value={cwd} onChange={setCwd} />
         </label>
         <label>模型(可选)<input value={model} onChange={(e) => setModel(e.target.value)} placeholder={agent === 'codex' ? '如 gpt-5-codex' : '如 sonnet / opus'} /></label>
+        <label>项目规则<textarea value={projectRules} onChange={(e) => setProjectRules(e.target.value)} placeholder="例如：先运行测试；不要修改 API 契约" /></label>
+        <label>Skills<textarea value={projectSkills} onChange={(e) => setProjectSkills(e.target.value)} placeholder="例如：repo 约定、技能名称或操作说明" /></label>
+        <button type="button" className="btn small ghost" onClick={saveProjectContext} disabled={!cwd.trim()}>保存项目上下文</button>
         <div className="system-mode-setting">
           <label className="row checkbox">
             <input

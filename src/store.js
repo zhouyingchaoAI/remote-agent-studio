@@ -38,6 +38,7 @@ export const useStore = create((set, get) => ({
   conversations: {},
   activeConvByHost: {}, // hostId -> convId(null 表示停留在会话列表)
   tasks: {},
+  projects: {},
   activeTaskByHost: {},
   // 文件传输任务在同一应用会话中跨面板保留；不落盘，避免重启后展示不可恢复的远端操作。
   transfers: {},
@@ -90,6 +91,16 @@ export const useStore = create((set, get) => ({
   setActiveConv: (hostId, convId) =>
     set((s) => ({ activeConvByHost: { ...s.activeConvByHost, [hostId]: convId } })),
 
+  setProjects: (projects) => set({ projects }),
+  createProject: (fields = {}) => {
+    const now = Date.now();
+    const id = fields.id || `p_${now}_${Math.random().toString(36).slice(2, 6)}`;
+    const project = { id, hostId: fields.hostId, cwd: fields.cwd, name: fields.name || fields.cwd.split(/[\\/]/).filter(Boolean).pop() || '项目', rules: fields.rules || '', skills: fields.skills || '', defaultAgent: fields.defaultAgent || 'codex', defaultModel: fields.defaultModel || '', permissionMode: normalizePermissionMode(fields), updatedAt: now };
+    set((s) => ({ projects: { ...s.projects, [id]: project } }));
+    persistProjects();
+    return project;
+  },
+
   createTask: (hostId, convId, fields = {}) => {
     const now = Date.now();
     const id = `t_${now}_${Math.random().toString(36).slice(2, 6)}`;
@@ -97,7 +108,7 @@ export const useStore = create((set, get) => ({
       id, hostId, convId, title: fields.title || '未命名任务', status: 'draft', templateId: fields.templateId || 'implementation',
       createdAt: now, updatedAt: now, runStartedAt: null, runFinishedAt: null,
       delivery: { diffs: [], artifacts: [], usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }, dangerousCommands: [], auditEvents: [] },
-      review: null, approvalRequests: [], stages: createTaskStages(fields.templateId || 'implementation', fields.cwd || '')
+      review: null, approvalRequests: [], projectContext: fields.projectContext || null, stages: createTaskStages(fields.templateId || 'implementation', fields.cwd || '')
     };
     set((s) => ({ tasks: { ...s.tasks, [id]: task }, activeTaskByHost: { ...s.activeTaskByHost, [hostId]: id } }));
     persistTasks();
@@ -265,7 +276,7 @@ export const useStore = create((set, get) => ({
       id, hostId,
       title: opts.title || (opts.cwd ? opts.cwd.split('/').filter(Boolean).pop() : '新对话') || '新对话',
       agent: opts.agent, cwd: opts.cwd || '', model: opts.model || '',
-      permissionMode: normalizePermissionMode(opts),
+      permissionMode: normalizePermissionMode(opts), projectContext: opts.projectContext || null,
       autoApprove: !!opts.autoApprove,
       messages: [], claudeSessionId: null, codexSessionId: null, codexStarted: false,
       createdAt: Date.now(), updatedAt: Date.now()
@@ -487,6 +498,12 @@ function persistTasks() {
   }, 300);
 }
 
+let projectSaveTimer = null;
+function persistProjects() {
+  clearTimeout(projectSaveTimer);
+  projectSaveTimer = setTimeout(() => window.api.projects.save(Object.values(useStore.getState().projects)).catch(() => {}), 300);
+}
+
 /**
  * 识别"模型在等确认"(聊天按钮与全自动模式共用)。
  * 只认真正在等答复的句式,并排除「已确认/已完成」等完成时表述,防止确认循环。
@@ -553,6 +570,12 @@ export async function sendToAgent(hostId, convId, text, files = [], opts = {}) {
     // 引擎切换后的首条消息:注入此前对话摘要,实现 codex/claude 共用上下文
     const conv = st.conversations[convId];
     let prompt = text;
+    const projectContext = opts.projectContext || conv?.projectContext;
+    if (projectContext) {
+      const { name, cwd, rules, skills } = projectContext;
+      const contextLines = [`【项目上下文】${name || cwd || '当前项目'}`, cwd ? `工作目录：${cwd}` : '', rules ? `项目规则：${rules}` : '', skills ? `Skills：${skills}` : ''].filter(Boolean);
+      if (contextLines.length > 1) prompt = `${contextLines.join('\n')}\n——\n${prompt}`;
+    }
     if (conv && conv.lastTurnAgent && conv.lastTurnAgent !== conv.agent) {
       const digest = buildContextDigest(conv.messages);
       if (digest) {
@@ -609,5 +632,12 @@ export async function loadTasks() {
     const tasks = {};
     for (const task of list) tasks[task.id] = task;
     useStore.setState({ tasks });
+  } catch (_) {}
+}
+
+export async function loadProjects() {
+  try {
+    const list = await window.api.projects.list();
+    useStore.setState({ projects: Object.fromEntries(list.map((project) => [project.id, project])) });
   } catch (_) {}
 }

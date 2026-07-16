@@ -13,7 +13,7 @@ const { createWorktree } = require('./git/WorktreeService');
 const { buildLocalDirectoryManifest, buildRemoteDirectoryManifest } = require('./fileTransfer');
 const {
   loadHosts, saveHosts, loadConvos, saveConvos, loadProxies, saveProxy,
-  loadKnownHosts, saveKnownHost, loadSettings, saveSettings, loadTasks, saveTasks
+  loadKnownHosts, saveKnownHost, loadSettings, saveSettings, loadTasks, saveTasks, loadProjects, saveProjects
 } = require('./store');
 
 let win;
@@ -487,6 +487,8 @@ ipcMain.handle('convos:list', () => loadConvos());
 ipcMain.handle('convos:save', (_e, convos) => { saveConvos(convos); return true; });
 ipcMain.handle('tasks:list', () => loadTasks());
 ipcMain.handle('tasks:save', (_e, tasks) => { saveTasks(tasks); return true; });
+ipcMain.handle('projects:list', () => loadProjects());
+ipcMain.handle('projects:save', (_e, projects) => { saveProjects(projects); return true; });
 ipcMain.handle('worktrees:create', async (_e, fields) => {
   const session = getSession(fields?.hostId);
   return createWorktree(session.ssh, fields || {});

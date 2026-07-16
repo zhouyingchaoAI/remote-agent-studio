@@ -136,6 +136,18 @@ function saveTasks(tasks) {
   } catch (_) {}
 }
 
+/* -------- 项目上下文(userData/projects.json) -------- */
+const projectsFile = () => path.join(app.getPath('userData'), 'projects.json');
+function loadProjects() {
+  try { return JSON.parse(fs.readFileSync(projectsFile(), 'utf8')).filter((project) => project?.id && project.hostId && project.cwd); }
+  catch (_) { return []; }
+}
+function saveProjects(projects) {
+  const list = Array.isArray(projects) ? projects.filter((project) => project?.id && project.hostId && project.cwd) : [];
+  fs.mkdirSync(path.dirname(projectsFile()), { recursive: true });
+  fs.writeFileSync(projectsFile(), JSON.stringify(list, null, 2));
+}
+
 /* -------- 已知主机指纹(userData/knownhosts.json,TOFU) -------- */
 const knownHostsFile = () => path.join(app.getPath('userData'), 'knownhosts.json');
 
@@ -182,5 +194,5 @@ function saveSettings(settings) {
 
 module.exports = {
   loadHosts, saveHosts, loadConvos, saveConvos, loadProxies, saveProxy,
-  loadKnownHosts, saveKnownHost, loadSettings, saveSettings, loadTasks, saveTasks
+  loadKnownHosts, saveKnownHost, loadSettings, saveSettings, loadTasks, saveTasks, loadProjects, saveProjects
 };
