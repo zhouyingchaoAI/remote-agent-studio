@@ -188,6 +188,7 @@ function ConvCard({ conv }) {
 /* ---------------- 单个对话视图 ---------------- */
 function ChatView({ hostId, conv }) {
   const running = useStore((s) => s.agentRunning[conv.id] || false);
+  const executionTrace = useStore((s) => s.executionTraces[conv.id]);
   const setActiveConv = useStore((s) => s.setActiveConv);
   const updateConversationPermission = useStore((s) => s.updateConversationPermission);
   const updateConversationModel = useStore((s) => s.updateConversationModel);
@@ -401,6 +402,7 @@ function ChatView({ hostId, conv }) {
         </label>
       </div>
       <div className="chat-list" ref={listRef}>
+        {executionTrace && <ExecutionTrace executionTrace={executionTrace} />}
         {conv.messages.length === 0 && (
           <div className="muted center pad">向{hostId === 'local' ? '本机' : '远程'}的 {conv.agent === 'codex' ? 'Codex' : 'Claude Code'} 发出第一条指令吧</div>
         )}
@@ -488,6 +490,18 @@ function ChatView({ hostId, conv }) {
       )}
     </div>
   );
+}
+
+function ExecutionTrace({ executionTrace }) {
+  const [open, setOpen] = useState(true);
+  return <div className="execution-trace"><button className="execution-trace-head" onClick={() => setOpen((value) => !value)}>
+    <span>◉ 当前后台执行</span><span className="muted small">{executionTrace.status} {open ? '▾' : '▸'}</span>
+  </button>{open && <div className="execution-trace-events">
+    {executionTrace.events.length === 0 ? <p className="muted small">正在等待 Agent 返回执行事件…</p> : executionTrace.events.map((event, index) => <div key={`${event.ts}_${index}`} className="execution-trace-event">
+      <b>{event.name || (event.kind === 'tool_output' ? '命令输出' : event.kind)}</b>{event.riskLevel && <span className={`risk-tag ${event.riskLevel}`}>{RISK_LABELS[event.riskLevel] || event.riskLevel}</span>}
+      {event.detail && <code>{String(event.detail).slice(0, 500)}</code>}{event.output && <pre>{event.output}</pre>}
+    </div>)}
+  </div>}</div>;
 }
 
 /* 模型选择器:预设 + 自定义输入,留空表示跟随 CLI 自身配置(~/.codex/config.toml 等) */

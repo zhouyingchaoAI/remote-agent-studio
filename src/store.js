@@ -43,6 +43,7 @@ export const useStore = create((set, get) => ({
   // 文件传输任务在同一应用会话中跨面板保留；不落盘，避免重启后展示不可恢复的远端操作。
   transfers: {},
   agentRunning: {},     // convId -> bool
+  executionTraces: {},  // convId -> {status, events, startedAt}
   queued: {},           // convId -> [{id,text,files}] 排队待发送的消息
   setupLogs: {},        // hostId -> string
   envInfo: {},          // hostId -> {os,node,npm,codex,claude}
@@ -460,6 +461,17 @@ export const useStore = create((set, get) => ({
 
   setAgentRunning: (convId, v) =>
     set((s) => ({ agentRunning: { ...s.agentRunning, [convId]: v } })),
+  startExecutionTrace: (convId, text = '正在启动后台执行') => set((s) => ({ executionTraces: {
+    ...s.executionTraces, [convId]: { status: text, events: [], startedAt: Date.now() }
+  } })),
+  appendExecutionTrace: (convId, event) => set((s) => {
+    const trace = s.executionTraces[convId] || { status: '正在后台执行', events: [], startedAt: Date.now() };
+    const next = { ...event, ts: Date.now(), output: event.output ? String(event.output).slice(-1200) : '' };
+    return { executionTraces: { ...s.executionTraces, [convId]: { ...trace, events: [...trace.events, next].slice(-12) } } };
+  }),
+  finishExecutionTrace: (convId) => set((s) => {
+    const next = { ...s.executionTraces }; delete next[convId]; return { executionTraces: next };
+  }),
 
   enqueuePrompt: (convId, item) =>
     set((s) => ({ queued: { ...s.queued, [convId]: [...(s.queued[convId] || []), item] } })),

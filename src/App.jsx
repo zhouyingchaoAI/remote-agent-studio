@@ -69,6 +69,7 @@ export default function App() {
       const linkedTask = Object.values(st.tasks).find((task) => (task.convId === convId || task.stages?.some((stage) => stage.convId === convId)) && task.status === 'running');
       if (msg.kind === 'done') {
         st.setAgentRunning(convId, false);
+        st.finishExecutionTrace(convId);
         st.updateConvResume(convId, {
           claudeSessionId: msg.claudeSessionId,
           codexSessionId: msg.codexSessionId,
@@ -120,7 +121,7 @@ export default function App() {
         }
         return;
       }
-      if (msg.kind === 'status') return;
+      if (msg.kind === 'status') { st.startExecutionTrace(convId, msg.text); return; }
       if (msg.kind === 'usage') {
         if (linkedTask) st.recordTaskDelivery(linkedTask.id, { usage: msg });
         return st.addUsage(convId, msg);
@@ -130,6 +131,7 @@ export default function App() {
       if (msg.kind === 'reasoning_delta') return st.appendStreamDelta(convId, 'reasoning', msg.text);
       if (msg.kind === 'text' || msg.kind === 'reasoning')
         return st.finalizeStream(convId, msg.kind, msg);
+      if (msg.kind === 'tool' || msg.kind === 'tool_output' || msg.kind === 'stderr') st.appendExecutionTrace(convId, msg);
       if (linkedTask && msg.kind === 'diff') st.recordTaskDelivery(linkedTask.id, { diffs: [msg.text] });
       if (linkedTask && msg.kind === 'image') st.recordTaskDelivery(linkedTask.id, { artifacts: [msg] });
       if (linkedTask && msg.kind === 'tool' && msg.riskLevel) st.recordTaskDelivery(linkedTask.id, {
