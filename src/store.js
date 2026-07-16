@@ -59,7 +59,7 @@ export const useStore = create((set, get) => ({
     const task = {
       id, hostId, convId, title: fields.title || '未命名任务', status: 'draft',
       createdAt: now, updatedAt: now, runStartedAt: null, runFinishedAt: null,
-      delivery: { diffs: [], artifacts: [], usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }, dangerousCommands: [] },
+      delivery: { diffs: [], artifacts: [], usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }, dangerousCommands: [], auditEvents: [] },
       review: null
     };
     set((s) => ({ tasks: { ...s.tasks, [id]: task }, activeTaskByHost: { ...s.activeTaskByHost, [hostId]: id } }));
@@ -88,7 +88,8 @@ export const useStore = create((set, get) => ({
         ...current, ...patch,
         diffs: [...(current.diffs || []), ...(patch.diffs || [])],
         artifacts: [...(current.artifacts || []), ...(patch.artifacts || [])],
-        dangerousCommands: [...(current.dangerousCommands || []), ...(patch.dangerousCommands || [])]
+        dangerousCommands: [...(current.dangerousCommands || []), ...(patch.dangerousCommands || [])],
+        auditEvents: [...(current.auditEvents || []), ...(patch.auditEvents || [])]
       } } } };
     });
     persistTasks();
@@ -384,6 +385,8 @@ export async function sendToAgent(hostId, convId, text, files = [], opts = {}) {
   const st = useStore.getState();
   const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   if (!opts.auto) resetAutoReplies(convId); // 人工发言重置自动确认计数
+  const linkedTask = Object.values(st.tasks).find((task) => task.convId === convId && task.status !== 'archived');
+  if (linkedTask && linkedTask.status !== 'running') st.updateTaskStatus(linkedTask.id, 'running');
   st.setAgentRunning(convId, true);
   try {
     const attachments = files.length

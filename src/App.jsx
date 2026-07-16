@@ -118,7 +118,10 @@ export default function App() {
         return st.finalizeStream(convId, msg.kind, msg);
       if (linkedTask && msg.kind === 'diff') st.recordTaskDelivery(linkedTask.id, { diffs: [msg.text] });
       if (linkedTask && msg.kind === 'image') st.recordTaskDelivery(linkedTask.id, { artifacts: [msg] });
-      if (linkedTask && msg.kind === 'tool' && msg.dangerous) st.recordTaskDelivery(linkedTask.id, { dangerousCommands: [msg.detail] });
+      if (linkedTask && msg.kind === 'tool' && msg.riskLevel) st.recordTaskDelivery(linkedTask.id, {
+        dangerousCommands: msg.dangerous ? [msg.detail] : [],
+        auditEvents: [{ type: 'command', level: msg.riskLevel, detail: msg.detail, ts: Date.now() }]
+      });
       if (linkedTask && msg.kind === 'error') st.updateTaskStatus(linkedTask.id, 'failed');
       st.pushMessage(convId, { role: 'agent', ...msg, ts: Date.now() });
     });
@@ -153,7 +156,7 @@ export default function App() {
                   : <span className="muted">{activeHost.username}@{activeHost.host}:{activeHost.port || 22}</span>}
               </div>
               <div className="tabs">
-                {(activeHost.local ? TABS.filter((t) => t.key === 'chat' || t.key === 'setup') : TABS).map((t) => (
+                {(activeHost.local ? TABS.filter((t) => t.key === 'chat' || t.key === 'tasks' || t.key === 'setup') : TABS).map((t) => (
                   <button key={t.key}
                     className={`tab ${tab === t.key ? 'active' : ''}`}
                     onClick={() => setTab(t.key)}>
@@ -166,7 +169,7 @@ export default function App() {
               <PersistentWorkspace
                 hosts={hosts}
                 activeHostId={activeHostId}
-                activeView={activeHost.local && tab !== 'setup' ? 'chat' : tab}
+                activeView={activeHost.local && tab !== 'setup' && tab !== 'tasks' ? 'chat' : tab}
                 statuses={statuses}
               />
             </div>

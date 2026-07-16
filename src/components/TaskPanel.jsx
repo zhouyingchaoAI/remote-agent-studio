@@ -6,6 +6,7 @@ const LABELS = {
   needs_approval: '等待审批', review_ready: '待验收', accepted: '已验收',
   changes_requested: '需修改', failed: '失败', archived: '已归档'
 };
+const RISK_LABELS = { read: '只读', workspace_write: '项目写入', external_side_effect: '外部影响', system: '系统级' };
 
 export default function TaskPanel({ hostId }) {
   const tasks = useStore((s) => s.tasks);
@@ -38,6 +39,8 @@ function DeliveryCard({ task, conversation, onOpen, onReview }) {
       <button className="btn ghost" onClick={onOpen}>打开对话</button></div>
     <p className="muted small">{conversation?.cwd || '~'} · 变更 {delivery.diffs?.length || 0} · 产物 {delivery.artifacts?.length || 0} · 危险操作 {delivery.dangerousCommands?.length || 0}</p>
     {delivery.diffs?.length > 0 && <details open><summary>变更证据</summary><pre className="task-diff">{delivery.diffs.join('\n\n')}</pre></details>}
+    {delivery.auditEvents?.length > 0 && <details open><summary>安全审计</summary><div className="task-audit-events">{delivery.auditEvents.map((event, index) =>
+      <p key={`${event.ts || index}_${index}`} className={`risk-event ${event.level || 'workspace_write'}`}><b>{RISK_LABELS[event.level] || event.level}</b> · {event.detail}</p>)}</div></details>}
     {delivery.dangerousCommands?.length > 0 && <details open><summary>⚠️ 危险操作</summary><pre>{delivery.dangerousCommands.join('\n')}</pre></details>}
     {(delivery.usage?.inputTokens || delivery.usage?.outputTokens) ? <p>用量：输入 {delivery.usage.inputTokens || 0} / 输出 {delivery.usage.outputTokens || 0} tokens</p> : null}
     {canReview && <div className="task-review"><textarea value={note} placeholder="验收备注（可选）" onChange={(e) => setNote(e.target.value)} />

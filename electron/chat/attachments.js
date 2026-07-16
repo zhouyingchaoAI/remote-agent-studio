@@ -93,6 +93,19 @@ function isDangerousCommand(command) {
   return DANGEROUS_COMMAND_PATTERNS.some((re) => re.test(c));
 }
 
+/**
+ * 给命令一个稳定、可展示的风险等级。它是审计提示，不会替代底层 CLI 的权限控制。
+ * read: 只读探查；workspace_write: 项目内的常规修改；external_side_effect: 会影响远端服务；
+ * system: 主机级权限或不可逆操作，需要人工重点复核。
+ */
+function classifyCommandRisk(command) {
+  const c = String(command || '').trim();
+  if (isDangerousCommand(c) || /\b(sudo|systemctl|launchctl|service)\b|\b(docker|kubectl)\s+(run|exec|compose|apply|restart|stop|kill)\b/i.test(c)) return 'system';
+  if (/\b(git\s+push|npm\s+publish|pnpm\s+publish|yarn\s+publish|curl|wget|ssh|scp|rsync|aws|gcloud|az)\b/i.test(c)) return 'external_side_effect';
+  if (/^(?:ls|pwd|cat|head|tail|find|rg|grep|git\s+(?:status|log|diff|show|branch)|npm\s+(?:test|run\s+(?:test|lint))|node\s+--test)\b/i.test(c)) return 'read';
+  return 'workspace_write';
+}
+
 module.exports = {
   MAX_ATTACHMENT_BYTES,
   IMAGE_EXTENSIONS,
@@ -102,5 +115,6 @@ module.exports = {
   validateFiles,
   extractImagePaths,
   isDangerousCommand,
+  classifyCommandRisk,
   DANGEROUS_COMMAND_PATTERNS
 };

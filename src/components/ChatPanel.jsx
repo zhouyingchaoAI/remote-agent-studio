@@ -197,10 +197,7 @@ function ChatView({ hostId, conv }) {
   const [visibleCount, setVisibleCount] = useState(200); // 长对话窗口化渲染
   const permissionMode = conv.permissionMode || (conv.autoApprove ? 'system' : 'workspace');
   const task = Object.values(tasks).find((item) => item.convId === conv.id && item.status !== 'archived');
-  const createTask = () => {
-    const next = useStore.getState().createTask(hostId, conv.id, { title: conv.title });
-    useStore.getState().updateTaskStatus(next.id, 'running');
-  };
+  const createTask = () => useStore.getState().createTask(hostId, conv.id, { title: conv.title });
 
   // 进入对话/切换模型或权限时,在主进程(重新)初始化 agent 会话(带 resume 状态续聊)
   useEffect(() => {
@@ -232,6 +229,7 @@ function ChatView({ hostId, conv }) {
       });
       return;
     }
+    if (task && task.status !== 'running') useStore.getState().updateTaskStatus(task.id, 'running');
     await sendToAgent(hostId, conv.id, prompt, files);
   };
 
@@ -289,6 +287,14 @@ function ChatView({ hostId, conv }) {
     if (nextMode === 'system' && !window.confirm(
       '启用系统权限将允许此对话访问 Docker 和远程主机级命令。命令可修改工作目录之外的文件和服务。是否继续？'
     )) return;
+    if (task) useStore.getState().recordTaskDelivery(task.id, {
+      auditEvents: [{
+        type: 'permission_change',
+        level: nextMode === 'system' ? 'system' : 'workspace_write',
+        detail: `权限模式：${permissionMode === 'system' ? '系统权限' : '工作区'} → ${nextMode === 'system' ? '系统权限' : '工作区'}`,
+        ts: Date.now()
+      }]
+    });
     setStarted(false);
     updateConversationPermission(conv.id, nextMode);
   };

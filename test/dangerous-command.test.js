@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { isDangerousCommand } = require('../electron/chat/attachments');
+const { isDangerousCommand, classifyCommandRisk } = require('../electron/chat/attachments');
 const { AgentSession } = require('../electron/ssh/AgentSession');
 
 test('flags destructive commands', () => {
@@ -37,6 +37,14 @@ test('does not flag ordinary commands', () => {
   for (const c of safe) assert.equal(isDangerousCommand(c), false, `should not flag: ${c}`);
 });
 
+test('classifies commands into reviewable safety levels', () => {
+  assert.equal(classifyCommandRisk('ls -la'), 'read');
+  assert.equal(classifyCommandRisk('npm run build'), 'workspace_write');
+  assert.equal(classifyCommandRisk('git push origin main'), 'external_side_effect');
+  assert.equal(classifyCommandRisk('sudo systemctl restart nginx'), 'system');
+  assert.equal(classifyCommandRisk('rm -rf /'), 'system');
+});
+
 test('codex command events carry a dangerous flag', () => {
   const events = [];
   const session = new AgentSession(null, null, { agent: 'codex', permissionMode: 'workspace' });
@@ -45,6 +53,7 @@ test('codex command events carry a dangerous flag', () => {
   session._parseLine(JSON.stringify({ msg: { type: 'exec_command_begin', command: ['rm', '-rf', '/data'] } }));
   assert.equal(events[0].kind, 'tool');
   assert.equal(events[0].dangerous, true);
+  assert.equal(events[0].riskLevel, 'system');
 });
 
 test('claude Bash tool_use flags dangerous commands', () => {
@@ -57,4 +66,5 @@ test('claude Bash tool_use flags dangerous commands', () => {
     message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'git push --force' } }] }
   }));
   assert.equal(events[0].dangerous, true);
+  assert.equal(events[0].riskLevel, 'system');
 });
