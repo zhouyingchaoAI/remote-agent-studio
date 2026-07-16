@@ -32,6 +32,13 @@ test('task panel exposes delivery evidence and review actions', () => {
   assert.match(read('src/App.jsx'), /TaskPanel/);
 });
 
+test('task view includes host-level token and cost summary', () => {
+  const panel = read('src/components/TaskPanel.jsx');
+  assert.match(panel, /用量概览/);
+  assert.match(panel, /hostUsage/);
+  assert.match(panel, /costUsd/);
+});
+
 test('linked task starts only when its conversation sends work', () => {
   const chat = read('src/components/ChatPanel.jsx');
   assert.match(chat, /createTask\(hostId, conv\.id/);
