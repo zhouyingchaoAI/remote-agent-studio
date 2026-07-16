@@ -21,7 +21,7 @@ class ErrorBoundary extends React.Component {
   }
 }
 import {
-  useStore, loadHosts, loadConversations, loadSettings, sendToAgent,
+  useStore, loadHosts, loadConversations, loadTasks, loadSettings, sendToAgent,
   isAwaitingConfirm, evaluateAutoConfirm, MAX_AUTO_REPLIES
 } from './store.js';
 import Sidebar from './components/Sidebar.jsx';
@@ -48,12 +48,14 @@ export default function App() {
     loadSettings();
     loadHosts();
     loadConversations();
+    loadTasks();
     const offStatus = window.api.ssh.onStatus(({ hostId, status, detail }) =>
       useStore.getState().setStatus(hostId, status, detail));
     const offLog = window.api.setup.onLog(({ hostId, text }) =>
       useStore.getState().appendSetupLog(hostId, text));
     const offMsg = window.api.agent.onMessage(({ convId, msg }) => {
       const st = useStore.getState();
+      const linkedTask = Object.values(st.tasks).find((task) => task.convId === convId && task.status === 'running');
       if (msg.kind === 'done') {
         st.setAgentRunning(convId, false);
         st.updateConvResume(convId, {
@@ -62,6 +64,7 @@ export default function App() {
           codexStarted: msg.codexStarted,
           lastTurnAgent: msg.agent
         });
+        if (linkedTask) st.updateTaskStatus(linkedTask.id, 'review_ready');
         // 有排队消息则自动发送下一条
         const next = st.shiftQueued(convId);
         const conv = st.conversations[convId];
@@ -102,12 +105,19 @@ export default function App() {
         return;
       }
       if (msg.kind === 'status') return;
-      if (msg.kind === 'usage') return st.addUsage(convId, msg);
+      if (msg.kind === 'usage') {
+        if (linkedTask) st.recordTaskDelivery(linkedTask.id, { usage: msg });
+        return st.addUsage(convId, msg);
+      }
       // 流式增量与收尾
       if (msg.kind === 'text_delta') return st.appendStreamDelta(convId, 'text', msg.text);
       if (msg.kind === 'reasoning_delta') return st.appendStreamDelta(convId, 'reasoning', msg.text);
       if (msg.kind === 'text' || msg.kind === 'reasoning')
         return st.finalizeStream(convId, msg.kind, msg);
+      if (linkedTask && msg.kind === 'diff') st.recordTaskDelivery(linkedTask.id, { diffs: [msg.text] });
+      if (linkedTask && msg.kind === 'image') st.recordTaskDelivery(linkedTask.id, { artifacts: [msg] });
+      if (linkedTask && msg.kind === 'tool' && msg.dangerous) st.recordTaskDelivery(linkedTask.id, { dangerousCommands: [msg.detail] });
+      if (linkedTask && msg.kind === 'error') st.updateTaskStatus(linkedTask.id, 'failed');
       st.pushMessage(convId, { role: 'agent', ...msg, ts: Date.now() });
     });
     return () => { offStatus(); offLog(); offMsg(); };

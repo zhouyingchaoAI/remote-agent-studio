@@ -23,6 +23,8 @@ export const useStore = create((set, get) => ({
   //         claudeSessionId, codexStarted, createdAt, updatedAt}
   conversations: {},
   activeConvByHost: {}, // hostId -> convId(null 表示停留在会话列表)
+  tasks: {},
+  activeTaskByHost: {},
   agentRunning: {},     // convId -> bool
   queued: {},           // convId -> [{id,text,files}] 排队待发送的消息
   setupLogs: {},        // hostId -> string
@@ -50,6 +52,57 @@ export const useStore = create((set, get) => ({
 
   setActiveConv: (hostId, convId) =>
     set((s) => ({ activeConvByHost: { ...s.activeConvByHost, [hostId]: convId } })),
+
+  createTask: (hostId, convId, fields = {}) => {
+    const now = Date.now();
+    const id = `t_${now}_${Math.random().toString(36).slice(2, 6)}`;
+    const task = {
+      id, hostId, convId, title: fields.title || '未命名任务', status: 'draft',
+      createdAt: now, updatedAt: now, runStartedAt: null, runFinishedAt: null,
+      delivery: { diffs: [], artifacts: [], usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }, dangerousCommands: [] },
+      review: null
+    };
+    set((s) => ({ tasks: { ...s.tasks, [id]: task }, activeTaskByHost: { ...s.activeTaskByHost, [hostId]: id } }));
+    persistTasks();
+    return task;
+  },
+
+  updateTaskStatus: (taskId, status) => {
+    set((s) => {
+      const task = s.tasks[taskId];
+      if (!task || (status === 'accepted' && task.status === 'running')) return {};
+      const now = Date.now();
+      return { tasks: { ...s.tasks, [taskId]: { ...task, status, updatedAt: now,
+        ...(status === 'running' ? { runStartedAt: now } : {}),
+        ...(status === 'review_ready' || status === 'failed' ? { runFinishedAt: now } : {}) } } };
+    });
+    persistTasks();
+  },
+
+  recordTaskDelivery: (taskId, patch) => {
+    set((s) => {
+      const task = s.tasks[taskId];
+      if (!task) return {};
+      const current = task.delivery || {};
+      return { tasks: { ...s.tasks, [taskId]: { ...task, updatedAt: Date.now(), delivery: {
+        ...current, ...patch,
+        diffs: [...(current.diffs || []), ...(patch.diffs || [])],
+        artifacts: [...(current.artifacts || []), ...(patch.artifacts || [])],
+        dangerousCommands: [...(current.dangerousCommands || []), ...(patch.dangerousCommands || [])]
+      } } } };
+    });
+    persistTasks();
+  },
+
+  reviewTask: (taskId, decision, note = '') => {
+    set((s) => {
+      const task = s.tasks[taskId];
+      if (!task || task.status === 'running') return {};
+      const status = decision === 'accept' ? 'accepted' : 'changes_requested';
+      return { tasks: { ...s.tasks, [taskId]: { ...task, status, updatedAt: Date.now(), review: { decision, note, at: Date.now() } } } };
+    });
+    persistTasks();
+  },
 
   createConversation: (hostId, opts) => {
     const id = `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -271,6 +324,14 @@ function persist() {
   }, 300);
 }
 
+let taskSaveTimer = null;
+function persistTasks() {
+  clearTimeout(taskSaveTimer);
+  taskSaveTimer = setTimeout(() => {
+    window.api.tasks.save(Object.values(useStore.getState().tasks)).catch(() => {});
+  }, 300);
+}
+
 /**
  * 识别"模型在等确认"(聊天按钮与全自动模式共用)。
  * 只认真正在等答复的句式,并排除「已确认/已完成」等完成时表述,防止确认循环。
@@ -378,4 +439,13 @@ export async function loadConversations() {
   for (const c of list) map[c.id] = normalizeConversation(c);
   useStore.setState({ conversations: map });
   if (list.some((c) => c.permissionMode !== map[c.id].permissionMode)) persist();
+}
+
+export async function loadTasks() {
+  try {
+    const list = await window.api.tasks.list();
+    const tasks = {};
+    for (const task of list) tasks[task.id] = task;
+    useStore.setState({ tasks });
+  } catch (_) {}
 }
