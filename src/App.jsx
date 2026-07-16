@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 
 /** 错误边界:渲染出错时显示报错信息而不是黑屏 */
 class ErrorBoundary extends React.Component {
@@ -26,12 +26,13 @@ import {
 } from './store.js';
 import Sidebar from './components/Sidebar.jsx';
 import HostForm from './components/HostForm.jsx';
-import ChatPanel from './components/ChatPanel.jsx';
-import FilePanel from './components/FilePanel.jsx';
-import TerminalPanel from './components/TerminalPanel.jsx';
-import SetupPanel from './components/SetupPanel.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
-import TaskPanel from './components/TaskPanel.jsx';
+
+const ChatPanel = React.lazy(() => import('./components/ChatPanel.jsx'));
+const FilePanel = React.lazy(() => import('./components/FilePanel.jsx'));
+const TerminalPanel = React.lazy(() => import('./components/TerminalPanel.jsx'));
+const SetupPanel = React.lazy(() => import('./components/SetupPanel.jsx'));
+const TaskPanel = React.lazy(() => import('./components/TaskPanel.jsx'));
 
 const TABS = [
   { key: 'chat', label: '对话', icon: '💬' },
@@ -203,7 +204,7 @@ function PersistentWorkspace({ hosts, activeHostId, activeView, statuses }) {
     : visitedViews;
 
   return (
-    <>
+    <Suspense fallback={<div className="empty-state"><p className="muted">正在加载工作区…</p></div>}>
       {renderedViews.map(({ viewKey, hostId, view }) => {
         const hostStillExists = hosts.some((host) => host.id === hostId);
         if (!hostStillExists) return null;
@@ -229,7 +230,7 @@ function PersistentWorkspace({ hosts, activeHostId, activeView, statuses }) {
       {activeHost && status !== 'connected' && activeView !== 'setup' && (
         <ConnectGate host={activeHost} status={status} />
       )}
-    </>
+    </Suspense>
   );
 }
 

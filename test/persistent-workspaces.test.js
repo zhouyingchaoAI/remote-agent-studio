@@ -42,3 +42,9 @@ test('inactive workspace layers are hidden without removing their contents', () 
   assert.match(source, /\.workspace-layer/);
   assert.match(source, /\.workspace-layer\.active/);
 });
+
+test('workspace panels are loaded on demand behind a loading boundary', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'App.jsx'), 'utf8');
+  assert.match(source, /React\.lazy\(\(\) => import\('\.\/components\/ChatPanel\.jsx'\)\)/);
+  assert.match(source, /<Suspense fallback=/);
+});
