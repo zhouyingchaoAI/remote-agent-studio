@@ -25,3 +25,9 @@ test('CI cancels superseded runs for the same branch', () => {
   assert.match(workflow, /concurrency:/);
   assert.match(workflow, /cancel-in-progress:\s*true/);
 });
+
+test('CI actions use the maintained Node 24 runtime generations', () => {
+  const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'ci.yml'), 'utf8');
+  assert.match(workflow, /actions\/checkout@v6/);
+  assert.match(workflow, /actions\/setup-node@v6/);
+});
