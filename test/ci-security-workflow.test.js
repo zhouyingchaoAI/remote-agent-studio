@@ -7,3 +7,9 @@ test('CI fails when npm reports high-severity dependency vulnerabilities', () =>
   const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'ci.yml'), 'utf8');
   assert.match(workflow, /npm audit --audit-level=high/);
 });
+
+test('CI performs an unsigned packaging smoke test on every target OS', () => {
+  const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'ci.yml'), 'utf8');
+  assert.match(workflow, /npm run dist -- --dir/);
+  assert.match(workflow, /ubuntu-latest, macos-latest, windows-latest/);
+});
