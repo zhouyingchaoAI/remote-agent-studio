@@ -203,6 +203,7 @@ function ChatView({ hostId, conv }) {
   const [filePreview, setFilePreview] = useState(null); // {path, name}
   const [visibleCount, setVisibleCount] = useState(200); // 长对话窗口化渲染
   const [taskTemplate, setTaskTemplate] = useState('implementation');
+  const [watchMode, setWatchMode] = useState(false);
   const permissionMode = conv.permissionMode || (conv.autoApprove ? 'system' : 'workspace');
   const task = Object.values(tasks).find((item) => item.convId === conv.id && item.status !== 'archived');
   const createTask = () => useStore.getState().createTask(hostId, conv.id, { title: conv.title, templateId: taskTemplate, cwd: conv.cwd, projectContext: conv.projectContext });
@@ -358,6 +359,10 @@ function ChatView({ hostId, conv }) {
         {permissionMode === 'system' && <span className="badge system-mode">系统权限</span>}
         {permissionMode === 'plan' && <span className="badge plan-mode">计划模式</span>}
         {permissionMode === 'approval' && <span className="badge plan-mode">审批模式</span>}
+        <label className="permission-switch" title="只读监督会禁用本窗口的发送操作；可查看远程 Agent 的流式输出和任务审计">
+          <input type="checkbox" checked={watchMode} onChange={(e) => setWatchMode(e.target.checked)} />
+          <span>只读监督</span>
+        </label>
         <label className="permission-switch auto-switch"
           title="全自动:模型请求确认时自动回复「确认,继续」,并提示模型自行决策;连续 5 次后暂停防失控">
           <input
@@ -457,6 +462,7 @@ function ChatView({ hostId, conv }) {
         <textarea
           autoFocus
           value={input}
+          disabled={watchMode}
           placeholder={started ? '输入指令,Enter 发送,⌘V 可粘贴截图,Shift+Enter 换行' : '正在初始化会话...'}
           onChange={(e) => setInput(e.target.value)}
           onPaste={onPaste}
@@ -471,7 +477,7 @@ function ChatView({ hostId, conv }) {
         />
         {running && <button className="btn danger" onClick={cancel}>停止</button>}
         <button className="btn primary" onClick={() => send()}
-          disabled={!input.trim() && pendingFiles.length === 0}
+          disabled={watchMode || (!input.trim() && pendingFiles.length === 0)}
           title={running ? '当前轮结束后自动发送' : ''}>
           {running || !started ? '排队发送' : '发送'}
         </button>

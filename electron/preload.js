@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('api', {
     saveImage: invoke('clipboard:saveImage')
   },
   shell: { openExternal: invoke('shell:openExternal') },
+  notifications: { send: invoke('notifications:send') },
   settings: { get: invoke('settings:get'), save: invoke('settings:save') },
   hosts: { list: invoke('hosts:list'), save: invoke('hosts:save') },
   ssh: {
@@ -35,6 +36,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   convos: { list: invoke('convos:list'), save: invoke('convos:save') },
   tasks: { list: invoke('tasks:list'), save: invoke('tasks:save') },
+  taskLinks: { onOpen: on('task:open') },
   projects: { list: invoke('projects:list'), save: invoke('projects:save') },
   worktrees: { create: invoke('worktrees:create') },
   agent: {

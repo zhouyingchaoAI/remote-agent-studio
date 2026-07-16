@@ -90,6 +90,7 @@ export const useStore = create((set, get) => ({
 
   setActiveConv: (hostId, convId) =>
     set((s) => ({ activeConvByHost: { ...s.activeConvByHost, [hostId]: convId } })),
+  setActiveTask: (hostId, taskId) => set((s) => ({ activeTaskByHost: { ...s.activeTaskByHost, [hostId]: taskId } })),
 
   setProjects: (projects) => set({ projects }),
   createProject: (fields = {}) => {

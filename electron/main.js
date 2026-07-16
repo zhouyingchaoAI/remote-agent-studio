@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, screen, clipboard, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, screen, clipboard, shell, nativeImage, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -45,6 +45,10 @@ function getSession(hostId) {
 
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+function openTaskLink(url) {
+  const match = String(url || '').match(/^remote-agent-studio:\/\/task\/([A-Za-z0-9_-]+)$/);
+  if (match) send('task:open', { taskId: match[1] });
 }
 
 function createWindow() {
@@ -107,14 +111,20 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  app.setAsDefaultProtocolClient('remote-agent-studio');
   require('./logger').initLogger(app.getPath('userData'));
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
+app.on('open-url', (event, url) => { event.preventDefault(); openTaskLink(url); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
 ipcMain.handle('shell:openExternal', (_e, url) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
+  return true;
+});
+ipcMain.handle('notifications:send', (_e, { title, body }) => {
+  if (Notification.isSupported()) new Notification({ title: String(title || 'Remote Agent Studio'), body: String(body || '') }).show();
   return true;
 });
 

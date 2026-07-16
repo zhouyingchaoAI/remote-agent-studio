@@ -7,6 +7,8 @@ const labelRisk = (risk, t) => t(`risk_${risk}`);
 
 export default function TaskPanel({ hostId }) {
   const tasks = useStore((s) => s.tasks);
+  const activeTaskId = useStore((s) => s.activeTaskByHost[hostId]);
+  const setActiveTask = useStore((s) => s.setActiveTask);
   const conversations = useStore((s) => s.conversations);
   const setActiveConv = useStore((s) => s.setActiveConv);
   const reviewTask = useStore((s) => s.reviewTask);
@@ -30,12 +32,12 @@ export default function TaskPanel({ hostId }) {
       outputTokens: total.outputTokens + (conversation.usage?.outputTokens || 0),
       costUsd: total.costUsd + (conversation.usage?.costUsd || 0)
     }), { inputTokens: 0, outputTokens: 0, costUsd: 0 }), [conversations, hostId]);
-  const task = selected ? tasks[selected] : list[0];
+  const task = selected ? tasks[selected] : tasks[activeTaskId] || list[0];
 
   return <div className="task-panel">
     <aside className="task-list"><h2>{t('tasks')}</h2><button className="btn small ghost" onClick={() => setInboxOnly((value) => !value)}>Review Inbox</button><UsageSummary usage={hostUsage} t={t} />
       {list.length === 0 ? <p className="muted">{t('taskHelp')}</p> : list.map((item) =>
-        <button key={item.id} className={`task-row ${task?.id === item.id ? 'active' : ''}`} onClick={() => setSelected(item.id)}>
+        <button key={item.id} className={`task-row ${task?.id === item.id ? 'active' : ''}`} onClick={() => { setSelected(item.id); setActiveTask(hostId, item.id); }}>
           <b>{item.title}</b><span className={`task-status ${item.status}`}>{labelStatus(item.status, t)}</span>
         </button>)}
     </aside>
@@ -113,6 +115,7 @@ function DeliveryCard({ task, conversation, onOpen, onReview, onStop, onRetry, o
         <button className="btn primary" onClick={() => onApprove(approval.id)}>批准并继续</button>
         <button className="btn danger" onClick={() => onReject(approval.id)}>拒绝</button>
       </div>)}</section>}
+    {pendingApprovals.length > 0 && <button className="btn small ghost" onClick={() => window.api.clipboard.writeText(`remote-agent-studio://task/${task.id}`)}>复制审批链接</button>}
     {delivery.diffs?.length > 0 && <details open><summary>{t('changeEvidence')}</summary><pre className="task-diff">{delivery.diffs.join('\n\n')}</pre></details>}
     {delivery.auditEvents?.length > 0 && <details open><summary>{t('securityAudit')}</summary><div className="task-audit-events">{delivery.auditEvents.map((event, index) =>
       <p key={`${event.ts || index}_${index}`} className={`risk-event ${event.level || 'workspace_write'}`}><b>{labelRisk(event.level || 'workspace_write', t)}</b> · {event.detail}</p>)}</div></details>}

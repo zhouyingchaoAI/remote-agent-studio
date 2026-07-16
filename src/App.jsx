@@ -59,6 +59,11 @@ export default function App() {
       useStore.getState().appendSetupLog(hostId, text));
     const offTransfer = window.api.files.onProgress(({ transferId, transferred, total }) =>
       useStore.getState().updateTransferProgress(transferId, transferred, total));
+    const offTaskOpen = window.api.taskLinks.onOpen(({ taskId }) => {
+      const task = useStore.getState().tasks[taskId];
+      if (!task) return;
+      useStore.getState().setActiveHost(task.hostId); useStore.getState().setActiveTask(task.hostId, taskId); useStore.getState().setTab('tasks');
+    });
     const offMsg = window.api.agent.onMessage(({ convId, msg }) => {
       const st = useStore.getState();
       const linkedTask = Object.values(st.tasks).find((task) => (task.convId === convId || task.stages?.some((stage) => stage.convId === convId)) && task.status === 'running');
@@ -74,6 +79,7 @@ export default function App() {
           const stage = linkedTask.stages?.find((item) => item.convId === convId);
           if (stage) st.finishTaskStage(linkedTask.id, stage.id);
           st.finalizeTaskDelivery(linkedTask.id); st.updateTaskStatus(linkedTask.id, 'review_ready');
+          window.api.notifications.send({ title: '交付待验收', body: linkedTask.title }).catch(() => {});
         }
         // 有排队消息则自动发送下一条
         const next = st.shiftQueued(convId);
@@ -89,11 +95,11 @@ export default function App() {
             if (conv.messages[i].role === 'user') break;
             sinceLastUser.push(conv.messages[i]);
           }
-          const dangerHit = sinceLastUser.find((m) => m.dangerous);
-          if (dangerHit) {
+          const nonReadHit = sinceLastUser.find((m) => m.kind === 'tool' && m.riskLevel !== 'read');
+          if (nonReadHit) {
             st.pushMessage(convId, {
               role: 'agent', kind: 'raw',
-              text: `🛑 全自动已暂停:本轮包含危险命令「${String(dangerHit.detail || '').slice(0, 80)}」,请人工确认后再继续。`,
+              text: `🛑 低风险自动化已暂停:本轮包含非只读操作「${String(nonReadHit.detail || '').slice(0, 80)}」,请人工确认后再继续。`,
               ts: Date.now()
             });
           } else if (lastReply && isAwaitingConfirm(lastReply.text)) {
@@ -133,7 +139,7 @@ export default function App() {
       if (linkedTask && msg.kind === 'error') st.updateTaskStatus(linkedTask.id, 'failed');
       st.pushMessage(convId, { role: 'agent', ...msg, ts: Date.now() });
     });
-    return () => { offStatus(); offLog(); offTransfer(); offMsg(); };
+    return () => { offStatus(); offLog(); offTransfer(); offTaskOpen(); offMsg(); };
   }, []);
 
   return (
