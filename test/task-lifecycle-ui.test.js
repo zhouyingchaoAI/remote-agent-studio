@@ -59,6 +59,13 @@ test('permission elevation is retained in the linked task audit trail', () => {
   assert.match(chat, /recordTaskDelivery/);
 });
 
+test('tool calls display their classified safety level inline', () => {
+  const chat = read('src/components/ChatPanel.jsx');
+  assert.match(chat, /RISK_LABELS/);
+  assert.match(chat, /m\.riskLevel/);
+  assert.match(chat, /安全级别/);
+});
+
 test('local projects retain access to the task delivery view', () => {
   const app = read('src/App.jsx');
   assert.match(app, /t\.key === 'chat' \|\| t\.key === 'tasks' \|\| t\.key === 'setup'/);

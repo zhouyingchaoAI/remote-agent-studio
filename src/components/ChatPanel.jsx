@@ -43,6 +43,8 @@ function formatTokens(n) {
   return n + ' tok';
 }
 
+const RISK_LABELS = { read: '只读', workspace_write: '项目写入', external_side_effect: '外部影响', system: '系统级' };
+
 /* 从消息文本中提取「1. xxx / 2. xxx」式选项(序号从 1 连续才算) */
 function extractOptions(text = '') {
   const opts = [];
@@ -558,6 +560,7 @@ function Message({ m, hostId, convId, onEnableSystemMode, isLast, running, onQui
       return (
         <div className={`msg thin ${m.dangerous ? 'tool-dangerous' : ''}`}>
           <span className={`chip tool ${m.dangerous ? 'danger' : ''}`}>{m.dangerous ? '⚠️' : '🔧'} {m.name}</span>
+          {m.riskLevel && <span className={`risk-tag ${m.riskLevel}`} title="安全级别">{RISK_LABELS[m.riskLevel] || m.riskLevel}</span>}
           {m.dangerous && <span className="danger-tag">危险操作</span>}
           {m.detail && <code className="tool-detail">{String(m.detail).slice(0, 200)}</code>}
           {m.diff && <EditDiff diff={m.diff} />}
