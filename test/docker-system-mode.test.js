@@ -31,6 +31,15 @@ test('AgentSession turns plan mode into read-only commands for both agents', () 
   assert.match(claude.buildCommand('inspect first'), /--permission-mode plan/);
 });
 
+test('approval mode keeps both agents in the workspace sandbox', () => {
+  const codex = new AgentSession(null, null, { agent: 'codex', cwd: '/workspace', permissionMode: 'approval' });
+  const claude = new AgentSession(null, null, { agent: 'claude', cwd: '/workspace', permissionMode: 'approval' });
+  assert.match(codex.buildCommand('change files'), /--sandbox workspace-write/);
+  assert.doesNotMatch(codex.buildCommand('change files'), /dangerously-bypass/);
+  assert.match(claude.buildCommand('change files'), /--permission-mode acceptEdits/);
+  assert.doesNotMatch(claude.buildCommand('change files'), /dangerously-skip/);
+});
+
 test('Docker permission errors emit a system-mode hint only in workspace mode', () => {
   const workspace = session();
   const workspaceMessages = [];
@@ -59,6 +68,12 @@ test('Docker permission errors emit a system-mode hint only in workspace mode', 
   assert.ok(workspaceMessages.some((message) => message.kind === 'permission_hint'));
   assert.ok(workspaceMessages.some((message) => /\/var\/run\/docker\.sock/.test(message.text)));
   assert.ok(!systemMessages.some((message) => message.kind === 'permission_hint'));
+
+  const approval = session({ permissionMode: 'approval' });
+  const approvalMessages = [];
+  approval.on('message', (message) => approvalMessages.push(message));
+  approval._parseCodex({ type: 'item.completed', item: { type: 'command_execution', command: 'docker ps', aggregated_output: 'permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock' } });
+  assert.ok(approvalMessages.some((message) => message.kind === 'permission_hint'));
 
   const unrelated = session();
   const unrelatedMessages = [];

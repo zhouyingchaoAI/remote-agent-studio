@@ -236,6 +236,10 @@ function ChatView({ hostId, conv }) {
       });
       return;
     }
+    if (task?.status === 'needs_approval') {
+      setAttachmentError('任务正在等待权限审批；请先到任务中心处理该请求。');
+      return;
+    }
     if (task && task.status !== 'running') useStore.getState().updateTaskStatus(task.id, 'running');
     await sendToAgent(hostId, conv.id, prompt, files);
   };
@@ -291,6 +295,14 @@ function ChatView({ hostId, conv }) {
   };
 
   const changePermissionMode = (nextMode) => {
+    if (nextMode === 'system' && task) {
+      const approval = useStore.getState().createTaskApproval(task.id, {
+        scope: 'system',
+        reason: '允许 Docker、主机级命令及工作目录外的文件或服务变更'
+      });
+      if (approval) useStore.getState().updateTaskStatus(task.id, 'needs_approval');
+      return;
+    }
     if (nextMode === 'system' && !window.confirm(
       '启用系统权限将允许此对话访问 Docker 和远程主机级命令。命令可修改工作目录之外的文件和服务。是否继续？'
     )) return;
@@ -342,6 +354,7 @@ function ChatView({ hostId, conv }) {
           }}>⇩</button>
         {permissionMode === 'system' && <span className="badge system-mode">系统权限</span>}
         {permissionMode === 'plan' && <span className="badge plan-mode">计划模式</span>}
+        {permissionMode === 'approval' && <span className="badge plan-mode">审批模式</span>}
         <label className="permission-switch auto-switch"
           title="全自动:模型请求确认时自动回复「确认,继续」,并提示模型自行决策;连续 5 次后暂停防失控">
           <input
@@ -359,6 +372,15 @@ function ChatView({ hostId, conv }) {
             onChange={(e) => changePermissionMode(e.target.checked ? 'system' : 'workspace')}
           />
           <span>System Mode</span>
+        </label>
+        <label className="permission-switch" title="在工作区沙箱执行；提升到系统权限必须绑定具体任务并在任务页审批">
+          <input
+            type="checkbox"
+            checked={permissionMode === 'approval'}
+            disabled={running}
+            onChange={(e) => changePermissionMode(e.target.checked ? 'approval' : 'workspace')}
+          />
+          <span>Approval Mode</span>
         </label>
         <label className="permission-switch" title="只允许分析和制定计划，不允许修改文件或执行会产生副作用的命令">
           <input
@@ -783,6 +805,15 @@ function SessionSetup({ hostId, onCancel }) {
             Plan Mode（只读规划）
           </label>
           <p className="system-mode-notice">计划模式禁止修改文件和执行有副作用的命令，适合先获取方案与风险评估。</p>
+          <label className="row checkbox">
+            <input
+              type="checkbox"
+              checked={permissionMode === 'approval'}
+              onChange={(e) => setPermissionMode(e.target.checked ? 'approval' : 'workspace')}
+            />
+            Approval Mode（任务审批）
+          </label>
+          <p className="system-mode-notice">审批模式使用工作区沙箱；请求系统权限时必须先创建任务，再在任务页批准。</p>
         </div>
       </div>
       <button className="btn primary" onClick={start} disabled={env && !installed}>开始对话</button>

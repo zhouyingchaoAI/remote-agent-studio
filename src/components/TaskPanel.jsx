@@ -13,6 +13,7 @@ export default function TaskPanel({ hostId }) {
   const updateTaskStatus = useStore((s) => s.updateTaskStatus);
   const recordTaskDelivery = useStore((s) => s.recordTaskDelivery);
   const retryTask = useStore((s) => s.retryTask);
+  const resolveTaskApproval = useStore((s) => s.resolveTaskApproval);
   const language = useStore((s) => s.settings.language);
   const t = (key) => tr(language, key);
   const [selected, setSelected] = useState(null);
@@ -45,7 +46,19 @@ export default function TaskPanel({ hostId }) {
         if (!retried) return;
         setActiveConv(hostId, task.convId);
         await sendToAgent(task.hostId, task.convId, '请基于当前任务、已有交付和验收反馈继续执行；优先解决未完成或被要求修改的部分。');
-      }} /> : <div className="empty-state"><p>{t('noTasks')}</p></div>}</section>
+      }} onApprove={async (approvalId) => {
+        const approval = resolveTaskApproval(task.id, approvalId, 'approved');
+        const conversation = conversations[task.convId];
+        if (!approval || !conversation) return;
+        await window.api.agent.start({
+          hostId: task.hostId, convId: task.convId,
+          opts: { agent: conversation.agent, cwd: conversation.cwd, model: conversation.model, permissionMode: 'system' },
+          resume: { claudeSessionId: conversation.claudeSessionId, codexSessionId: conversation.codexSessionId, codexStarted: conversation.codexStarted }
+        });
+        setActiveConv(hostId, task.convId);
+        await sendToAgent(task.hostId, task.convId, '该任务的系统权限请求已获批准。请仅在完成当前任务所需范围内继续执行，并在交付中说明实际执行的高风险操作。');
+      }} onReject={(approvalId) => resolveTaskApproval(task.id, approvalId, 'rejected')}
+      /> : <div className="empty-state"><p>{t('noTasks')}</p></div>}</section>
   </div>;
 }
 
@@ -58,9 +71,10 @@ function UsageSummary({ usage, t }) {
   </div>;
 }
 
-function DeliveryCard({ task, conversation, onOpen, onReview, onStop, onRetry, t }) {
+function DeliveryCard({ task, conversation, onOpen, onReview, onStop, onRetry, onApprove, onReject, t }) {
   const delivery = task.delivery || {};
   const deliveryPackage = task.deliveryPackage;
+  const pendingApprovals = (task.approvalRequests || []).filter((approval) => approval.status === 'pending');
   const [note, setNote] = useState(task.review?.note || '');
   const canReview = task.status === 'review_ready' || task.status === 'changes_requested';
   return <div className="delivery-card">
@@ -68,6 +82,12 @@ function DeliveryCard({ task, conversation, onOpen, onReview, onStop, onRetry, t
       <div><button className="btn ghost" onClick={onOpen}>{t('openChat')}</button>{task.status === 'running' && <button className="btn danger task-stop" onClick={onStop}>{t('stopTakeover')}</button>}</div></div>
     <p className="muted small">{conversation?.cwd || '~'} · {t('changes')} {delivery.diffs?.length || 0} · {t('artifacts')} {delivery.artifacts?.length || 0} · {t('dangerousOps')} {delivery.dangerousCommands?.length || 0}</p>
     {deliveryPackage && <p className="muted small">交付包快照：{new Date(deliveryPackage.generatedAt).toLocaleString()} · {deliveryPackage.diffs.length} diff · {deliveryPackage.artifacts.length} artifact</p>}
+    {pendingApprovals.length > 0 && <section className="task-approvals"><h3>审批请求</h3>{pendingApprovals.map((approval) =>
+      <div key={approval.id} className="task-approval-card"><b>{approval.scope === 'system' ? '系统权限' : approval.scope}</b>
+        <p>{approval.reason}</p><p className="muted small">请求于 {new Date(approval.requestedAt).toLocaleString()}。批准后该任务会恢复执行；拒绝后保持受限权限。</p>
+        <button className="btn primary" onClick={() => onApprove(approval.id)}>批准并继续</button>
+        <button className="btn danger" onClick={() => onReject(approval.id)}>拒绝</button>
+      </div>)}</section>}
     {delivery.diffs?.length > 0 && <details open><summary>{t('changeEvidence')}</summary><pre className="task-diff">{delivery.diffs.join('\n\n')}</pre></details>}
     {delivery.auditEvents?.length > 0 && <details open><summary>{t('securityAudit')}</summary><div className="task-audit-events">{delivery.auditEvents.map((event, index) =>
       <p key={`${event.ts || index}_${index}`} className={`risk-event ${event.level || 'workspace_write'}`}><b>{labelRisk(event.level || 'workspace_write', t)}</b> · {event.detail}</p>)}</div></details>}

@@ -3,6 +3,7 @@ import { normalizeLanguage } from './i18n.mjs';
 
 function normalizePermissionMode(value) {
   if (value === 'system' || value?.permissionMode === 'system') return 'system';
+  if (value === 'approval' || value?.permissionMode === 'approval') return 'approval';
   if (value === 'plan' || value?.permissionMode === 'plan') return 'plan';
   if (value === 'workspace' || value?.permissionMode === 'workspace') return 'workspace';
   return value?.autoApprove === true ? 'system' : 'workspace';
@@ -85,7 +86,7 @@ export const useStore = create((set, get) => ({
       id, hostId, convId, title: fields.title || '未命名任务', status: 'draft',
       createdAt: now, updatedAt: now, runStartedAt: null, runFinishedAt: null,
       delivery: { diffs: [], artifacts: [], usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }, dangerousCommands: [], auditEvents: [] },
-      review: null
+      review: null, approvalRequests: []
     };
     set((s) => ({ tasks: { ...s.tasks, [id]: task }, activeTaskByHost: { ...s.activeTaskByHost, [hostId]: id } }));
     persistTasks();
@@ -162,6 +163,56 @@ export const useStore = create((set, get) => ({
     });
     persistTasks();
     return retried;
+  },
+
+  createTaskApproval: (taskId, fields = {}) => {
+    let created = null;
+    set((s) => {
+      const task = s.tasks[taskId];
+      if (!task) return {};
+      const now = Date.now();
+      created = {
+        id: `a_${now}_${Math.random().toString(36).slice(2, 6)}`,
+        scope: fields.scope || 'system', reason: fields.reason || '请求系统权限',
+        status: 'pending', requestedAt: now, resolvedAt: null, resolvedBy: null
+      };
+      const delivery = task.delivery || {};
+      return { tasks: { ...s.tasks, [taskId]: { ...task, status: 'needs_approval', updatedAt: now,
+        approvalRequests: [...(task.approvalRequests || []), created],
+        delivery: { ...delivery, auditEvents: [...(delivery.auditEvents || []), {
+          type: 'approval_requested', level: 'system', detail: `审批请求：${created.reason}`, ts: now
+        }] }
+      } } };
+    });
+    persistTasks();
+    return created;
+  },
+
+  resolveTaskApproval: (taskId, approvalId, decision) => {
+    let resolved = null;
+    set((s) => {
+      const task = s.tasks[taskId];
+      const approval = task?.approvalRequests?.find((item) => item.id === approvalId && item.status === 'pending');
+      if (!task || !approval || !['approved', 'rejected'].includes(decision)) return {};
+      const now = Date.now();
+      resolved = { ...approval, status: decision, resolvedAt: now, resolvedBy: 'local_user' };
+      const delivery = task.delivery || {};
+      const nextTasks = { ...s.tasks, [taskId]: { ...task, status: 'needs_input', updatedAt: now,
+        approvalRequests: task.approvalRequests.map((item) => item.id === approvalId ? resolved : item),
+        delivery: { ...delivery, auditEvents: [...(delivery.auditEvents || []), {
+          type: 'approval_resolved', level: 'system', detail: `审批${decision === 'approved' ? '通过' : '拒绝'}：${approval.reason}`, ts: now
+        }] }
+      } };
+      if (decision !== 'approved') return { tasks: nextTasks };
+      const conv = s.conversations[task.convId];
+      if (!conv) return { tasks: nextTasks };
+      return { tasks: nextTasks, conversations: { ...s.conversations, [conv.id]: {
+        ...conv, permissionMode: 'system', updatedAt: now
+      } } };
+    });
+    persistTasks();
+    if (resolved?.status === 'approved') persist();
+    return resolved;
   },
 
   createConversation: (hostId, opts) => {
@@ -445,6 +496,10 @@ export async function sendToAgent(hostId, convId, text, files = [], opts = {}) {
   const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   if (!opts.auto) resetAutoReplies(convId); // 人工发言重置自动确认计数
   const linkedTask = Object.values(st.tasks).find((task) => task.convId === convId && task.status !== 'archived');
+  if (linkedTask?.status === 'needs_approval') {
+    st.pushMessage(convId, { role: 'agent', kind: 'error', text: '任务正在等待权限审批；请先在任务中心批准或拒绝该请求。', ts: Date.now() });
+    return false;
+  }
   if (linkedTask && linkedTask.status !== 'running') st.updateTaskStatus(linkedTask.id, 'running');
   st.setAgentRunning(convId, true);
   try {

@@ -49,6 +49,7 @@ export default function SettingsModal() {
             <select value={settings.defaultPermissionMode} onChange={(e) => apply({ defaultPermissionMode: e.target.value })}>
               <option value="workspace">{t('workspace')}</option>
               <option value="plan">{t('plan')}</option>
+              <option value="approval">{t('approval')}</option>
               <option value="system">{t('system')}</option>
             </select>
           </label>

@@ -28,6 +28,7 @@ function filterStderrNoise(text) {
 
 function normalizePermissionMode(opts = {}) {
   if (opts.permissionMode === 'system') return 'system';
+  if (opts.permissionMode === 'approval') return 'approval';
   if (opts.permissionMode === 'plan') return 'plan';
   if (opts.permissionMode === 'workspace') return 'workspace';
   return opts.autoApprove === true ? 'system' : 'workspace';
@@ -41,7 +42,7 @@ class AgentSession extends EventEmitter {
   /**
    * @param ssh SSHManager
    * @param proxy ProxyService|null
-   * @param opts {agent:'codex'|'claude', cwd, permissionMode?:'workspace'|'system', autoApprove?:boolean, model?}
+   * @param opts {agent:'codex'|'claude', cwd, permissionMode?:'plan'|'workspace'|'approval'|'system', autoApprove?:boolean, model?}
    */
   constructor(ssh, proxy, opts) {
     super();
@@ -82,7 +83,7 @@ class AgentSession extends EventEmitter {
       if (agent === 'codex') {
         const approval = permissionMode === 'system'
           ? '--dangerously-bypass-approvals-and-sandbox'
-          : permissionMode === 'plan' ? '--sandbox read-only' : '--sandbox workspace-write';
+          : permissionMode === 'plan' ? '--sandbox read-only' : permissionMode === 'approval' ? '--sandbox workspace-write' : '--sandbox workspace-write';
         const modelArg = model ? `-m ${powershellQuote(model)}` : '';
         const images = attachments
           .filter((file) => file.kind === 'image' && file.remotePath)
@@ -103,7 +104,7 @@ class AgentSession extends EventEmitter {
       }
       const permission = permissionMode === 'system'
         ? '--dangerously-skip-permissions'
-        : permissionMode === 'plan' ? '--permission-mode plan' : '--permission-mode acceptEdits';
+        : permissionMode === 'plan' ? '--permission-mode plan' : permissionMode === 'approval' ? '--permission-mode acceptEdits' : '--permission-mode acceptEdits';
       const modelArg = model ? `--model ${powershellQuote(model)}` : '';
       const resume = this.claudeSessionId ? `--resume ${powershellQuote(this.claudeSessionId)}` : '';
       return `${cd}& claude.cmd -p --output-format stream-json --include-partial-messages --verbose ${permission} ${modelArg} ${resume} ${powershellQuote(fullPrompt)}`;
@@ -118,7 +119,7 @@ class AgentSession extends EventEmitter {
     if (agent === 'codex') {
       const approval = permissionMode === 'system'
         ? '--dangerously-bypass-approvals-and-sandbox'
-        : permissionMode === 'plan' ? '--sandbox read-only' : '--sandbox workspace-write';
+        : permissionMode === 'plan' ? '--sandbox read-only' : permissionMode === 'approval' ? '--sandbox workspace-write' : '--sandbox workspace-write';
       const m = model ? `-m ${shellQuote(model)}` : '';
       const images = attachments
         .filter((file) => file.kind === 'image' && file.remotePath)
@@ -142,7 +143,7 @@ class AgentSession extends EventEmitter {
     // claude
     const perm = permissionMode === 'system'
       ? '--dangerously-skip-permissions'
-      : permissionMode === 'plan' ? '--permission-mode plan' : '--permission-mode acceptEdits';
+      : permissionMode === 'plan' ? '--permission-mode plan' : permissionMode === 'approval' ? '--permission-mode acceptEdits' : '--permission-mode acceptEdits';
     const m = model ? `--model ${shellQuote(model)}` : '';
     const resume = this.claudeSessionId ? `--resume ${shellQuote(this.claudeSessionId)}` : '';
     return wrap(`claude -p --output-format stream-json --include-partial-messages --verbose ${perm} ${m} ${resume} ${q}`);
@@ -233,7 +234,7 @@ class AgentSession extends EventEmitter {
   }
 
   _maybeEmitPermissionHint(text) {
-    if (this.opts.permissionMode !== 'workspace' || this.permissionHintEmitted || !DOCKER_PERMISSION_ERROR.test(text)) return;
+    if (!['workspace', 'approval'].includes(this.opts.permissionMode) || this.permissionHintEmitted || !DOCKER_PERMISSION_ERROR.test(text)) return;
     this.permissionHintEmitted = true;
     this._emitMsg({
       kind: 'permission_hint',
