@@ -28,3 +28,4 @@ Thumbs.db
 # 本地工具产物
 .superpowers/
 .agents/
+.worktrees/
