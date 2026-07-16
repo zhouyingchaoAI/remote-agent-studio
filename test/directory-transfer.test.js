@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { buildLocalDirectoryManifest } = require('../electron/fileTransfer');
+const { buildLocalDirectoryManifest, buildRemoteDirectoryManifest } = require('../electron/fileTransfer');
 
 test('directory manifest includes nested regular files and skips symlinks', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-transfer-'));
@@ -21,5 +21,28 @@ test('directory manifest includes nested regular files and skips symlinks', asyn
     'top.txt'
   ]);
   assert.equal(manifest.total, 8);
+  assert.equal(manifest.skippedSymlinks, 1);
+});
+
+test('remote directory manifest retains relative paths and skips links', async () => {
+  const directories = new Map([
+    ['/remote/project', {
+      path: '/remote/project',
+      entries: [
+        { name: 'README.md', size: 6, isDir: false },
+        { name: 'src', isDir: true },
+        { name: 'outside', isLink: true }
+      ]
+    }],
+    ['/remote/project/src', {
+      path: '/remote/project/src',
+      entries: [{ name: 'index.js', size: 10, isDir: false }]
+    }]
+  ]);
+
+  const manifest = await buildRemoteDirectoryManifest(async (dir) => directories.get(dir), '/remote/project');
+
+  assert.deepEqual(manifest.files.map((file) => file.relativePath).sort(), ['README.md', 'src/index.js']);
+  assert.equal(manifest.total, 16);
   assert.equal(manifest.skippedSymlinks, 1);
 });

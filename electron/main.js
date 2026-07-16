@@ -9,7 +9,7 @@ const { Installer } = require('./ssh/Installer');
 const { AgentSession } = require('./ssh/AgentSession');
 const { LocalExecutor } = require('./LocalExecutor');
 const { AttachmentService } = require('./chat/AttachmentService');
-const { buildLocalDirectoryManifest } = require('./fileTransfer');
+const { buildLocalDirectoryManifest, buildRemoteDirectoryManifest } = require('./fileTransfer');
 const {
   loadHosts, saveHosts, loadConvos, saveConvos, loadProxies, saveProxy,
   loadKnownHosts, saveKnownHost, loadSettings, saveSettings, loadTasks, saveTasks
@@ -653,6 +653,27 @@ ipcMain.handle('fs:download', async (_e, { hostId, remotePath, localPath, transf
   await s.ssh.download(remotePath, localPath, (p) =>
     send('transfer:progress', { hostId, transferId, ...p }));
   return true;
+});
+
+ipcMain.handle('fs:downloadDirectory', async (_e, { hostId, remotePath, localPath, transferId }) => {
+  const s = getSession(hostId);
+  const manifest = await buildRemoteDirectoryManifest((dir) => s.ssh.listRemoteDir(dir), remotePath);
+  const localRoot = path.resolve(localPath);
+  let completed = 0;
+  await fs.promises.mkdir(localRoot, { recursive: true });
+
+  for (const file of manifest.files) {
+    const destination = path.resolve(localRoot, file.relativePath);
+    if (destination !== localRoot && !destination.startsWith(localRoot + path.sep)) {
+      throw new Error('远程目录包含无效路径');
+    }
+    await fs.promises.mkdir(path.dirname(destination), { recursive: true });
+    await s.ssh.download(file.remotePath, destination, ({ transferred }) =>
+      send('transfer:progress', { hostId, transferId, transferred: completed + transferred, total: manifest.total }));
+    completed += file.size;
+    send('transfer:progress', { hostId, transferId, transferred: completed, total: manifest.total });
+  }
+  return { files: manifest.files.length, skippedSymlinks: manifest.skippedSymlinks };
 });
 
 /* 文件内容预览:文本截断到 512KB,图片最大 10MB,二进制给出提示 */

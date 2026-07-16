@@ -32,4 +32,30 @@ async function buildLocalDirectoryManifest(rootPath) {
   return { files, total, skippedSymlinks };
 }
 
-module.exports = { buildLocalDirectoryManifest };
+/** Build a regular-file manifest from the existing remote directory listing API. */
+async function buildRemoteDirectoryManifest(listDirectory, rootPath) {
+  const root = await listDirectory(rootPath);
+  const files = [];
+  let total = 0;
+  let skippedSymlinks = 0;
+
+  async function visit(directory) {
+    for (const entry of directory.entries) {
+      const remotePath = path.posix.join(directory.path, entry.name);
+      if (entry.isLink) {
+        skippedSymlinks += 1;
+      } else if (entry.isDir) {
+        await visit(await listDirectory(remotePath));
+      } else {
+        const size = entry.size || 0;
+        files.push({ remotePath, relativePath: path.posix.relative(root.path, remotePath), size });
+        total += size;
+      }
+    }
+  }
+
+  await visit(root);
+  return { files, total, skippedSymlinks };
+}
+
+module.exports = { buildLocalDirectoryManifest, buildRemoteDirectoryManifest };
