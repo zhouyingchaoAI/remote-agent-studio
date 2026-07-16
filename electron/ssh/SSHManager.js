@@ -292,24 +292,31 @@ class SSHManager extends EventEmitter {
     return { path: target, entries };
   }
 
-  async upload(localPath, remotePath, onProgress, transferId) {
+  async upload(localPath, remotePath, onProgress, transferId, { resume = false } = {}) {
     const sftp = await this.sftp();
     const total = fs.statSync(localPath).size;
-    return this._streamTransfer(fs.createReadStream(localPath), sftp.createWriteStream(remotePath), total, onProgress, transferId);
+    let offset = 0;
+    if (resume) {
+      const remote = await new Promise((resolve) => sftp.stat(remotePath, (err, stat) => resolve(err ? null : stat)));
+      if (remote?.size > 0 && remote.size < total) offset = remote.size;
+    }
+    return this._streamTransfer(fs.createReadStream(localPath, { start: offset }), sftp.createWriteStream(remotePath, { flags: offset ? 'a' : 'w' }), total, onProgress, transferId, offset);
   }
 
-  async download(remotePath, localPath, onProgress, transferId) {
+  async download(remotePath, localPath, onProgress, transferId, { resume = false } = {}) {
     const sftp = await this.sftp();
     const stat = await new Promise((res, rej) =>
       sftp.stat(remotePath, (e, s) => (e ? rej(e) : res(s))));
     const total = stat.size;
-    return this._streamTransfer(sftp.createReadStream(remotePath), fs.createWriteStream(localPath), total, onProgress, transferId);
+    const existing = resume && fs.existsSync(localPath) ? fs.statSync(localPath).size : 0;
+    const offset = existing > 0 && existing < total ? existing : 0;
+    return this._streamTransfer(sftp.createReadStream(remotePath, { start: offset }), fs.createWriteStream(localPath, { flags: offset ? 'a' : 'w' }), total, onProgress, transferId, offset);
   }
 
-  _streamTransfer(source, destination, total, onProgress, transferId) {
+  _streamTransfer(source, destination, total, onProgress, transferId, initialTransferred = 0) {
     const id = transferId || `internal_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     return new Promise((resolve, reject) => {
-      let transferred = 0;
+      let transferred = initialTransferred;
       let settled = false;
       const finish = (error) => {
         if (settled) return;

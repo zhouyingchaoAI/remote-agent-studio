@@ -82,9 +82,9 @@ export default function FilePanel({ hostId }) {
     setTransfers((ts) => ts.map((x) => x.id === t.id ? { ...x, error: null, transferred: 0 } : x));
     try {
       if (t.dir === '↑' && t.kind === 'directory') await window.api.files.uploadDirectory({ hostId, localPath: t.localPath, remotePath: t.remotePath, transferId: t.id });
-      else if (t.dir === '↑') await window.api.files.upload({ hostId, localPath: t.localPath, remotePath: t.remotePath, transferId: t.id });
+      else if (t.dir === '↑') await window.api.files.upload({ hostId, localPath: t.localPath, remotePath: t.remotePath, transferId: t.id, resume: true });
       else if (t.kind === 'directory') await window.api.files.downloadDirectory({ hostId, remotePath: t.remotePath, localPath: t.localPath, transferId: t.id });
-      else await window.api.files.download({ hostId, remotePath: t.remotePath, localPath: t.localPath, transferId: t.id });
+      else await window.api.files.download({ hostId, remotePath: t.remotePath, localPath: t.localPath, transferId: t.id, resume: true });
       setTransfers((ts) => ts.map((x) => x.id === t.id ? { ...x, done: true } : x));
       if (t.dir === '↑') loadRemote(remote.path); else loadLocal(local.path);
     } catch (e) {

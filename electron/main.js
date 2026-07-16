@@ -619,10 +619,10 @@ ipcMain.handle('fs:listRemote', async (_e, { hostId, dirPath }) => {
   return getSession(hostId).ssh.listRemoteDir(dirPath);
 });
 
-ipcMain.handle('fs:upload', async (_e, { hostId, localPath, remotePath, transferId }) => {
+ipcMain.handle('fs:upload', async (_e, { hostId, localPath, remotePath, transferId, resume }) => {
   const s = getSession(hostId);
   await s.ssh.upload(localPath, remotePath, (p) =>
-    send('transfer:progress', { hostId, transferId, ...p }), transferId);
+    send('transfer:progress', { hostId, transferId, ...p }), transferId, { resume });
   return true;
 });
 
@@ -649,10 +649,10 @@ ipcMain.handle('fs:uploadDirectory', async (_e, { hostId, localPath, remotePath,
   return { files: manifest.files.length, skippedSymlinks: manifest.skippedSymlinks };
 });
 
-ipcMain.handle('fs:download', async (_e, { hostId, remotePath, localPath, transferId }) => {
+ipcMain.handle('fs:download', async (_e, { hostId, remotePath, localPath, transferId, resume }) => {
   const s = getSession(hostId);
   await s.ssh.download(remotePath, localPath, (p) =>
-    send('transfer:progress', { hostId, transferId, ...p }), transferId);
+    send('transfer:progress', { hostId, transferId, ...p }), transferId, { resume });
   return true;
 });
 
