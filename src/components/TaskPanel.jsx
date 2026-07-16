@@ -2,12 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { useStore } from '../store.js';
 import { translate as tr } from '../i18n.mjs';
 
-const LABELS = {
-  draft: '草稿', queued: '排队中', running: '执行中', needs_input: '等待输入',
-  needs_approval: '等待审批', review_ready: '待验收', accepted: '已验收',
-  changes_requested: '需修改', failed: '失败', archived: '已归档'
-};
-const RISK_LABELS = { read: '只读', workspace_write: '项目写入', external_side_effect: '外部影响', system: '系统级' };
+const labelStatus = (status, t) => t(`status_${status}`);
+const labelRisk = (risk, t) => t(`risk_${risk}`);
 
 export default function TaskPanel({ hostId }) {
   const tasks = useStore((s) => s.tasks);
@@ -34,7 +30,7 @@ export default function TaskPanel({ hostId }) {
     <aside className="task-list"><h2>{t('tasks')}</h2><UsageSummary usage={hostUsage} t={t} />
       {list.length === 0 ? <p className="muted">{t('taskHelp')}</p> : list.map((item) =>
         <button key={item.id} className={`task-row ${task?.id === item.id ? 'active' : ''}`} onClick={() => setSelected(item.id)}>
-          <b>{item.title}</b><span className={`task-status ${item.status}`}>{LABELS[item.status] || item.status}</span>
+          <b>{item.title}</b><span className={`task-status ${item.status}`}>{labelStatus(item.status, t)}</span>
         </button>)}
     </aside>
     <section className="task-detail">{task ? <DeliveryCard task={task} conversation={conversations[task.convId]}
@@ -61,12 +57,12 @@ function DeliveryCard({ task, conversation, onOpen, onReview, onStop, t }) {
   const [note, setNote] = useState(task.review?.note || '');
   const canReview = task.status === 'review_ready' || task.status === 'changes_requested';
   return <div className="delivery-card">
-    <div className="task-detail-head"><div><h2>{task.title}</h2><span className={`task-status ${task.status}`}>{LABELS[task.status] || task.status}</span></div>
+    <div className="task-detail-head"><div><h2>{task.title}</h2><span className={`task-status ${task.status}`}>{labelStatus(task.status, t)}</span></div>
       <div><button className="btn ghost" onClick={onOpen}>{t('openChat')}</button>{task.status === 'running' && <button className="btn danger task-stop" onClick={onStop}>{t('stopTakeover')}</button>}</div></div>
     <p className="muted small">{conversation?.cwd || '~'} · {t('changes')} {delivery.diffs?.length || 0} · {t('artifacts')} {delivery.artifacts?.length || 0} · {t('dangerousOps')} {delivery.dangerousCommands?.length || 0}</p>
     {delivery.diffs?.length > 0 && <details open><summary>{t('changeEvidence')}</summary><pre className="task-diff">{delivery.diffs.join('\n\n')}</pre></details>}
     {delivery.auditEvents?.length > 0 && <details open><summary>{t('securityAudit')}</summary><div className="task-audit-events">{delivery.auditEvents.map((event, index) =>
-      <p key={`${event.ts || index}_${index}`} className={`risk-event ${event.level || 'workspace_write'}`}><b>{RISK_LABELS[event.level] || event.level}</b> · {event.detail}</p>)}</div></details>}
+      <p key={`${event.ts || index}_${index}`} className={`risk-event ${event.level || 'workspace_write'}`}><b>{labelRisk(event.level || 'workspace_write', t)}</b> · {event.detail}</p>)}</div></details>}
     {delivery.dangerousCommands?.length > 0 && <details open><summary>⚠️ 危险操作</summary><pre>{delivery.dangerousCommands.join('\n')}</pre></details>}
     {(delivery.usage?.inputTokens || delivery.usage?.outputTokens) ? <p>用量：输入 {delivery.usage.inputTokens || 0} / 输出 {delivery.usage.outputTokens || 0} tokens</p> : null}
     {canReview && <div className="task-review"><textarea value={note} placeholder={t('reviewNote')} onChange={(e) => setNote(e.target.value)} />
