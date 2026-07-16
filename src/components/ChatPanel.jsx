@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useStore, sendToAgent, isAwaitingConfirm } from '../store.js';
+import { useStore, sendToAgent, isAwaitingConfirm, TASK_TEMPLATES } from '../store.js';
 import FilePreview from './FilePreview.jsx';
 import Markdown from './Markdown.jsx';
 import { translate as tr } from '../i18n.mjs';
@@ -202,9 +202,10 @@ function ChatView({ hostId, conv }) {
   const composingRef = useRef(false);
   const [filePreview, setFilePreview] = useState(null); // {path, name}
   const [visibleCount, setVisibleCount] = useState(200); // 长对话窗口化渲染
+  const [taskTemplate, setTaskTemplate] = useState('implementation');
   const permissionMode = conv.permissionMode || (conv.autoApprove ? 'system' : 'workspace');
   const task = Object.values(tasks).find((item) => item.convId === conv.id && item.status !== 'archived');
-  const createTask = () => useStore.getState().createTask(hostId, conv.id, { title: conv.title });
+  const createTask = () => useStore.getState().createTask(hostId, conv.id, { title: conv.title, templateId: taskTemplate, cwd: conv.cwd });
 
   // 进入对话/切换模型或权限时,在主进程(重新)初始化 agent 会话(带 resume 状态续聊)
   useEffect(() => {
@@ -322,7 +323,9 @@ function ChatView({ hostId, conv }) {
     <div className="chat-panel">
       <div className="chat-header">
         <button className="btn small ghost" onClick={() => setActiveConv(hostId, null)}>← 记录</button>
-        {!task && <button className="btn small ghost" onClick={createTask}>+ 任务</button>}
+        {!task && <><select className="agent-select" value={taskTemplate} onChange={(e) => setTaskTemplate(e.target.value)} title="选择任务模板">
+          {TASK_TEMPLATES.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}
+        </select><button className="btn small ghost" onClick={createTask}>+ 任务</button></>}
         <select className={`agent-select ${conv.agent}`} value={conv.agent} disabled={running}
           title="切换引擎(同一对话内共用上下文,切换后首条消息自动携带对话摘要)"
           onChange={(e) => { setStarted(false); updateConversationAgent(conv.id, e.target.value); }}>

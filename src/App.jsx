@@ -60,7 +60,7 @@ export default function App() {
       useStore.getState().updateTransferProgress(transferId, transferred, total));
     const offMsg = window.api.agent.onMessage(({ convId, msg }) => {
       const st = useStore.getState();
-      const linkedTask = Object.values(st.tasks).find((task) => task.convId === convId && task.status === 'running');
+      const linkedTask = Object.values(st.tasks).find((task) => (task.convId === convId || task.stages?.some((stage) => stage.convId === convId)) && task.status === 'running');
       if (msg.kind === 'done') {
         st.setAgentRunning(convId, false);
         st.updateConvResume(convId, {
@@ -69,7 +69,11 @@ export default function App() {
           codexStarted: msg.codexStarted,
           lastTurnAgent: msg.agent
         });
-        if (linkedTask) { st.finalizeTaskDelivery(linkedTask.id); st.updateTaskStatus(linkedTask.id, 'review_ready'); }
+        if (linkedTask) {
+          const stage = linkedTask.stages?.find((item) => item.convId === convId);
+          if (stage) st.finishTaskStage(linkedTask.id, stage.id);
+          st.finalizeTaskDelivery(linkedTask.id); st.updateTaskStatus(linkedTask.id, 'review_ready');
+        }
         // 有排队消息则自动发送下一条
         const next = st.shiftQueued(convId);
         const conv = st.conversations[convId];

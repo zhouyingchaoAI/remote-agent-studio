@@ -14,11 +14,15 @@ export default function TaskPanel({ hostId }) {
   const recordTaskDelivery = useStore((s) => s.recordTaskDelivery);
   const retryTask = useStore((s) => s.retryTask);
   const resolveTaskApproval = useStore((s) => s.resolveTaskApproval);
+  const startTaskStage = useStore((s) => s.startTaskStage);
+  const createConversation = useStore((s) => s.createConversation);
   const language = useStore((s) => s.settings.language);
   const t = (key) => tr(language, key);
   const [selected, setSelected] = useState(null);
+  const [inboxOnly, setInboxOnly] = useState(false);
   const list = useMemo(() => Object.values(tasks).filter((task) => task.hostId === hostId)
-    .sort((a, b) => b.updatedAt - a.updatedAt), [tasks, hostId]);
+    .filter((task) => !inboxOnly || ['needs_approval', 'review_ready'].includes(task.status))
+    .sort((a, b) => b.updatedAt - a.updatedAt), [tasks, hostId, inboxOnly]);
   const hostUsage = useMemo(() => Object.values(conversations)
     .filter((conversation) => conversation.hostId === hostId)
     .reduce((total, conversation) => ({
@@ -29,14 +33,14 @@ export default function TaskPanel({ hostId }) {
   const task = selected ? tasks[selected] : list[0];
 
   return <div className="task-panel">
-    <aside className="task-list"><h2>{t('tasks')}</h2><UsageSummary usage={hostUsage} t={t} />
+    <aside className="task-list"><h2>{t('tasks')}</h2><button className="btn small ghost" onClick={() => setInboxOnly((value) => !value)}>Review Inbox</button><UsageSummary usage={hostUsage} t={t} />
       {list.length === 0 ? <p className="muted">{t('taskHelp')}</p> : list.map((item) =>
         <button key={item.id} className={`task-row ${task?.id === item.id ? 'active' : ''}`} onClick={() => setSelected(item.id)}>
           <b>{item.title}</b><span className={`task-status ${item.status}`}>{labelStatus(item.status, t)}</span>
         </button>)}
     </aside>
     <section className="task-detail">{task ? <DeliveryCard task={task} conversation={conversations[task.convId]}
-      t={t} onOpen={() => setActiveConv(hostId, task.convId)} onReview={reviewTask}
+      t={t} onOpen={(convId = task.convId) => setActiveConv(hostId, convId)} onReview={reviewTask}
       onStop={async () => {
         await window.api.agent.cancel({ hostId: task.hostId, convId: task.convId });
         updateTaskStatus(task.id, 'needs_input');
@@ -58,6 +62,23 @@ export default function TaskPanel({ hostId }) {
         setActiveConv(hostId, task.convId);
         await sendToAgent(task.hostId, task.convId, '该任务的系统权限请求已获批准。请仅在完成当前任务所需范围内继续执行，并在交付中说明实际执行的高风险操作。');
       }} onReject={(approvalId) => resolveTaskApproval(task.id, approvalId, 'rejected')}
+      onPrepareStage={async (stage) => {
+        const baseCwd = conversations[task.convId]?.cwd;
+        if (!baseCwd) return;
+        try {
+          const isolated = await window.api.worktrees.create({ hostId: task.hostId, baseCwd, taskId: task.id, stageId: stage.id });
+          const source = conversations[task.convId];
+          const stageConversation = createConversation(task.hostId, {
+            agent: source.agent, cwd: isolated.cwd, model: source.model, permissionMode: source.permissionMode,
+            title: `${task.title} · ${stage.role}`
+          });
+          startTaskStage(task.id, stage.id, { cwd: isolated.cwd, convId: stageConversation.id });
+          setActiveConv(hostId, stageConversation.id);
+        } catch (error) {
+          updateTaskStatus(task.id, 'needs_input');
+          recordTaskDelivery(task.id, { auditEvents: [{ type: 'worktree_failed', level: 'workspace_write', detail: error.message, ts: Date.now() }] });
+        }
+      }}
       /> : <div className="empty-state"><p>{t('noTasks')}</p></div>}</section>
   </div>;
 }
@@ -71,7 +92,7 @@ function UsageSummary({ usage, t }) {
   </div>;
 }
 
-function DeliveryCard({ task, conversation, onOpen, onReview, onStop, onRetry, onApprove, onReject, t }) {
+function DeliveryCard({ task, conversation, onOpen, onReview, onStop, onRetry, onApprove, onReject, onPrepareStage, t }) {
   const delivery = task.delivery || {};
   const deliveryPackage = task.deliveryPackage;
   const pendingApprovals = (task.approvalRequests || []).filter((approval) => approval.status === 'pending');
@@ -82,6 +103,10 @@ function DeliveryCard({ task, conversation, onOpen, onReview, onStop, onRetry, o
       <div><button className="btn ghost" onClick={onOpen}>{t('openChat')}</button>{task.status === 'running' && <button className="btn danger task-stop" onClick={onStop}>{t('stopTakeover')}</button>}</div></div>
     <p className="muted small">{conversation?.cwd || '~'} · {t('changes')} {delivery.diffs?.length || 0} · {t('artifacts')} {delivery.artifacts?.length || 0} · {t('dangerousOps')} {delivery.dangerousCommands?.length || 0}</p>
     {deliveryPackage && <p className="muted small">交付包快照：{new Date(deliveryPackage.generatedAt).toLocaleString()} · {deliveryPackage.diffs.length} diff · {deliveryPackage.artifacts.length} artifact</p>}
+    {(task.stages || []).length > 0 && <section className="task-stages"><h3>任务阶段</h3>{task.stages.map((stage) => <div className="task-approval-card" key={stage.id}>
+      <b>{stage.role}</b><span className="muted small"> · {stage.status}{stage.cwd ? ` · ${stage.cwd}` : ''}</span>
+      {stage.convId ? <button className="btn small ghost" onClick={() => onOpen(stage.convId)}>打开阶段对话</button> : <button className="btn small" onClick={() => onPrepareStage(stage)}>准备隔离 worktree</button>}
+    </div>)}</section>}
     {pendingApprovals.length > 0 && <section className="task-approvals"><h3>审批请求</h3>{pendingApprovals.map((approval) =>
       <div key={approval.id} className="task-approval-card"><b>{approval.scope === 'system' ? '系统权限' : approval.scope}</b>
         <p>{approval.reason}</p><p className="muted small">请求于 {new Date(approval.requestedAt).toLocaleString()}。批准后该任务会恢复执行；拒绝后保持受限权限。</p>

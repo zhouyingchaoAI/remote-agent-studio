@@ -1,6 +1,17 @@
 import { create } from 'zustand';
 import { normalizeLanguage } from './i18n.mjs';
 
+export const TASK_TEMPLATES = [
+  { id: 'research', label: '研究', stages: [{ id: 'research', role: 'research' }, { id: 'review', role: 'review' }] },
+  { id: 'implementation', label: '实现', stages: [{ id: 'plan', role: 'research' }, { id: 'implement', role: 'implementation' }, { id: 'review', role: 'review' }] },
+  { id: 'review', label: '审查', stages: [{ id: 'review', role: 'review' }] }
+];
+
+function createTaskStages(templateId, cwd = '') {
+  const template = TASK_TEMPLATES.find((item) => item.id === templateId) || TASK_TEMPLATES[1];
+  return template.stages.map((stage) => ({ ...stage, status: 'pending', cwd, convId: null, startedAt: null, finishedAt: null }));
+}
+
 function normalizePermissionMode(value) {
   if (value === 'system' || value?.permissionMode === 'system') return 'system';
   if (value === 'approval' || value?.permissionMode === 'approval') return 'approval';
@@ -83,10 +94,10 @@ export const useStore = create((set, get) => ({
     const now = Date.now();
     const id = `t_${now}_${Math.random().toString(36).slice(2, 6)}`;
     const task = {
-      id, hostId, convId, title: fields.title || '未命名任务', status: 'draft',
+      id, hostId, convId, title: fields.title || '未命名任务', status: 'draft', templateId: fields.templateId || 'implementation',
       createdAt: now, updatedAt: now, runStartedAt: null, runFinishedAt: null,
       delivery: { diffs: [], artifacts: [], usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }, dangerousCommands: [], auditEvents: [] },
-      review: null, approvalRequests: []
+      review: null, approvalRequests: [], stages: createTaskStages(fields.templateId || 'implementation', fields.cwd || '')
     };
     set((s) => ({ tasks: { ...s.tasks, [id]: task }, activeTaskByHost: { ...s.activeTaskByHost, [hostId]: id } }));
     persistTasks();
@@ -163,6 +174,39 @@ export const useStore = create((set, get) => ({
     });
     persistTasks();
     return retried;
+  },
+
+  startTaskStage: (taskId, stageId, fields = {}) => {
+    let started = null;
+    set((s) => {
+      const task = s.tasks[taskId];
+      const stage = task?.stages?.find((item) => item.id === stageId);
+      if (!task || !stage || stage.status === 'running') return {};
+      const now = Date.now();
+      started = { ...stage, status: 'running', cwd: fields.cwd || stage.cwd || '', convId: fields.convId || stage.convId || null, startedAt: now };
+      const delivery = task.delivery || {};
+      return { tasks: { ...s.tasks, [taskId]: { ...task, updatedAt: now,
+        stages: task.stages.map((item) => item.id === stageId ? started : item),
+        delivery: { ...delivery, auditEvents: [...(delivery.auditEvents || []), {
+          type: 'stage_started', level: 'workspace_write', detail: `阶段启动：${stage.role}`, ts: now
+        }] }
+      } } };
+    });
+    persistTasks();
+    return started;
+  },
+
+  finishTaskStage: (taskId, stageId, status = 'review_ready') => {
+    set((s) => {
+      const task = s.tasks[taskId];
+      const stage = task?.stages?.find((item) => item.id === stageId);
+      if (!task || !stage) return {};
+      const now = Date.now();
+      return { tasks: { ...s.tasks, [taskId]: { ...task, updatedAt: now,
+        stages: task.stages.map((item) => item.id === stageId ? { ...item, status, finishedAt: now } : item)
+      } } };
+    });
+    persistTasks();
   },
 
   createTaskApproval: (taskId, fields = {}) => {
@@ -495,7 +539,7 @@ export async function sendToAgent(hostId, convId, text, files = [], opts = {}) {
   const st = useStore.getState();
   const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   if (!opts.auto) resetAutoReplies(convId); // 人工发言重置自动确认计数
-  const linkedTask = Object.values(st.tasks).find((task) => task.convId === convId && task.status !== 'archived');
+  const linkedTask = Object.values(st.tasks).find((task) => (task.convId === convId || task.stages?.some((stage) => stage.convId === convId)) && task.status !== 'archived');
   if (linkedTask?.status === 'needs_approval') {
     st.pushMessage(convId, { role: 'agent', kind: 'error', text: '任务正在等待权限审批；请先在任务中心批准或拒绝该请求。', ts: Date.now() });
     return false;

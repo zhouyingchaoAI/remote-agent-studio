@@ -9,6 +9,7 @@ const { Installer } = require('./ssh/Installer');
 const { AgentSession } = require('./ssh/AgentSession');
 const { LocalExecutor } = require('./LocalExecutor');
 const { AttachmentService } = require('./chat/AttachmentService');
+const { createWorktree } = require('./git/WorktreeService');
 const { buildLocalDirectoryManifest, buildRemoteDirectoryManifest } = require('./fileTransfer');
 const {
   loadHosts, saveHosts, loadConvos, saveConvos, loadProxies, saveProxy,
@@ -486,6 +487,10 @@ ipcMain.handle('convos:list', () => loadConvos());
 ipcMain.handle('convos:save', (_e, convos) => { saveConvos(convos); return true; });
 ipcMain.handle('tasks:list', () => loadTasks());
 ipcMain.handle('tasks:save', (_e, tasks) => { saveTasks(tasks); return true; });
+ipcMain.handle('worktrees:create', async (_e, fields) => {
+  const session = getSession(fields?.hostId);
+  return createWorktree(session.ssh, fields || {});
+});
 
 /* ---------------- Agent 对话(按 convId 隔离) ---------------- */
 ipcMain.handle('agent:start', (_e, { hostId, convId, opts, resume }) => {
