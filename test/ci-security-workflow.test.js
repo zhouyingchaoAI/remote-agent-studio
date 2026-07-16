@@ -19,3 +19,9 @@ test('CI runs on feature branch pushes as well as pull requests', () => {
   assert.match(workflow, /branches: \['\*\*'\]/);
   assert.match(workflow, /pull_request:/);
 });
+
+test('CI cancels superseded runs for the same branch', () => {
+  const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'ci.yml'), 'utf8');
+  assert.match(workflow, /concurrency:/);
+  assert.match(workflow, /cancel-in-progress:\s*true/);
+});
