@@ -380,6 +380,7 @@ progress { width: 140px; height: 6px; }
 .task-row.active { border-color: var(--accent); }
 .task-detail { flex: 1; overflow: auto; padding: 20px; }
 .task-detail-head { display: flex; justify-content: space-between; gap: 16px; align-items: start; }
+.task-stop { margin-left: 8px; }
 .task-status { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--bg3); color: var(--muted); }
 .task-status.review_ready { color: #ffe08a; } .task-status.accepted { color: #83e1a4; } .task-status.failed { color: #ff9b95; }
 .delivery-card details { margin: 12px 0; } .task-diff { max-height: 320px; overflow: auto; white-space: pre-wrap; }

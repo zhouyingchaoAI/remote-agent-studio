@@ -39,6 +39,13 @@ test('task view includes host-level token and cost summary', () => {
   assert.match(panel, /costUsd/);
 });
 
+test('running task can be stopped for human takeover from delivery view', () => {
+  const panel = read('src/components/TaskPanel.jsx');
+  assert.match(panel, /停止并接管/);
+  assert.match(panel, /window\.api\.agent\.cancel/);
+  assert.match(panel, /'needs_input'/);
+});
+
 test('linked task starts only when its conversation sends work', () => {
   const chat = read('src/components/ChatPanel.jsx');
   assert.match(chat, /createTask\(hostId, conv\.id/);

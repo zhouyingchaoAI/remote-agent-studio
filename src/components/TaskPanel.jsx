@@ -13,6 +13,8 @@ export default function TaskPanel({ hostId }) {
   const conversations = useStore((s) => s.conversations);
   const setActiveConv = useStore((s) => s.setActiveConv);
   const reviewTask = useStore((s) => s.reviewTask);
+  const updateTaskStatus = useStore((s) => s.updateTaskStatus);
+  const recordTaskDelivery = useStore((s) => s.recordTaskDelivery);
   const [selected, setSelected] = useState(null);
   const list = useMemo(() => Object.values(tasks).filter((task) => task.hostId === hostId)
     .sort((a, b) => b.updatedAt - a.updatedAt), [tasks, hostId]);
@@ -33,7 +35,12 @@ export default function TaskPanel({ hostId }) {
         </button>)}
     </aside>
     <section className="task-detail">{task ? <DeliveryCard task={task} conversation={conversations[task.convId]}
-      onOpen={() => setActiveConv(hostId, task.convId)} onReview={reviewTask} /> : <div className="empty-state"><p>尚无任务</p></div>}</section>
+      onOpen={() => setActiveConv(hostId, task.convId)} onReview={reviewTask}
+      onStop={async () => {
+        await window.api.agent.cancel({ hostId: task.hostId, convId: task.convId });
+        updateTaskStatus(task.id, 'needs_input');
+        recordTaskDelivery(task.id, { auditEvents: [{ type: 'manual_stop', level: 'system', detail: '用户停止执行并接管任务', ts: Date.now() }] });
+      }} /> : <div className="empty-state"><p>尚无任务</p></div>}</section>
   </div>;
 }
 
@@ -46,13 +53,13 @@ function UsageSummary({ usage }) {
   </div>;
 }
 
-function DeliveryCard({ task, conversation, onOpen, onReview }) {
+function DeliveryCard({ task, conversation, onOpen, onReview, onStop }) {
   const delivery = task.delivery || {};
   const [note, setNote] = useState(task.review?.note || '');
   const canReview = task.status === 'review_ready' || task.status === 'changes_requested';
   return <div className="delivery-card">
     <div className="task-detail-head"><div><h2>{task.title}</h2><span className={`task-status ${task.status}`}>{LABELS[task.status] || task.status}</span></div>
-      <button className="btn ghost" onClick={onOpen}>打开对话</button></div>
+      <div><button className="btn ghost" onClick={onOpen}>打开对话</button>{task.status === 'running' && <button className="btn danger task-stop" onClick={onStop}>停止并接管</button>}</div></div>
     <p className="muted small">{conversation?.cwd || '~'} · 变更 {delivery.diffs?.length || 0} · 产物 {delivery.artifacts?.length || 0} · 危险操作 {delivery.dangerousCommands?.length || 0}</p>
     {delivery.diffs?.length > 0 && <details open><summary>变更证据</summary><pre className="task-diff">{delivery.diffs.join('\n\n')}</pre></details>}
     {delivery.auditEvents?.length > 0 && <details open><summary>安全审计</summary><div className="task-audit-events">{delivery.auditEvents.map((event, index) =>
