@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import FilePreview from './FilePreview.jsx';
+import { useStore } from '../store.js';
+import { translate as tr } from '../i18n.mjs';
 
 function fmtSize(n) {
   if (n == null) return '';
@@ -10,6 +12,8 @@ function fmtSize(n) {
 }
 
 export default function FilePanel({ hostId }) {
+  const language = useStore((s) => s.settings.language);
+  const t = (key) => tr(language, key);
   const [local, setLocal] = useState({ path: '', entries: [] });
   const [remote, setRemote] = useState({ path: '', entries: [] });
   const [selLocal, setSelLocal] = useState(null);
@@ -174,8 +178,8 @@ export default function FilePanel({ hostId }) {
             : setPreview({ hostId: 'local', path: joinPath(local.path, e.name, localSep), name: e.name })}
           onSelect={setSelLocal} />
         <div className="file-actions">
-          <button className="btn" title={selLocal?.isDir ? '递归上传文件夹' : '上传'} onClick={upload} disabled={!selLocal}>→</button>
-          <button className="btn" title={selRemote?.isDir ? '递归下载文件夹' : '下载'} onClick={download} disabled={!selRemote}>←</button>
+          <button className="btn" title={t('upload')} onClick={upload} disabled={!selLocal}>→</button>
+          <button className="btn" title={t('download')} onClick={download} disabled={!selRemote}>←</button>
           <button className="btn" title="远程新建文件夹" onClick={() => setNewDirName('')}>📁+</button>
           <button className="btn danger" title="删除远程" onClick={removeRemote} disabled={!selRemote}>🗑</button>
         </div>
@@ -220,14 +224,14 @@ export default function FilePanel({ hostId }) {
               {t.error ? (
                 <>
                   <span className="error-text">{t.error}</span>
-                  <button className="btn small" onClick={() => retryTransfer(t)}>重试</button>
+                  <button className="btn small" onClick={() => retryTransfer(t)}>{t('retry')}</button>
                 </>
-              ) : t.cancelled ? <span className="muted">已取消</span>
-                : t.done ? <span className="ok">完成</span>
+              ) : t.cancelled ? <span className="muted">{t('cancelled')}</span>
+                : t.done ? <span className="ok">{t('completed')}</span>
                 : <progress value={t.transferred} max={t.total || 1} />}
               <span className="muted small">{fmtSize(t.transferred)} / {fmtSize(t.total)}</span>
               {t.skippedSymlinks > 0 && <span className="muted small">已跳过 {t.skippedSymlinks} 个链接</span>}
-              {!t.done && !t.error && !t.cancelled && <button className="btn small ghost" onClick={() => cancelTransfer(t)}>取消</button>}
+              {!t.done && !t.error && !t.cancelled && <button className="btn small ghost" onClick={() => cancelTransfer(t)}>{t('cancel')}</button>}
             </div>
           ))}
         </div>
