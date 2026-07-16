@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../store.js';
+import { translate as tr } from '../i18n.mjs';
 
 export default function SetupPanel({ hostId, host }) {
   const isLocal = hostId === 'local';
+  const language = useStore((s) => s.settings.language);
+  const t = (key) => tr(language, key);
   const env = useStore((s) => s.envInfo[hostId]);
   const log = useStore((s) => s.setupLogs[hostId] || '');
   const status = useStore((s) => s.statuses[hostId] || 'disconnected');
@@ -28,7 +31,7 @@ export default function SetupPanel({ hostId, host }) {
     try {
       const info = await window.api.setup.detect(hostId);
       useStore.getState().setEnvInfo(hostId, info);
-    } catch (e) { useStore.getState().appendSetupLog(hostId, `检测失败: ${e.message}\n`); }
+    } catch (e) { useStore.getState().appendSetupLog(hostId, `${t('detectionFailed')}: ${e.message}\n`); }
     setBusy(false);
   };
 
@@ -66,147 +69,147 @@ export default function SetupPanel({ hostId, host }) {
   });
 
   const saveKey = run(async () => {
-    if (!apiKey.trim()) throw new Error('请输入 API Key');
+    if (!apiKey.trim()) throw new Error(t('apiKeyRequired'));
     await window.api.setup.setApiKey({ hostId, agent: apiAgent, key: apiKey.trim() });
     setApiKey('');
   });
 
   if (status !== 'connected')
-    return <div className="empty-state"><p className="muted">请先连接主机</p></div>;
+    return <div className="empty-state"><p className="muted">{t('connectHostFirst')}</p></div>;
 
   return (
     <div className="setup-panel">
       <div className="setup-left">
         <section>
-          <h3>{isLocal ? '本机环境' : '远程环境'} <button className="btn small ghost" onClick={detect} disabled={busy}>刷新</button></h3>
+          <h3>{isLocal ? t('localEnvironment') : t('remoteEnvironment')} <button className="btn small ghost" onClick={detect} disabled={busy}>{t('refresh')}</button></h3>
           <table className="env-table"><tbody>
-            <tr><td>系统</td><td>{env?.os || '-'}</td></tr>
-            <tr><td>Node.js</td><td>{env?.node || <Miss />}</td></tr>
-            <tr><td>Codex</td><td>{env?.codex || <Miss />}</td></tr>
-            <tr><td>Claude Code</td><td>{env?.claude || <Miss />}</td></tr>
+            <tr><td>{t('operatingSystem')}</td><td>{env?.os || '-'}</td></tr>
+            <tr><td>Node.js</td><td>{env?.node || <Miss t={t} />}</td></tr>
+            <tr><td>Codex</td><td>{env?.codex || <Miss t={t} />}</td></tr>
+            <tr><td>Claude Code</td><td>{env?.claude || <Miss t={t} />}</td></tr>
           </tbody></table>
           <div className="row gap">
             <button className="btn primary" disabled={busy} onClick={install('codex')}>
-              {env?.codex ? '升级 Codex 到最新' : '一键安装 Codex'}
+              {env?.codex ? t('upgradeCodex') : t('installCodex')}
             </button>
             <button className="btn primary" disabled={busy} onClick={install('claude')}>
-              {env?.claude ? '升级 Claude Code 到最新' : '一键安装 Claude Code'}
+              {env?.claude ? t('upgradeClaude') : t('installClaude')}
             </button>
           </div>
           <p className="muted small">
             {isLocal
-              ? '本机通过 npm 安装/升级到最新版;若是 Homebrew 安装的,请在终端运行 brew upgrade。'
-              : '缺少 Node.js 时会自动通过 nvm 安装(免 root);安装走下方代理配置。'}
+              ? t('localInstallHint') : t('remoteInstallHint')}
           </p>
         </section>
 
         {!isLocal && <section>
-          <h3>网络代理</h3>
+          <h3>{t('networkProxy')}</h3>
           <label className="radio">
             <input type="radio" checked={proxyMode === 'direct'} onChange={() => setProxyMode('direct')} />
-            <b>局域网代理直连(默认)</b> — 远程直接访问本机/局域网代理
+            <b>{t('directProxy')}</b> — {t('directProxyHint')}
           </label>
           {proxyMode === 'direct' && (
             <div className="form-grid indent">
               <label className="row checkbox">
                 <input type="checkbox" checked={directAutoIp} onChange={(e) => setDirectAutoIp(e.target.checked)} />
-                自动使用本机当前 IP(推荐,IP 变化后每次连接自动重新解析)
+                {t('autoLanIp')}
               </label>
               {directAutoIp ? (
-                <label>代理端口
+                <label>{t('proxyPort')}
                   <div className="row" style={{ gap: 8 }}>
                     <input value={directPort} onChange={(e) => setDirectPort(e.target.value)} placeholder="7890" style={{ maxWidth: 120 }} />
                     <span className="muted small">
-                      当前解析: {lanIp ? `http://${lanIp}:${directPort || '7890'}` : '检测中...'}
-                      <button className="btn small ghost" type="button" onClick={refreshLanIp} style={{ marginLeft: 6 }}>刷新</button>
+                      {t('currentResolution')}: {lanIp ? `http://${lanIp}:${directPort || '7890'}` : t('resolving')}
+                      <button className="btn small ghost" type="button" onClick={refreshLanIp} style={{ marginLeft: 6 }}>{t('refresh')}</button>
                     </span>
                   </div>
                 </label>
               ) : (
-                <label>代理地址(固定)
+                <label>{t('fixedProxyAddress')}
                   <input value={directProxyUrl} onChange={(e) => setDirectProxyUrl(e.target.value)} placeholder="http://192.168.1.10:7890" />
                 </label>
               )}
-              <p className="muted small">远程会 export HTTP_PROXY/HTTPS_PROXY 指向此地址。需确保本机 Clash 已开启「允许局域网连接」,且远程与本机网络可达。</p>
+              <p className="muted small">{t('proxyExplanation')}</p>
             </div>
           )}
           <label className="radio">
             <input type="radio" checked={proxyMode === 'tunnel'} onChange={() => setProxyMode('tunnel')} />
-            <b>SSH 反向隧道</b> — 远程借道本机代理上网(远程连不上本机 IP 时用)
+            <b>{t('reverseTunnel')}</b> — {t('reverseTunnelHint')}
           </label>
           {proxyMode === 'tunnel' && (
             <div className="form-grid indent">
-              <label>本机侧代理地址<input value={localProxyHost} onChange={(e) => setLocalProxyHost(e.target.value)} placeholder="127.0.0.1 或局域网 IP" /></label>
-              <label>本机侧代理端口<input value={localProxyPort} onChange={(e) => setLocalProxyPort(e.target.value)} placeholder="7890" /></label>
-              <label>远程监听端口<input value={remotePort} onChange={(e) => setRemotePort(e.target.value)} placeholder="18080" /></label>
+              <label>{t('localProxyAddress')}<input value={localProxyHost} onChange={(e) => setLocalProxyHost(e.target.value)} placeholder="127.0.0.1" /></label>
+              <label>{t('localProxyPort')}<input value={localProxyPort} onChange={(e) => setLocalProxyPort(e.target.value)} placeholder="7890" /></label>
+              <label>{t('remoteListenPort')}<input value={remotePort} onChange={(e) => setRemotePort(e.target.value)} placeholder="18080" /></label>
             </div>
           )}
           <label className="radio">
             <input type="radio" checked={proxyMode === 'none'} onChange={() => setProxyMode('none')} />
-            不使用代理 / 清除配置
+            {t('noProxy')}
           </label>
-          <button className="btn primary" disabled={busy} onClick={configureProxy}>应用代理配置并测试</button>
+          <button className="btn primary" disabled={busy} onClick={configureProxy}>{t('applyProxy')}</button>
         </section>}
 
         <section>
-          <h3>本机 Codex 认证</h3>
-          <LocalCodexCard />
+          <h3>{t('localCodexAuth')}</h3>
+          <LocalCodexCard language={language} />
           {!isLocal && <div className="row gap" style={{ marginTop: 10 }}>
             <button className="btn primary" disabled={busy}
               onClick={run(() => window.api.setup.syncAuth({ hostId, agent: 'codex' }))}>
-              下发 Codex 认证到远程
+              {t('syncCodexAuth')}
             </button>
             <button className="btn" disabled={busy}
               onClick={run(() => window.api.setup.syncAuth({ hostId, agent: 'claude' }))}>
-              下发 Claude 认证
+              {t('syncClaudeAuth')}
             </button>
           </div>}
-          {!isLocal && <p className="muted small">把本机已登录的 ~/.codex/auth.json(+config.toml)复制到远程同路径,远程免登录直接使用。下发后会自动测试远程可用性。</p>}
+          {!isLocal && <p className="muted small">{t('authSyncHint')}</p>}
           {!isLocal && <div className="row gap" style={{ marginTop: 6 }}>
             <button className="btn" disabled={busy}
               onClick={run(() => window.api.setup.testRemoteAgent({ hostId, agent: 'codex' }))}>
-              测试远程 Codex
+              {t('testRemoteCodex')}
             </button>
             <button className="btn" disabled={busy}
               onClick={run(() => window.api.setup.testRemoteAgent({ hostId, agent: 'claude' }))}>
-              测试远程 Claude
+              {t('testRemoteClaude')}
             </button>
           </div>}
         </section>
 
         {!isLocal && <section>
-          <h3>API Key(可选)</h3>
-          <p className="muted small">也可以在「终端」页运行 codex login / claude 交互登录。</p>
+          <h3>{t('optionalApiKey')}</h3>
+          <p className="muted small">{t('apiKeyHint')}</p>
           <div className="row gap">
             <select value={apiAgent} onChange={(e) => setApiAgent(e.target.value)}>
               <option value="claude">ANTHROPIC_API_KEY</option>
               <option value="codex">OPENAI_API_KEY</option>
             </select>
             <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-..." style={{ flex: 1 }} />
-            <button className="btn" disabled={busy} onClick={saveKey}>写入远程</button>
+            <button className="btn" disabled={busy} onClick={saveKey}>{t('saveToRemote')}</button>
           </div>
         </section>}
       </div>
 
       <div className="setup-right">
         <div className="row">
-          <h3 className="flex1">日志</h3>
-          <button className="btn small ghost" title="导出应用诊断信息(版本/平台/最近日志)"
+          <h3 className="flex1">{t('logs')}</h3>
+          <button className="btn small ghost" title={t('diagnosticsTitle')}
             onClick={async () => {
               const r = await window.api.setup.exportDiagnostics().catch(() => null);
-              if (r?.saved) useStore.getState().appendSetupLog(hostId, `诊断信息已导出: ${r.path}\n`);
-            }}>导出诊断</button>
-          <button className="btn small ghost" onClick={() => useStore.getState().clearSetupLog(hostId)}>清空</button>
+              if (r?.saved) useStore.getState().appendSetupLog(hostId, `${t('diagnosticsExported')}: ${r.path}\n`);
+            }}>{t('exportDiagnostics')}</button>
+          <button className="btn small ghost" onClick={() => useStore.getState().clearSetupLog(hostId)}>{t('clear')}</button>
         </div>
-        <pre className="log-box" ref={logRef}>{log || '(暂无日志)'}</pre>
+        <pre className="log-box" ref={logRef}>{log || t('noLogs')}</pre>
       </div>
     </div>
   );
 }
 
-const Miss = () => <span className="error-text">未安装</span>;
+const Miss = ({ t }) => <span className="error-text">{t('notInstalled')}</span>;
 
-function LocalCodexCard() {
+function LocalCodexCard({ language }) {
+  const t = (key) => tr(language, key);
   const [info, setInfo] = useState(null);
   const [testing, setTesting] = useState(false);
 
@@ -222,19 +225,19 @@ function LocalCodexCard() {
   return (
     <div className="local-codex-card">
       <table className="env-table"><tbody>
-        <tr><td>本机 CLI</td><td>{info?.cliVersion || <span className="muted">未在 PATH 找到</span>}</td></tr>
-        <tr><td>认证文件</td><td>
-          {!info ? '检测中...' :
-            info.hasAuth ? <span className="ok">存在</span> : <span className="error-text">未找到 ~/.codex/auth.json</span>}
+        <tr><td>{t('localCli')}</td><td>{info?.cliVersion || <span className="muted">{t('notFoundInPath')}</span>}</td></tr>
+        <tr><td>{t('authFile')}</td><td>
+          {!info ? t('resolving') :
+            info.hasAuth ? <span className="ok">{t('exists')}</span> : <span className="error-text">~/.codex/auth.json</span>}
         </td></tr>
-        <tr><td>认证状态</td><td>
+        <tr><td>{t('authStatus')}</td><td>
           {!info ? '-' :
-            ok ? <span className="ok">✓ 已配置({info.account || '有效'})</span>
-               : <span className="error-text">无效或未登录,请先在本机运行 codex 登录</span>}
+            ok ? <span className="ok">✓ {info.account || t('valid')}</span>
+               : <span className="error-text">{t('invalidAuth')}</span>}
         </td></tr>
       </tbody></table>
       <button className="btn small" onClick={test} disabled={testing}>
-        {testing ? '检测中...' : '测试本机 Codex 配置'}
+        {testing ? t('resolving') : t('testLocalCodex')}
       </button>
     </div>
   );
