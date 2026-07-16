@@ -167,7 +167,7 @@ function saveProxy(hostId, cfg) {
 
 /* -------- 应用设置持久化(userData/settings.json) -------- */
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-const DEFAULT_SETTINGS = { theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5 };
+const DEFAULT_SETTINGS = { language: 'zh-CN', theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5 };
 
 function loadSettings() {
   try { return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) }; }

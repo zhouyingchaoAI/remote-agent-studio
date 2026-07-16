@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { normalizeLanguage } from './i18n.mjs';
 
 function normalizePermissionMode(value) {
   if (value === 'system' || value?.permissionMode === 'system') return 'system';
@@ -30,7 +31,7 @@ export const useStore = create((set, get) => ({
   queued: {},           // convId -> [{id,text,files}] 排队待发送的消息
   setupLogs: {},        // hostId -> string
   envInfo: {},          // hostId -> {os,node,npm,codex,claude}
-  settings: { theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5 },
+  settings: { language: 'zh-CN', theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5 },
   showSettings: false,
 
   setShowSettings: (v) => set({ showSettings: v }),
@@ -38,6 +39,7 @@ export const useStore = create((set, get) => ({
     set((s) => ({ settings: { ...s.settings, ...patch } }));
     const next = useStore.getState().settings;
     if (patch.theme) document.documentElement.setAttribute('data-theme', next.theme);
+    if (patch.language) document.documentElement.lang = normalizeLanguage(next.language);
     window.api.settings.save(patch).catch(() => {});
   },
 
@@ -434,6 +436,7 @@ export async function loadSettings() {
     const s = await window.api.settings.get();
     useStore.setState({ settings: s });
     document.documentElement.setAttribute('data-theme', s.theme || 'dark');
+    document.documentElement.lang = normalizeLanguage(s.language);
   } catch (_) {}
 }
 

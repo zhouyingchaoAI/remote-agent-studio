@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
 import { useStore, saveHosts } from '../store.js';
 import FilePreview from './FilePreview.jsx';
+import { translate as tr } from '../i18n.mjs';
 
 export default function Sidebar() {
   const { hosts, activeHostId, statuses, setActiveHost, setEditingHost } = useStore();
   const activeConvByHost = useStore((s) => s.activeConvByHost);
   const conversations = useStore((s) => s.conversations);
+  const language = useStore((s) => s.settings.language);
+  const t = (key) => tr(language, key);
   const [expanded, setExpanded] = useState({}); // hostId -> bool(展开文件树)
   const [preview, setPreview] = useState(null); // {hostId, path, name}
   const [homeMode, setHomeMode] = useState({}); // hostId -> true 时强制家目录
@@ -57,7 +60,7 @@ export default function Sidebar() {
               <div
                 className={`host-item ${activeHostId === h.id ? 'active' : ''}`}
                 onClick={() => connect(h)}>
-                <button className="tree-toggle" title="展开文件"
+                <button className="tree-toggle" title={t('expandFiles')}
                   onClick={(e) => toggleTree(e, h)}>{expanded[h.id] ? '▾' : '▸'}</button>
                 <span className={`dot ${st}`} />
                 <div className="host-info">
@@ -66,9 +69,9 @@ export default function Sidebar() {
                 </div>
                 {!h.local && (
                   <div className="host-actions">
-                    <button className="icon-btn" title="编辑"
+                    <button className="icon-btn" title={t('edit')}
                       onClick={(e) => { e.stopPropagation(); setEditingHost(h); }}>✎</button>
-                    <button className="icon-btn danger" title="删除"
+                    <button className="icon-btn danger" title={t('delete')}
                       onClick={(e) => remove(e, h)}>✕</button>
                   </div>
                 )}
@@ -79,14 +82,14 @@ export default function Sidebar() {
                     <>
                       <div className="tree-root-bar">
                         <span className="muted small tree-root-path" title={treeRootOf(h.id)}>
-                          {treeRootOf(h.id) === '~' ? '⌂ 家目录' : `📁 ${treeRootOf(h.id).split('/').filter(Boolean).pop()}`}
+                          {treeRootOf(h.id) === '~' ? `⌂ ${t('homeDirectory')}` : `📁 ${treeRootOf(h.id).split('/').filter(Boolean).pop()}`}
                         </span>
                         {treeRootOf(h.id) !== '~' && (
-                          <button className="btn small ghost" title="切换到家目录"
+                          <button className="btn small ghost" title={t('homeDirectory')}
                             onClick={(e) => { e.stopPropagation(); setHomeMode((s) => ({ ...s, [h.id]: true })); }}>⌂</button>
                         )}
                         {homeMode[h.id] && activeConvByHost[h.id] && conversations[activeConvByHost[h.id]]?.cwd && (
-                          <button className="btn small ghost" title="切换到项目目录"
+                          <button className="btn small ghost" title={t('projectDirectory')}
                             onClick={(e) => { e.stopPropagation(); setHomeMode((s) => ({ ...s, [h.id]: false })); }}>📁</button>
                         )}
                       </div>
@@ -94,7 +97,7 @@ export default function Sidebar() {
                         name={treeRootOf(h.id)} depth={0} defaultOpen isRoot
                         onFile={(f) => setPreview({ hostId: h.id, ...f })} />
                     </>
-                  ) : <div className="tree-hint muted small">{st === 'connecting' ? '连接中...' : '未连接'}</div>}
+                  ) : <div className="tree-hint muted small">{st === 'connecting' ? t('connecting') : t('disconnected')}</div>}
                 </div>
               )}
             </div>
@@ -103,9 +106,9 @@ export default function Sidebar() {
       </div>
       <div className="sidebar-footer">
         <button className="btn ghost add-host" onClick={() => setEditingHost({})}>
-          + 添加主机
+          + {t('addHost')}
         </button>
-        <button className="icon-btn" title="设置" onClick={() => useStore.getState().setShowSettings(true)}>⚙</button>
+        <button className="icon-btn" title={t('settings')} onClick={() => useStore.getState().setShowSettings(true)}>⚙</button>
       </div>
       {preview && (
         <FilePreview hostId={preview.hostId} filePath={preview.path} name={preview.name}
