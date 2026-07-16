@@ -11,7 +11,7 @@ const { LocalExecutor } = require('./LocalExecutor');
 const { AttachmentService } = require('./chat/AttachmentService');
 const {
   loadHosts, saveHosts, loadConvos, saveConvos, loadProxies, saveProxy,
-  loadKnownHosts, saveKnownHost, loadSettings, saveSettings
+  loadKnownHosts, saveKnownHost, loadSettings, saveSettings, loadTasks, saveTasks
 } = require('./store');
 
 let win;
@@ -476,6 +476,8 @@ async function resolveProxyCfg(cfg, hostId) {
 /* ---------------- 对话历史持久化 ---------------- */
 ipcMain.handle('convos:list', () => loadConvos());
 ipcMain.handle('convos:save', (_e, convos) => { saveConvos(convos); return true; });
+ipcMain.handle('tasks:list', () => loadTasks());
+ipcMain.handle('tasks:save', (_e, tasks) => { saveTasks(tasks); return true; });
 
 /* ---------------- Agent 对话(按 convId 隔离) ---------------- */
 ipcMain.handle('agent:start', (_e, { hostId, convId, opts, resume }) => {

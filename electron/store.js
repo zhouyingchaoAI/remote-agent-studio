@@ -96,6 +96,46 @@ function saveConvos(convos) {
   } catch (_) {}
 }
 
+/* -------- 开发任务持久化(userData/tasks/<id>.json) -------- */
+const taskDir = () => path.join(app.getPath('userData'), 'tasks');
+
+function safeTaskId(id) {
+  return String(id || '').replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
+function loadTasks() {
+  try {
+    return fs.readdirSync(taskDir())
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => {
+        try {
+          const task = JSON.parse(fs.readFileSync(path.join(taskDir(), name), 'utf8'));
+          return task && task.id && task.hostId && task.convId ? task : null;
+        } catch (_) { return null; }
+      })
+      .filter(Boolean);
+  } catch (_) { return []; }
+}
+
+function saveTasks(tasks) {
+  fs.mkdirSync(taskDir(), { recursive: true });
+  const alive = new Set();
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    if (!task || !task.id || !task.hostId || !task.convId) continue;
+    const name = `${safeTaskId(task.id)}.json`;
+    alive.add(name);
+    const file = path.join(taskDir(), `${safeTaskId(task.id)}.json`);
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(task));
+    fs.renameSync(tmp, file);
+  }
+  try {
+    for (const name of fs.readdirSync(taskDir())) {
+      if (name.endsWith('.json') && !alive.has(name)) fs.rmSync(path.join(taskDir(), name), { force: true });
+    }
+  } catch (_) {}
+}
+
 /* -------- 已知主机指纹(userData/knownhosts.json,TOFU) -------- */
 const knownHostsFile = () => path.join(app.getPath('userData'), 'knownhosts.json');
 
@@ -142,5 +182,5 @@ function saveSettings(settings) {
 
 module.exports = {
   loadHosts, saveHosts, loadConvos, saveConvos, loadProxies, saveProxy,
-  loadKnownHosts, saveKnownHost, loadSettings, saveSettings
+  loadKnownHosts, saveKnownHost, loadSettings, saveSettings, loadTasks, saveTasks
 };
