@@ -27,6 +27,7 @@ import {
 import Sidebar from './components/Sidebar.jsx';
 import HostForm from './components/HostForm.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
+import { translate as tr } from './i18n.mjs';
 
 const ChatPanel = React.lazy(() => import('./components/ChatPanel.jsx'));
 const FilePanel = React.lazy(() => import('./components/FilePanel.jsx'));
@@ -35,15 +36,13 @@ const SetupPanel = React.lazy(() => import('./components/SetupPanel.jsx'));
 const TaskPanel = React.lazy(() => import('./components/TaskPanel.jsx'));
 
 const TABS = [
-  { key: 'chat', label: '对话', icon: '💬' },
-  { key: 'files', label: '文件', icon: '📁' },
-  { key: 'terminal', label: '终端', icon: '⌨️' },
-  { key: 'tasks', label: '任务', icon: '✓' },
-  { key: 'setup', label: '环境配置', icon: '⚙️' }
+  { key: 'chat', icon: '💬' }, { key: 'files', icon: '📁' }, { key: 'terminal', icon: '⌨️' },
+  { key: 'tasks', icon: '✓' }, { key: 'setup', icon: '⚙️' }
 ];
 
 export default function App() {
-  const { activeHostId, tab, setTab, editingHost, statuses, hosts } = useStore();
+  const { activeHostId, tab, setTab, editingHost, statuses, hosts, settings } = useStore();
+  const t = (key) => tr(settings.language, key);
   const activeHost = hosts.find((h) => h.id === activeHostId);
   const status = statuses[activeHostId] || 'disconnected';
 
@@ -141,9 +140,9 @@ export default function App() {
           <div className="empty-state">
             <div className="empty-logo">🛰️</div>
             <h2>Remote Agent Studio</h2>
-            <p>在左侧添加一台 SSH 主机,即可远程使用 Codex / Claude Code</p>
+            <p>{t('addSshHost')}</p>
             <button className="btn primary" onClick={() => useStore.getState().setEditingHost({})}>
-              + 添加主机
+              + {t('addHost')}
             </button>
           </div>
         ) : (
@@ -161,7 +160,7 @@ export default function App() {
                   <button key={t.key}
                     className={`tab ${tab === t.key ? 'active' : ''}`}
                     onClick={() => setTab(t.key)}>
-                    {t.icon} {t.label}
+                    {t.icon} {tr(settings.language, t.key)}
                   </button>
                 ))}
               </div>

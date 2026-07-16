@@ -5,7 +5,9 @@ export const dictionaries = {
     defaultPermission: '新对话默认权限', workspace: '工作区(受限,推荐)', plan: '计划模式(只读)',
     system: '系统权限(放开)', addHost: '添加主机', edit: '编辑', delete: '删除',
     expandFiles: '展开文件', connecting: '连接中...', disconnected: '未连接',
-    homeDirectory: '家目录', projectDirectory: '项目目录', empty: '(空)'
+    homeDirectory: '家目录', projectDirectory: '项目目录', empty: '(空)',
+    chat: '对话', files: '文件', terminal: '终端', tasks: '任务', setup: '环境配置',
+    addSshHost: '在左侧添加一台 SSH 主机，即可远程使用 Codex / Claude Code'
   },
   en: {
     settings: 'Settings', language: 'Language', chinese: 'Simplified Chinese', english: 'English',
@@ -13,7 +15,9 @@ export const dictionaries = {
     defaultPermission: 'Default permission for new chats', workspace: 'Workspace (restricted, recommended)', plan: 'Plan mode (read-only)',
     system: 'System mode (unrestricted)', addHost: 'Add host', edit: 'Edit', delete: 'Delete',
     expandFiles: 'Expand files', connecting: 'Connecting...', disconnected: 'Disconnected',
-    homeDirectory: 'Home directory', projectDirectory: 'Project directory', empty: '(empty)'
+    homeDirectory: 'Home directory', projectDirectory: 'Project directory', empty: '(empty)',
+    chat: 'Chat', files: 'Files', terminal: 'Terminal', tasks: 'Tasks', setup: 'Environment',
+    addSshHost: 'Add an SSH host on the left to use Codex / Claude Code remotely'
   }
 };
 
