@@ -372,6 +372,17 @@ progress { width: 140px; height: 6px; }
 .conv-card .icon-btn { opacity: 0; }
 .conv-card:hover .icon-btn { opacity: 1; }
 
+.task-panel { display: flex; height: 100%; min-height: 0; }
+.task-list { width: min(310px, 36%); border-right: 1px solid var(--border); padding: 16px; overflow: auto; }
+.task-row { display: flex; width: 100%; text-align: left; flex-direction: column; gap: 5px; padding: 10px; margin: 6px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg2); color: var(--text); cursor: pointer; }
+.task-row.active { border-color: var(--accent); }
+.task-detail { flex: 1; overflow: auto; padding: 20px; }
+.task-detail-head { display: flex; justify-content: space-between; gap: 16px; align-items: start; }
+.task-status { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--bg3); color: var(--muted); }
+.task-status.review_ready { color: #ffe08a; } .task-status.accepted { color: #83e1a4; } .task-status.failed { color: #ff9b95; }
+.delivery-card details { margin: 12px 0; } .task-diff { max-height: 320px; overflow: auto; white-space: pre-wrap; }
+.task-review { display: flex; gap: 8px; align-items: end; margin-top: 18px; } .task-review textarea { flex: 1; min-height: 56px; }
+
 /* remote dir picker */
 .dir-picker-wrap { display: flex; flex-direction: column; gap: 6px; }
 .dir-picker {

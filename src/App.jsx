@@ -31,11 +31,13 @@ import FilePanel from './components/FilePanel.jsx';
 import TerminalPanel from './components/TerminalPanel.jsx';
 import SetupPanel from './components/SetupPanel.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
+import TaskPanel from './components/TaskPanel.jsx';
 
 const TABS = [
   { key: 'chat', label: '对话', icon: '💬' },
   { key: 'files', label: '文件', icon: '📁' },
   { key: 'terminal', label: '终端', icon: '⌨️' },
+  { key: 'tasks', label: '任务', icon: '✓' },
   { key: 'setup', label: '环境配置', icon: '⚙️' }
 ];
 
@@ -176,7 +178,7 @@ export default function App() {
   );
 }
 
-const PERSISTENT_VIEWS = new Set(['chat', 'files', 'terminal']);
+const PERSISTENT_VIEWS = new Set(['chat', 'files', 'terminal', 'tasks']);
 
 function PersistentWorkspace({ hosts, activeHostId, activeView, statuses }) {
   const [visitedViews, setVisitedViews] = useState([]);
@@ -212,6 +214,7 @@ function PersistentWorkspace({ hosts, activeHostId, activeView, statuses }) {
             {view === 'chat' && <ChatPanel hostId={hostId} />}
             {view === 'files' && <FilePanel hostId={hostId} />}
             {view === 'terminal' && <TerminalPanel hostId={hostId} active={isActive} />}
+            {view === 'tasks' && <TaskPanel hostId={hostId} />}
           </div>
         );
       })}

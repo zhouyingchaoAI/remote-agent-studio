@@ -185,6 +185,7 @@ function ChatView({ hostId, conv }) {
   const updateConversationPermission = useStore((s) => s.updateConversationPermission);
   const updateConversationModel = useStore((s) => s.updateConversationModel);
   const updateConversationAgent = useStore((s) => s.updateConversationAgent);
+  const tasks = useStore((s) => s.tasks);
   const [input, setInput] = useState('');
   const [started, setStarted] = useState(false);
   const [pendingFiles, setPendingFiles] = useState([]);
@@ -195,6 +196,11 @@ function ChatView({ hostId, conv }) {
   const [filePreview, setFilePreview] = useState(null); // {path, name}
   const [visibleCount, setVisibleCount] = useState(200); // 长对话窗口化渲染
   const permissionMode = conv.permissionMode || (conv.autoApprove ? 'system' : 'workspace');
+  const task = Object.values(tasks).find((item) => item.convId === conv.id && item.status !== 'archived');
+  const createTask = () => {
+    const next = useStore.getState().createTask(hostId, conv.id, { title: conv.title });
+    useStore.getState().updateTaskStatus(next.id, 'running');
+  };
 
   // 进入对话/切换模型或权限时,在主进程(重新)初始化 agent 会话(带 resume 状态续聊)
   useEffect(() => {
@@ -291,6 +297,7 @@ function ChatView({ hostId, conv }) {
     <div className="chat-panel">
       <div className="chat-header">
         <button className="btn small ghost" onClick={() => setActiveConv(hostId, null)}>← 记录</button>
+        {!task && <button className="btn small ghost" onClick={createTask}>+ 任务</button>}
         <select className={`agent-select ${conv.agent}`} value={conv.agent} disabled={running}
           title="切换引擎(同一对话内共用上下文,切换后首条消息自动携带对话摘要)"
           onChange={(e) => { setStarted(false); updateConversationAgent(conv.id, e.target.value); }}>

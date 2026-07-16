@@ -21,3 +21,12 @@ test('application maps agent completion and failures into linked task status', (
   assert.match(source, /updateTaskStatus\([^)]*, 'review_ready'\)/);
   assert.match(source, /updateTaskStatus\([^)]*, 'failed'\)/);
 });
+
+test('task panel exposes delivery evidence and review actions', () => {
+  const panel = read('src/components/TaskPanel.jsx');
+  assert.match(panel, /review_ready/);
+  assert.match(panel, /Accept/);
+  assert.match(panel, /Request changes/);
+  assert.match(panel, /dangerousCommands/);
+  assert.match(read('src/App.jsx'), /TaskPanel/);
+});
