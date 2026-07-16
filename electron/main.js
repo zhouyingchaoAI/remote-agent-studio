@@ -622,7 +622,7 @@ ipcMain.handle('fs:listRemote', async (_e, { hostId, dirPath }) => {
 ipcMain.handle('fs:upload', async (_e, { hostId, localPath, remotePath, transferId }) => {
   const s = getSession(hostId);
   await s.ssh.upload(localPath, remotePath, (p) =>
-    send('transfer:progress', { hostId, transferId, ...p }));
+    send('transfer:progress', { hostId, transferId, ...p }), transferId);
   return true;
 });
 
@@ -640,8 +640,9 @@ ipcMain.handle('fs:uploadDirectory', async (_e, { hostId, localPath, remotePath,
       await s.ssh.mkdirRemote(parent);
       madeDirectories.add(parent);
     }
-    await s.ssh.upload(file.absolutePath, destination, ({ transferred }) =>
-      send('transfer:progress', { hostId, transferId, transferred: completed + transferred, total: manifest.total }));
+    await s.ssh.upload(file.absolutePath, destination, ({ transferred }) => {
+      send('transfer:progress', { hostId, transferId, transferred: completed + transferred, total: manifest.total });
+    }, transferId);
     completed += file.size;
     send('transfer:progress', { hostId, transferId, transferred: completed, total: manifest.total });
   }
@@ -651,7 +652,7 @@ ipcMain.handle('fs:uploadDirectory', async (_e, { hostId, localPath, remotePath,
 ipcMain.handle('fs:download', async (_e, { hostId, remotePath, localPath, transferId }) => {
   const s = getSession(hostId);
   await s.ssh.download(remotePath, localPath, (p) =>
-    send('transfer:progress', { hostId, transferId, ...p }));
+    send('transfer:progress', { hostId, transferId, ...p }), transferId);
   return true;
 });
 
@@ -668,13 +669,17 @@ ipcMain.handle('fs:downloadDirectory', async (_e, { hostId, remotePath, localPat
       throw new Error('远程目录包含无效路径');
     }
     await fs.promises.mkdir(path.dirname(destination), { recursive: true });
-    await s.ssh.download(file.remotePath, destination, ({ transferred }) =>
-      send('transfer:progress', { hostId, transferId, transferred: completed + transferred, total: manifest.total }));
+    await s.ssh.download(file.remotePath, destination, ({ transferred }) => {
+      send('transfer:progress', { hostId, transferId, transferred: completed + transferred, total: manifest.total });
+    }, transferId);
     completed += file.size;
     send('transfer:progress', { hostId, transferId, transferred: completed, total: manifest.total });
   }
   return { files: manifest.files.length, skippedSymlinks: manifest.skippedSymlinks };
 });
+
+ipcMain.handle('fs:cancelTransfer', (_e, { hostId, transferId }) =>
+  getSession(hostId).ssh.cancelTransfer(transferId));
 
 /* 文件内容预览:文本截断到 512KB,图片最大 10MB,二进制给出提示 */
 const PREVIEW_IMAGE_EXT = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.bmp': 'image/bmp', '.ico': 'image/x-icon' };

@@ -18,6 +18,7 @@ class SSHManager extends EventEmitter {
     this.sftpSession = null;
     this.shells = new Map();         // termId -> shell stream(多终端标签)
     this.reverseTunnels = new Map(); // remotePort -> {targetHost,targetPort}
+    this.activeTransfers = new Map(); // transferId -> {source,destination}
     this.manualClose = false;        // 用户主动断开时不做自动重连
     this.reconnectTimer = null;
     this.reconnectAttempt = 0;
@@ -291,26 +292,47 @@ class SSHManager extends EventEmitter {
     return { path: target, entries };
   }
 
-  async upload(localPath, remotePath, onProgress) {
+  async upload(localPath, remotePath, onProgress, transferId) {
     const sftp = await this.sftp();
     const total = fs.statSync(localPath).size;
-    return new Promise((resolve, reject) => {
-      sftp.fastPut(localPath, remotePath, {
-        step: (transferred) => onProgress && onProgress({ transferred, total })
-      }, (err) => (err ? reject(err) : resolve({ total })));
-    });
+    return this._streamTransfer(fs.createReadStream(localPath), sftp.createWriteStream(remotePath), total, onProgress, transferId);
   }
 
-  async download(remotePath, localPath, onProgress) {
+  async download(remotePath, localPath, onProgress, transferId) {
     const sftp = await this.sftp();
     const stat = await new Promise((res, rej) =>
       sftp.stat(remotePath, (e, s) => (e ? rej(e) : res(s))));
     const total = stat.size;
+    return this._streamTransfer(sftp.createReadStream(remotePath), fs.createWriteStream(localPath), total, onProgress, transferId);
+  }
+
+  _streamTransfer(source, destination, total, onProgress, transferId) {
+    const id = transferId || `internal_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     return new Promise((resolve, reject) => {
-      sftp.fastGet(remotePath, localPath, {
-        step: (transferred) => onProgress && onProgress({ transferred, total })
-      }, (err) => (err ? reject(err) : resolve({ total })));
+      let transferred = 0;
+      let settled = false;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        this.activeTransfers.delete(id);
+        error ? reject(error) : resolve({ total });
+      };
+      this.activeTransfers.set(id, { source, destination });
+      source.on('data', (chunk) => { transferred += chunk.length; if (onProgress) onProgress({ transferred, total }); });
+      source.once('error', finish);
+      destination.once('error', finish);
+      destination.once('finish', () => finish());
+      source.pipe(destination);
     });
+  }
+
+  cancelTransfer(transferId) {
+    const transfer = this.activeTransfers.get(transferId);
+    if (!transfer) return false;
+    const error = new Error('传输已取消');
+    transfer.source.destroy(error);
+    transfer.destination.destroy(error);
+    return true;
   }
 
   async mkdirRemote(remotePath) {

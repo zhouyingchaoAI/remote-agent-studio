@@ -92,6 +92,11 @@ export default function FilePanel({ hostId }) {
     }
   };
 
+  const cancelTransfer = async (t) => {
+    const cancelled = await window.api.files.cancelTransfer({ hostId, transferId: t.id });
+    if (cancelled) setTransfers((ts) => ts.map((x) => x.id === t.id ? { ...x, cancelled: true } : x));
+  };
+
   /** 从系统拖文件到远程栏 -> 直接上传 */
   const [dropActive, setDropActive] = useState(false);
   const onRemoteDrop = (event) => {
@@ -217,10 +222,12 @@ export default function FilePanel({ hostId }) {
                   <span className="error-text">{t.error}</span>
                   <button className="btn small" onClick={() => retryTransfer(t)}>重试</button>
                 </>
-              ) : t.done ? <span className="ok">完成</span>
+              ) : t.cancelled ? <span className="muted">已取消</span>
+                : t.done ? <span className="ok">完成</span>
                 : <progress value={t.transferred} max={t.total || 1} />}
               <span className="muted small">{fmtSize(t.transferred)} / {fmtSize(t.total)}</span>
               {t.skippedSymlinks > 0 && <span className="muted small">已跳过 {t.skippedSymlinks} 个链接</span>}
+              {!t.done && !t.error && !t.cancelled && <button className="btn small ghost" onClick={() => cancelTransfer(t)}>取消</button>}
             </div>
           ))}
         </div>
