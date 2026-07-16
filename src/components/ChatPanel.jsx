@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useStore, sendToAgent, isAwaitingConfirm } from '../store.js';
 import FilePreview from './FilePreview.jsx';
 import Markdown from './Markdown.jsx';
+import { translate as tr } from '../i18n.mjs';
 
 /* 统一 diff(unified diff)红绿渲染 */
 function DiffView({ text = '' }) {
@@ -67,6 +68,8 @@ export default function ChatPanel({ hostId }) {
 
 /* ---------------- 会话列表(历史记录) ---------------- */
 function ConversationHome({ hostId }) {
+  const language = useStore((s) => s.settings.language);
+  const t = (key) => tr(language, key);
   const conversations = useStore((s) => s.conversations);
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState('');
@@ -89,13 +92,13 @@ function ConversationHome({ hostId }) {
   return (
     <div className="conv-home">
       <div className="conv-home-head">
-        <h2>对话记录</h2>
-        <input className="conv-search" value={query} placeholder="搜索标题 / 目录 / 内容..."
+        <h2>{t('conversationHistory')}</h2>
+        <input className="conv-search" value={query} placeholder={t('searchConversations')}
           onChange={(e) => setQuery(e.target.value)} />
-        <button className="btn primary" onClick={() => setCreating(true)}>+ 新建对话</button>
+        <button className="btn primary" onClick={() => setCreating(true)}>+ {t('newConversation')}</button>
       </div>
       {list.length === 0 ? (
-        <div className="muted center pad">{q ? '没有匹配的对话' : '还没有对话。点「新建对话」选择项目目录和 agent 开始。'}</div>
+        <div className="muted center pad">{q ? t('noMatchingConversations') : t('noConversations')}</div>
       ) : (
         <div className="conv-list">
           {list.map((c) => <ConvCard key={c.id} conv={c} />)}
@@ -127,6 +130,8 @@ function conversationToMarkdown(conv) {
 }
 
 function ConvCard({ conv }) {
+  const language = useStore((s) => s.settings.language);
+  const t = (key) => tr(language, key);
   const setActiveConv = useStore((s) => s.setActiveConv);
   const del = useStore((s) => s.deleteConversation);
   const rename = useStore((s) => s.renameConversation);
@@ -163,7 +168,7 @@ function ConvCard({ conv }) {
           <span className="conv-title">{conv.title}</span>
         )}
         <span className="flex1" />
-        <button className="icon-btn" title="重命名"
+        <button className="icon-btn" title={t('rename')}
           onClick={(e) => { e.stopPropagation(); setDraftTitle(conv.title); setEditing(true); }}>✎</button>
         <button className="icon-btn danger" title="删除"
           onClick={async (e) => {
@@ -174,8 +179,8 @@ function ConvCard({ conv }) {
           }}>✕</button>
       </div>
       <div className="conv-card-path muted small">{conv.cwd || '~'}</div>
-      {last && <div className="conv-card-last muted small">最近: {last.text.slice(0, 60)}</div>}
-      <div className="conv-card-meta muted small">{conv.messages.length} 条消息 · {when}</div>
+      {last && <div className="conv-card-last muted small">{t('recent')}: {last.text.slice(0, 60)}</div>}
+      <div className="conv-card-meta muted small">{conv.messages.length} {t('messages')} · {when}</div>
     </div>
   );
 }

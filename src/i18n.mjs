@@ -29,6 +29,19 @@ export const dictionaries = {
   }
 };
 
+Object.assign(dictionaries['zh-CN'], {
+  conversationHistory: '对话记录', newConversation: '新建对话',
+  searchConversations: '搜索标题 / 目录 / 内容...', noMatchingConversations: '没有匹配的对话',
+  noConversations: '还没有对话。点「新建对话」选择项目目录和 agent 开始。',
+  rename: '重命名', recent: '最近', messages: '条消息'
+});
+Object.assign(dictionaries.en, {
+  conversationHistory: 'Conversation history', newConversation: 'New conversation',
+  searchConversations: 'Search title / directory / content...', noMatchingConversations: 'No matching conversations',
+  noConversations: 'No conversations yet. Create one, select a project directory and agent to begin.',
+  rename: 'Rename', recent: 'Recent', messages: 'messages'
+});
+
 export function normalizeLanguage(value) {
   return value === 'en' ? 'en' : 'zh-CN';
 }
