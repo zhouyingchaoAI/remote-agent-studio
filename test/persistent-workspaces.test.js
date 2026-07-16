@@ -28,12 +28,13 @@ test('terminal refits when its persistent layer becomes active', () => {
   assert.match(source, /window\.api\.term\.resize/);
 });
 
-test('file transfer progress is isolated by host while panels stay mounted', () => {
-  const source = read('src/components/FilePanel.jsx');
+test('file transfer progress is global while each panel filters its own host', () => {
+  const app = read('src/App.jsx');
+  const panel = read('src/components/FilePanel.jsx');
 
-  assert.match(source, /hostId: progressHostId/);
-  assert.match(source, /if \(progressHostId !== hostId\) return/);
-  assert.match(source, /\}, \[hostId\]\)/);
+  assert.match(app, /files\.onProgress/);
+  assert.match(app, /updateTransferProgress\(transferId, transferred, total\)/);
+  assert.match(panel, /transfer\.hostId === hostId/);
 });
 
 test('inactive workspace layers are hidden without removing their contents', () => {
@@ -46,5 +47,6 @@ test('inactive workspace layers are hidden without removing their contents', () 
 test('workspace panels are loaded on demand behind a loading boundary', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'App.jsx'), 'utf8');
   assert.match(source, /React\.lazy\(\(\) => import\('\.\/components\/ChatPanel\.jsx'\)\)/);
+  assert.match(source, /React\.lazy\(\(\) => import\('\.\/components\/TransferPanel\.jsx'\)\)/);
   assert.match(source, /<Suspense fallback=/);
 });

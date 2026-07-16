@@ -256,6 +256,10 @@ input[type="checkbox"], input[type="radio"] { width: auto; }
 .file-actions { display: flex; flex-direction: column; justify-content: center; gap: 8px; }
 .transfer-list { border-top: 1px solid var(--border); padding-top: 8px; }
 .transfer-item { display: flex; align-items: center; gap: 10px; font-size: 12px; padding: 3px 0; }
+.transfer-panel { width: 100%; padding: 20px; overflow: auto; }
+.transfer-panel-heading { margin-bottom: 16px; }
+.transfer-panel-heading h3 { margin: 0 0 4px; }
+.transfer-task-item { min-height: 34px; }
 progress { width: 140px; height: 6px; }
 
 /* terminal */

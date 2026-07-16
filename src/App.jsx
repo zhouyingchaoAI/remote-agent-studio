@@ -34,10 +34,11 @@ const FilePanel = React.lazy(() => import('./components/FilePanel.jsx'));
 const TerminalPanel = React.lazy(() => import('./components/TerminalPanel.jsx'));
 const SetupPanel = React.lazy(() => import('./components/SetupPanel.jsx'));
 const TaskPanel = React.lazy(() => import('./components/TaskPanel.jsx'));
+const TransferPanel = React.lazy(() => import('./components/TransferPanel.jsx'));
 
 const TABS = [
   { key: 'chat', icon: '💬' }, { key: 'files', icon: '📁' }, { key: 'terminal', icon: '⌨️' },
-  { key: 'tasks', icon: '✓' }, { key: 'setup', icon: '⚙️' }
+  { key: 'tasks', icon: '✓' }, { key: 'transfers', icon: '⇄' }, { key: 'setup', icon: '⚙️' }
 ];
 
 export default function App() {
@@ -55,6 +56,8 @@ export default function App() {
       useStore.getState().setStatus(hostId, status, detail));
     const offLog = window.api.setup.onLog(({ hostId, text }) =>
       useStore.getState().appendSetupLog(hostId, text));
+    const offTransfer = window.api.files.onProgress(({ transferId, transferred, total }) =>
+      useStore.getState().updateTransferProgress(transferId, transferred, total));
     const offMsg = window.api.agent.onMessage(({ convId, msg }) => {
       const st = useStore.getState();
       const linkedTask = Object.values(st.tasks).find((task) => task.convId === convId && task.status === 'running');
@@ -125,7 +128,7 @@ export default function App() {
       if (linkedTask && msg.kind === 'error') st.updateTaskStatus(linkedTask.id, 'failed');
       st.pushMessage(convId, { role: 'agent', ...msg, ts: Date.now() });
     });
-    return () => { offStatus(); offLog(); offMsg(); };
+    return () => { offStatus(); offLog(); offTransfer(); offMsg(); };
   }, []);
 
   return (
@@ -156,7 +159,7 @@ export default function App() {
                   : <span className="muted">{activeHost.username}@{activeHost.host}:{activeHost.port || 22}</span>}
               </div>
               <div className="tabs">
-                {(activeHost.local ? TABS.filter((t) => t.key === 'chat' || t.key === 'tasks' || t.key === 'setup') : TABS).map((t) => (
+                {(activeHost.local ? TABS.filter((t) => t.key === 'chat' || t.key === 'tasks' || t.key === 'transfers' || t.key === 'setup') : TABS).map((t) => (
                   <button key={t.key}
                     className={`tab ${tab === t.key ? 'active' : ''}`}
                     onClick={() => setTab(t.key)}>
@@ -169,7 +172,7 @@ export default function App() {
               <PersistentWorkspace
                 hosts={hosts}
                 activeHostId={activeHostId}
-                activeView={activeHost.local && tab !== 'setup' && tab !== 'tasks' ? 'chat' : tab}
+                activeView={activeHost.local && !['setup', 'tasks', 'transfers'].includes(tab) ? 'chat' : tab}
                 statuses={statuses}
               />
             </div>
@@ -181,7 +184,7 @@ export default function App() {
   );
 }
 
-const PERSISTENT_VIEWS = new Set(['chat', 'files', 'terminal', 'tasks']);
+const PERSISTENT_VIEWS = new Set(['chat', 'files', 'terminal', 'tasks', 'transfers']);
 
 function PersistentWorkspace({ hosts, activeHostId, activeView, statuses }) {
   const [visitedViews, setVisitedViews] = useState([]);
@@ -218,6 +221,7 @@ function PersistentWorkspace({ hosts, activeHostId, activeView, statuses }) {
             {view === 'files' && <FilePanel hostId={hostId} />}
             {view === 'terminal' && <TerminalPanel hostId={hostId} active={isActive} />}
             {view === 'tasks' && <TaskPanel hostId={hostId} />}
+            {view === 'transfers' && <TransferPanel hostId={hostId} />}
           </div>
         );
       })}

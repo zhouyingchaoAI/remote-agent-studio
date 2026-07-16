@@ -13,12 +13,15 @@ function fmtSize(n) {
 
 export default function FilePanel({ hostId }) {
   const language = useStore((s) => s.settings.language);
+  const transferMap = useStore((s) => s.transfers);
+  const transfers = Object.values(transferMap).filter((transfer) => transfer.hostId === hostId);
+  const createTransfer = useStore((s) => s.createTransfer);
+  const finishTransfer = useStore((s) => s.finishTransfer);
   const t = (key) => tr(language, key);
   const [local, setLocal] = useState({ path: '', entries: [] });
   const [remote, setRemote] = useState({ path: '', entries: [] });
   const [selLocal, setSelLocal] = useState(null);
   const [selRemote, setSelRemote] = useState(null);
-  const [transfers, setTransfers] = useState([]); // {id,name,dir,transferred,total,done,error}
   const [err, setErr] = useState('');
   // Electron 不支持 window.prompt,新建文件夹用内联输入框
   const [newDirName, setNewDirName] = useState(null); // null=隐藏, ''=输入中
@@ -35,11 +38,6 @@ export default function FilePanel({ hostId }) {
 
   useEffect(() => { loadLocal(); loadRemote(); }, [loadLocal, loadRemote]);
 
-  useEffect(() => window.api.files.onProgress(({ hostId: progressHostId, transferId, transferred, total }) => {
-    if (progressHostId !== hostId) return;
-    setTransfers((ts) => ts.map((t) => t.id === transferId ? { ...t, transferred, total } : t));
-  }), [hostId]);
-
   const joinPath = (dir, name, sep = '/') =>
     dir.endsWith(sep) ? dir + name : dir + sep + name;
   const localSep = local.path.includes('\\') ? '\\' : '/';
@@ -48,13 +46,13 @@ export default function FilePanel({ hostId }) {
   const uploadOne = async (localPath, name, size) => {
     const id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const remotePath = joinPath(remote.path, name);
-    setTransfers((ts) => [...ts, { id, name, dir: '↑', transferred: 0, total: size, localPath, remotePath }]);
+    createTransfer({ id, hostId, name, dir: '↑', transferred: 0, total: size, localPath, remotePath });
     try {
       await window.api.files.upload({ hostId, localPath, remotePath, transferId: id });
-      setTransfers((ts) => ts.map((t) => t.id === id ? { ...t, done: true } : t));
+      finishTransfer(id, { done: true });
       loadRemote(remote.path);
     } catch (e) {
-      setTransfers((ts) => ts.map((t) => t.id === id ? { ...t, error: e.message } : t));
+      finishTransfer(id, { error: e.message });
     }
   };
 
@@ -64,17 +62,13 @@ export default function FilePanel({ hostId }) {
       const localPath = joinPath(local.path, selLocal.name, localSep);
       const remotePath = joinPath(remote.path, selLocal.name);
       const id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-      setTransfers((ts) => [...ts, {
-        id, name: selLocal.name, dir: '↑', kind: 'directory', transferred: 0, total: 0, localPath, remotePath
-      }]);
+      createTransfer({ id, hostId, name: selLocal.name, dir: '↑', kind: 'directory', transferred: 0, total: 0, localPath, remotePath });
       try {
         const result = await window.api.files.uploadDirectory({ hostId, localPath, remotePath, transferId: id });
-        setTransfers((ts) => ts.map((t) => t.id === id ? {
-          ...t, done: true, skippedSymlinks: result.skippedSymlinks
-        } : t));
+        finishTransfer(id, { done: true, skippedSymlinks: result.skippedSymlinks });
         loadRemote(remote.path);
       } catch (e) {
-        setTransfers((ts) => ts.map((t) => t.id === id ? { ...t, error: e.message } : t));
+        finishTransfer(id, { error: e.message });
       }
       return;
     }
@@ -83,22 +77,22 @@ export default function FilePanel({ hostId }) {
 
   /** 失败重试:复用记录中的路径重新上传/下载 */
   const retryTransfer = async (t) => {
-    setTransfers((ts) => ts.map((x) => x.id === t.id ? { ...x, error: null, transferred: 0 } : x));
+    finishTransfer(t.id, { error: null, cancelled: false, done: false, transferred: 0 });
     try {
       if (t.dir === '↑' && t.kind === 'directory') await window.api.files.uploadDirectory({ hostId, localPath: t.localPath, remotePath: t.remotePath, transferId: t.id });
       else if (t.dir === '↑') await window.api.files.upload({ hostId, localPath: t.localPath, remotePath: t.remotePath, transferId: t.id, resume: true });
       else if (t.kind === 'directory') await window.api.files.downloadDirectory({ hostId, remotePath: t.remotePath, localPath: t.localPath, transferId: t.id });
       else await window.api.files.download({ hostId, remotePath: t.remotePath, localPath: t.localPath, transferId: t.id, resume: true });
-      setTransfers((ts) => ts.map((x) => x.id === t.id ? { ...x, done: true } : x));
+      finishTransfer(t.id, { done: true });
       if (t.dir === '↑') loadRemote(remote.path); else loadLocal(local.path);
     } catch (e) {
-      setTransfers((ts) => ts.map((x) => x.id === t.id ? { ...x, error: e.message } : x));
+      finishTransfer(t.id, { error: e.message });
     }
   };
 
   const cancelTransfer = async (t) => {
     const cancelled = await window.api.files.cancelTransfer({ hostId, transferId: t.id });
-    if (cancelled) setTransfers((ts) => ts.map((x) => x.id === t.id ? { ...x, cancelled: true } : x));
+    if (cancelled) finishTransfer(t.id, { cancelled: true });
   };
 
   /** 从系统拖文件到远程栏 -> 直接上传 */
@@ -118,30 +112,26 @@ export default function FilePanel({ hostId }) {
       const id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
       const remotePath = joinPath(remote.path, selRemote.name);
       const localPath = joinPath(local.path, selRemote.name, localSep);
-      setTransfers((ts) => [...ts, {
-        id, name: selRemote.name, dir: '↓', kind: 'directory', transferred: 0, total: 0, localPath, remotePath
-      }]);
+      createTransfer({ id, hostId, name: selRemote.name, dir: '↓', kind: 'directory', transferred: 0, total: 0, localPath, remotePath });
       try {
         const result = await window.api.files.downloadDirectory({ hostId, remotePath, localPath, transferId: id });
-        setTransfers((ts) => ts.map((t) => t.id === id ? {
-          ...t, done: true, skippedSymlinks: result.skippedSymlinks
-        } : t));
+        finishTransfer(id, { done: true, skippedSymlinks: result.skippedSymlinks });
         loadLocal(local.path);
       } catch (e) {
-        setTransfers((ts) => ts.map((t) => t.id === id ? { ...t, error: e.message } : t));
+        finishTransfer(id, { error: e.message });
       }
       return;
     }
     const id = `t_${Date.now()}`;
     const remotePath = joinPath(remote.path, selRemote.name);
     const localPath = joinPath(local.path, selRemote.name, localSep);
-    setTransfers((ts) => [...ts, { id, name: selRemote.name, dir: '↓', transferred: 0, total: selRemote.size, localPath, remotePath }]);
+    createTransfer({ id, hostId, name: selRemote.name, dir: '↓', transferred: 0, total: selRemote.size, localPath, remotePath });
     try {
       await window.api.files.download({ hostId, remotePath, localPath, transferId: id });
-      setTransfers((ts) => ts.map((t) => t.id === id ? { ...t, done: true } : t));
+      finishTransfer(id, { done: true });
       loadLocal(local.path);
     } catch (e) {
-      setTransfers((ts) => ts.map((t) => t.id === id ? { ...t, error: e.message } : t));
+      finishTransfer(id, { error: e.message });
     }
   };
 
@@ -218,20 +208,20 @@ export default function FilePanel({ hostId }) {
       {err && <p className="error-text">{err}</p>}
       {transfers.length > 0 && (
         <div className="transfer-list">
-          {transfers.slice(-5).map((t) => (
-            <div key={t.id} className="transfer-item">
-              <span>{t.dir} {t.name}</span>
-              {t.error ? (
+          {transfers.slice(-5).map((transfer) => (
+            <div key={transfer.id} className="transfer-item">
+              <span>{transfer.dir} {transfer.name}</span>
+              {transfer.error ? (
                 <>
-                  <span className="error-text">{t.error}</span>
-                  <button className="btn small" onClick={() => retryTransfer(t)}>{t('retry')}</button>
+                  <span className="error-text">{transfer.error}</span>
+                  <button className="btn small" onClick={() => retryTransfer(transfer)}>{t('retry')}</button>
                 </>
-              ) : t.cancelled ? <span className="muted">{t('cancelled')}</span>
-                : t.done ? <span className="ok">{t('completed')}</span>
-                : <progress value={t.transferred} max={t.total || 1} />}
-              <span className="muted small">{fmtSize(t.transferred)} / {fmtSize(t.total)}</span>
-              {t.skippedSymlinks > 0 && <span className="muted small">已跳过 {t.skippedSymlinks} 个链接</span>}
-              {!t.done && !t.error && !t.cancelled && <button className="btn small ghost" onClick={() => cancelTransfer(t)}>{t('cancel')}</button>}
+              ) : transfer.cancelled ? <span className="muted">{t('cancelled')}</span>
+                : transfer.done ? <span className="ok">{t('completed')}</span>
+                : <progress value={transfer.transferred} max={transfer.total || 1} />}
+              <span className="muted small">{fmtSize(transfer.transferred)} / {fmtSize(transfer.total)}</span>
+              {transfer.skippedSymlinks > 0 && <span className="muted small">已跳过 {transfer.skippedSymlinks} 个链接</span>}
+              {!transfer.done && !transfer.error && !transfer.cancelled && <button className="btn small ghost" onClick={() => cancelTransfer(transfer)}>{t('cancel')}</button>}
             </div>
           ))}
         </div>

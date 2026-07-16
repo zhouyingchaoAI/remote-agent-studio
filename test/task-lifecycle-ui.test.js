@@ -66,8 +66,8 @@ test('tool calls display their classified safety level inline', () => {
   assert.match(chat, /安全级别/);
 });
 
-test('local projects retain access to the task delivery view', () => {
+test('local projects retain task delivery and transfer task views', () => {
   const app = read('src/App.jsx');
-  assert.match(app, /t\.key === 'chat' \|\| t\.key === 'tasks' \|\| t\.key === 'setup'/);
-  assert.match(app, /tab !== 'setup' && tab !== 'tasks' \? 'chat' : tab/);
+  assert.match(app, /t\.key === 'chat' \|\| t\.key === 'tasks' \|\| t\.key === 'transfers' \|\| t\.key === 'setup'/);
+  assert.match(app, /!\['setup', 'tasks', 'transfers'\]\.includes\(tab\) \? 'chat' : tab/);
 });

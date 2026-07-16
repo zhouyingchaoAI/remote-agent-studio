@@ -27,6 +27,8 @@ export const useStore = create((set, get) => ({
   activeConvByHost: {}, // hostId -> convId(null 表示停留在会话列表)
   tasks: {},
   activeTaskByHost: {},
+  // 文件传输任务在同一应用会话中跨面板保留；不落盘，避免重启后展示不可恢复的远端操作。
+  transfers: {},
   agentRunning: {},     // convId -> bool
   queued: {},           // convId -> [{id,text,files}] 排队待发送的消息
   setupLogs: {},        // hostId -> string
@@ -52,6 +54,26 @@ export const useStore = create((set, get) => ({
       statuses: { ...s.statuses, [hostId]: status },
       statusDetails: { ...s.statusDetails, [hostId]: detail || '' }
     })),
+
+  createTransfer: (fields) => {
+    const transfer = { ...fields, createdAt: Date.now(), updatedAt: Date.now() };
+    set((s) => ({ transfers: { ...s.transfers, [transfer.id]: transfer } }));
+    return transfer;
+  },
+
+  updateTransferProgress: (transferId, transferred, total) =>
+    set((s) => {
+      const transfer = s.transfers[transferId];
+      if (!transfer) return {};
+      return { transfers: { ...s.transfers, [transferId]: { ...transfer, transferred, total, updatedAt: Date.now() } } };
+    }),
+
+  finishTransfer: (transferId, patch = {}) =>
+    set((s) => {
+      const transfer = s.transfers[transferId];
+      if (!transfer) return {};
+      return { transfers: { ...s.transfers, [transferId]: { ...transfer, ...patch, updatedAt: Date.now() } } };
+    }),
 
   setActiveConv: (hostId, convId) =>
     set((s) => ({ activeConvByHost: { ...s.activeConvByHost, [hostId]: convId } })),
