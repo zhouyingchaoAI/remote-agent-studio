@@ -7,7 +7,10 @@ export const dictionaries = {
     expandFiles: '展开文件', connecting: '连接中...', disconnected: '未连接',
     homeDirectory: '家目录', projectDirectory: '项目目录', empty: '(空)',
     chat: '对话', files: '文件', terminal: '终端', tasks: '任务', setup: '环境配置',
-    addSshHost: '在左侧添加一台 SSH 主机，即可远程使用 Codex / Claude Code'
+    addSshHost: '在左侧添加一台 SSH 主机，即可远程使用 Codex / Claude Code',
+    noTasks: '尚无任务', taskHelp: '从对话页创建任务后，在这里验收交付。', usageOverview: '用量概览',
+    openChat: '打开对话', stopTakeover: '停止并接管', changes: '变更', artifacts: '产物', dangerousOps: '危险操作',
+    changeEvidence: '变更证据', securityAudit: '安全审计', reviewNote: '验收备注（可选）', accept: '验收通过', requestChanges: '要求修改'
   },
   en: {
     settings: 'Settings', language: 'Language', chinese: 'Simplified Chinese', english: 'English',
@@ -17,7 +20,10 @@ export const dictionaries = {
     expandFiles: 'Expand files', connecting: 'Connecting...', disconnected: 'Disconnected',
     homeDirectory: 'Home directory', projectDirectory: 'Project directory', empty: '(empty)',
     chat: 'Chat', files: 'Files', terminal: 'Terminal', tasks: 'Tasks', setup: 'Environment',
-    addSshHost: 'Add an SSH host on the left to use Codex / Claude Code remotely'
+    addSshHost: 'Add an SSH host on the left to use Codex / Claude Code remotely',
+    noTasks: 'No tasks yet', taskHelp: 'Create a task from a chat, then review its delivery here.', usageOverview: 'Usage overview',
+    openChat: 'Open chat', stopTakeover: 'Stop and take over', changes: 'Changes', artifacts: 'Artifacts', dangerousOps: 'Dangerous operations',
+    changeEvidence: 'Change evidence', securityAudit: 'Security audit', reviewNote: 'Review note (optional)', accept: 'Accept', requestChanges: 'Request changes'
   }
 };
 
