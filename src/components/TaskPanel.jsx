@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { useStore } from '../store.js';
+import { useStore, sendToAgent } from '../store.js';
 import { translate as tr } from '../i18n.mjs';
 
 const labelStatus = (status, t) => t(`status_${status}`);
@@ -12,6 +12,7 @@ export default function TaskPanel({ hostId }) {
   const reviewTask = useStore((s) => s.reviewTask);
   const updateTaskStatus = useStore((s) => s.updateTaskStatus);
   const recordTaskDelivery = useStore((s) => s.recordTaskDelivery);
+  const retryTask = useStore((s) => s.retryTask);
   const language = useStore((s) => s.settings.language);
   const t = (key) => tr(language, key);
   const [selected, setSelected] = useState(null);
@@ -39,6 +40,11 @@ export default function TaskPanel({ hostId }) {
         await window.api.agent.cancel({ hostId: task.hostId, convId: task.convId });
         updateTaskStatus(task.id, 'needs_input');
         recordTaskDelivery(task.id, { auditEvents: [{ type: 'manual_stop', level: 'system', detail: '用户停止执行并接管任务', ts: Date.now() }] });
+      }} onRetry={async () => {
+        const retried = retryTask(task.id);
+        if (!retried) return;
+        setActiveConv(hostId, task.convId);
+        await sendToAgent(task.hostId, task.convId, '请基于当前任务、已有交付和验收反馈继续执行；优先解决未完成或被要求修改的部分。');
       }} /> : <div className="empty-state"><p>{t('noTasks')}</p></div>}</section>
   </div>;
 }
@@ -52,7 +58,7 @@ function UsageSummary({ usage, t }) {
   </div>;
 }
 
-function DeliveryCard({ task, conversation, onOpen, onReview, onStop, t }) {
+function DeliveryCard({ task, conversation, onOpen, onReview, onStop, onRetry, t }) {
   const delivery = task.delivery || {};
   const [note, setNote] = useState(task.review?.note || '');
   const canReview = task.status === 'review_ready' || task.status === 'changes_requested';
@@ -68,5 +74,6 @@ function DeliveryCard({ task, conversation, onOpen, onReview, onStop, t }) {
     {canReview && <div className="task-review"><textarea value={note} placeholder={t('reviewNote')} onChange={(e) => setNote(e.target.value)} />
       <button className="btn primary" onClick={() => onReview(task.id, 'accept', note)}>{t('accept')}</button>
       <button className="btn danger" onClick={() => onReview(task.id, 'changes', note)}>{t('requestChanges')}</button></div>}
+    {['failed', 'needs_input', 'changes_requested'].includes(task.status) && <button className="btn primary" onClick={onRetry}>{t('retry')}</button>}
   </div>;
 }

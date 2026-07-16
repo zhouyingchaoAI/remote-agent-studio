@@ -130,6 +130,23 @@ export const useStore = create((set, get) => ({
     persistTasks();
   },
 
+  retryTask: (taskId) => {
+    let retried = null;
+    set((s) => {
+      const task = s.tasks[taskId];
+      if (!task || !['failed', 'needs_input', 'changes_requested'].includes(task.status)) return {};
+      const now = Date.now();
+      const retryCount = (task.retryCount || 0) + 1;
+      retried = { ...task, status: 'queued', retryCount, updatedAt: now, runFinishedAt: null,
+        delivery: { ...(task.delivery || {}), auditEvents: [...(task.delivery?.auditEvents || []), {
+          type: 'task_retry', level: 'workspace_write', detail: `任务恢复执行（第 ${retryCount} 次）`, ts: now
+        }] } };
+      return { tasks: { ...s.tasks, [taskId]: retried } };
+    });
+    persistTasks();
+    return retried;
+  },
+
   createConversation: (hostId, opts) => {
     const id = `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const conv = {
