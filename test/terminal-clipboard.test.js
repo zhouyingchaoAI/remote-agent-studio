@@ -38,8 +38,8 @@ test('terminal provides a right-click copy and paste menu', () => {
 
   assert.match(source, /onContextMenu=\{openContextMenu\}/);
   assert.match(source, /terminal-context-menu/);
-  assert.match(source, />复制</);
-  assert.match(source, />粘贴</);
+  assert.match(source, /t\('copy'\)/);
+  assert.match(source, /t\('paste'\)/);
   assert.match(styles, /\.terminal-context-menu/);
 });
 
@@ -50,5 +50,5 @@ test('terminal provides an in-panel search control backed by xterm search', () =
   assert.match(source, /SearchAddon/);
   assert.match(source, /findNext/);
   assert.match(source, /findPrevious/);
-  assert.match(source, /搜索终端输出/);
+  assert.match(source, /t\('searchTerminal'\)/);
 });

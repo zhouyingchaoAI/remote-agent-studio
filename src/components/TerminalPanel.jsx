@@ -4,18 +4,20 @@ import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
 import { useStore } from '../store.js';
+import { translate as tr } from '../i18n.mjs';
 
 /** 终端页:多标签,每个标签一个独立远程 shell */
 export default function TerminalPanel({ hostId, active }) {
-  const [tabs, setTabs] = useState([{ id: 't1', title: '终端 1' }]);
+  const language = useStore((s) => s.settings.language);
+  const t = (key) => tr(language, key);
+  const [tabs, setTabs] = useState([{ id: 't1', number: 1 }]);
   const [activeTab, setActiveTab] = useState('t1');
   const nextIdRef = useRef(2);
 
   const addTab = () => {
     const id = `t${nextIdRef.current}`;
-    const title = `终端 ${nextIdRef.current}`;
     nextIdRef.current += 1;
-    setTabs((ts) => [...ts, { id, title }]);
+    setTabs((ts) => [...ts, { id, number: nextIdRef.current - 1 }]);
     setActiveTab(id);
   };
 
@@ -32,22 +34,22 @@ export default function TerminalPanel({ hostId, active }) {
   return (
     <div className="terminal-tabs-wrap">
       <div className="terminal-tabbar">
-        {tabs.map((t) => (
-          <div key={t.id}
-            className={`terminal-tab ${activeTab === t.id ? 'active' : ''}`}
-            onClick={() => setActiveTab(t.id)}>
-            <span>{t.title}</span>
+        {tabs.map((tab) => (
+          <div key={tab.id}
+            className={`terminal-tab ${activeTab === tab.id ? 'active' : ''}`}
+            onClick={() => setActiveTab(tab.id)}>
+            <span>{t('terminalTab')} {tab.number}</span>
             {tabs.length > 1 && (
-              <button className="icon-btn" title="关闭标签"
-                onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}>✕</button>
+              <button className="icon-btn" title={t('closeTab')}
+                onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}>✕</button>
             )}
           </div>
         ))}
-        <button className="btn small ghost" title="新建终端标签" onClick={addTab}>+</button>
+        <button className="btn small ghost" title={t('newTerminalTab')} onClick={addTab}>+</button>
       </div>
-      {tabs.map((t) => (
-        <div key={t.id} className="terminal-layer" style={{ display: activeTab === t.id ? 'flex' : 'none' }}>
-          <TermView hostId={hostId} termId={`${hostId}:${t.id}`} active={active && activeTab === t.id} />
+      {tabs.map((tab) => (
+        <div key={tab.id} className="terminal-layer" style={{ display: activeTab === tab.id ? 'flex' : 'none' }}>
+          <TermView hostId={hostId} termId={`${hostId}:${tab.id}`} active={active && activeTab === tab.id} />
         </div>
       ))}
     </div>
@@ -55,6 +57,9 @@ export default function TerminalPanel({ hostId, active }) {
 }
 
 function TermView({ hostId, termId, active }) {
+  const language = useStore((s) => s.settings.language);
+  const t = (key) => tr(language, key);
+  const runtimeText = (key) => tr(useStore.getState().settings.language, key);
   const boxRef = useRef(null);
   const wrapRef = useRef(null);
   const termRef = useRef(null);
@@ -120,7 +125,7 @@ function TermView({ hostId, termId, active }) {
     });
     const offClosed = window.api.term.onClosed(({ hostId: h, termId: t }) => {
       if (h === hostId && t === termId)
-        term.write('\r\n\x1b[33m[会话已关闭,可点右上角「重连终端」]\x1b[0m\r\n');
+        term.write(`\r\n\x1b[33m[${runtimeText('terminalClosed')}]\x1b[0m\r\n`);
     });
 
     window.api.term.open({ hostId, termId, cols: term.cols, rows: term.rows }).catch((e) =>
@@ -194,7 +199,7 @@ function TermView({ hostId, termId, active }) {
     const term = termRef.current, fit = fitRef.current;
     if (!term) return;
     term.reset();
-    term.write('\x1b[36m正在重连终端并加载最新代理/环境...\x1b[0m\r\n');
+    term.write(`\x1b[36m${runtimeText('reconnectingTerminal')}\x1b[0m\r\n`);
     window.api.term.reconnect({ hostId, termId, cols: term.cols, rows: term.rows })
       .then(() => fit && fit.fit())
       .catch((e) => term.write(`\x1b[31m${e.message}\x1b[0m\r\n`));
@@ -210,21 +215,21 @@ function TermView({ hostId, termId, active }) {
   return (
     <div className="terminal-wrap" ref={wrapRef} onMouseDown={() => setContextMenu(null)}>
       <div className="terminal-bar">
-        <span className="muted small">远程终端(已自动加载代理与 codex/claude 路径)</span>
+        <span className="muted small">{t('terminalReady')}</span>
         <span className="flex1" />
         {searchOpen && <div className="terminal-search">
-          <input ref={searchInputRef} value={searchValue} aria-label="搜索终端输出" placeholder="搜索终端输出"
+          <input ref={searchInputRef} value={searchValue} aria-label={t('searchTerminal')} placeholder={t('searchTerminal')}
             onChange={(event) => setSearchValue(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') { event.preventDefault(); search(!event.shiftKey); }
               if (event.key === 'Escape') { event.preventDefault(); setSearchOpen(false); termRef.current?.focus(); }
             }} />
-          <button className="icon-btn" title="上一个匹配" onClick={() => search(false)}>↑</button>
-          <button className="icon-btn" title="下一个匹配" onClick={() => search(true)}>↓</button>
-          <button className="icon-btn" title="关闭搜索" onClick={() => { setSearchOpen(false); termRef.current?.focus(); }}>✕</button>
+          <button className="icon-btn" title={t('previousMatch')} onClick={() => search(false)}>↑</button>
+          <button className="icon-btn" title={t('nextMatch')} onClick={() => search(true)}>↓</button>
+          <button className="icon-btn" title={t('closeSearch')} onClick={() => { setSearchOpen(false); termRef.current?.focus(); }}>✕</button>
         </div>}
-        <button className="btn small ghost" title="搜索终端输出 (⌘/Ctrl+F)" onClick={() => setSearchOpen(true)}>搜索</button>
-        <button className="btn small" onClick={reconnect}>重连终端</button>
+        <button className="btn small ghost" title={`${t('searchTerminal')} (⌘/Ctrl+F)`} onClick={() => setSearchOpen(true)}>{t('search')}</button>
+        <button className="btn small" onClick={reconnect}>{t('reconnectTerminal')}</button>
       </div>
       <div className="terminal-box" ref={boxRef} onContextMenu={openContextMenu} />
       {contextMenu && (
@@ -233,8 +238,8 @@ function TermView({ hostId, termId, active }) {
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onMouseDown={(event) => event.stopPropagation()}
         >
-          <button type="button" disabled={!contextMenu.canCopy} onClick={copySelection}>复制</button>
-          <button type="button" onClick={pasteClipboard}>粘贴</button>
+          <button type="button" disabled={!contextMenu.canCopy} onClick={copySelection}>{t('copy')}</button>
+          <button type="button" onClick={pasteClipboard}>{t('paste')}</button>
         </div>
       )}
     </div>
