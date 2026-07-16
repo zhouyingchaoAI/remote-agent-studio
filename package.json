@@ -1,0 +1,44 @@
+{
+  "name": "remote-agent-studio",
+  "version": "0.1.0",
+  "description": "图形化 SSH 远程 AI 编程客户端:一键连接远程开发机,自动配置代理、自动安装并对话式使用 Codex / Claude Code,可视化文件传输",
+  "main": "electron/main.js",
+  "author": "yingchaozhou",
+  "license": "MIT",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV=1 electron .\"",
+    "build": "vite build",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "ssh2": "^1.16.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^6.0.3",
+    "wait-on": "^8.0.1",
+    "zustand": "^5.0.2"
+  },
+  "build": {
+    "appId": "com.yingchao.remoteagentstudio",
+    "productName": "Remote Agent Studio",
+    "files": [
+      "electron/**/*",
+      "dist/**/*",
+      "package.json"
+    ],
+    "mac": { "target": "dmg" },
+    "win": { "target": "nsis" },
+    "linux": { "target": "AppImage" }
+  }
+}

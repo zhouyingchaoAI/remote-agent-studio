@@ -1,0 +1,30 @@
+# 依赖与构建产物
+node_modules/
+dist/
+release/
+*.tsbuildinfo
+
+# 运行时产物
+logs/
+artifacts/
+scripts/cache/
+scripts/*.log
+*.log
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# 本地环境
+.env
+.env.*
+
+# 临时文件
+*.tmp
+*.bak
+
+# 本地工具产物
+.superpowers/
+.agents/
