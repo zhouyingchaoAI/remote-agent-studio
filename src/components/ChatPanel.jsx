@@ -143,7 +143,7 @@ function ConvCard({ conv }) {
   return (
     <div className="conv-card" onClick={() => !editing && setActiveConv(conv.hostId, conv.id)}>
       <div className="conv-card-top">
-        <span className={`badge ${conv.agent}`}>{conv.agent === 'codex' ? 'Codex' : 'Claude'}</span>
+        <span className={`badge ${conv.agent}`}>{AGENT_BADGES[conv.agent] || conv.agent}</span>
         {editing ? (
           <input
             className="conv-title-input"
@@ -201,7 +201,7 @@ function ChatView({ hostId, conv }) {
     window.api.agent.start({
       hostId, convId: conv.id,
       opts: { agent: conv.agent, cwd: conv.cwd, model: conv.model, permissionMode },
-      resume: { claudeSessionId: conv.claudeSessionId, codexSessionId: conv.codexSessionId, codexStarted: conv.codexStarted }
+      resume: { claudeSessionId: conv.claudeSessionId, codexSessionId: conv.codexSessionId, codexStarted: conv.codexStarted, grokSessionId: conv.grokSessionId }
     }).then(() => setStarted(true)).catch(() => setStarted(true));
     // eslint-disable-next-line
   }, [conv.id, permissionMode, conv.model, conv.agent]);
@@ -296,6 +296,8 @@ function ChatView({ hostId, conv }) {
           onChange={(e) => { setStarted(false); updateConversationAgent(conv.id, e.target.value); }}>
           <option value="codex">⬡ Codex</option>
           <option value="claude">✳ Claude Code</option>
+          <option value="deepseek">◈ DeepSeek</option>
+          <option value="grok">▣ 国产模型(Grok)</option>
         </select>
         <b className="conv-title">{conv.title}</b>
         <span className="muted small">{conv.cwd || '~'}</span>
@@ -429,17 +431,48 @@ function ChatView({ hostId, conv }) {
   );
 }
 
-/* 模型选择器:预设 + 自定义输入,留空表示跟随 CLI 自身配置(~/.codex/config.toml 等) */
+/* 模型选择器:预设 + 自定义输入,留空表示跟随 CLI 自身配置(~/.codex/config.toml 等)
+ * deepseek 留空时后端默认 deepseek-v4-pro[1m] */
 const MODEL_PRESETS = {
   codex: ['gpt-5.6-terra', 'gpt-5-codex', 'gpt-5'],
-  claude: ['sonnet', 'opus', 'haiku']
+  claude: ['sonnet', 'opus', 'haiku'],
+  deepseek: ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'],
+  // grok 引擎:国产模型统一走 grok CLI + 各家 OpenAI 兼容端点,格式 provider/模型ID
+  grok: [
+    'deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash',
+    'glm/glm-5', 'kimi/kimi-k2.5', 'qwen/qwen3.5-coder'
+  ]
+};
+const AGENT_NAMES = {
+  codex: '⬡ Codex', claude: '✳ Claude Code',
+  deepseek: '◈ DeepSeek', grok: '▣ 国产模型(Grok)'
+};
+const AGENT_BADGES = { codex: 'Codex', claude: 'Claude', deepseek: 'DeepSeek', grok: '国产模型' };
+/* deepseek 基于 claude CLI 运行;grok 引擎依赖 grok CLI */
+const agentCliInstalled = (env, agent) => {
+  if (agent === 'codex') return env?.codex;
+  if (agent === 'grok') return env?.grok;
+  return env?.claude;
 };
 const CUSTOM_MODEL = '__custom__';
 const EMPTY_QUEUE = []; // 稳定引用:避免 selector 每次返回新数组导致无限重渲染
 
+/* 自定义模型别名(与后端 customModelAlias / grokModelAlias 保持一致) */
+const customGrokAlias = (m) =>
+  `custom-${String(m.label || m.model || 'model').replace(/[^\p{L}\p{N}._-]+/gu, '-').replace(/^-+|-+$/g, '')}`;
+
 function ModelPicker({ agent, value, disabled, onChange }) {
-  const presets = MODEL_PRESETS[agent] || [];
-  const isPreset = value === '' || presets.includes(value);
+  const grokModels = useStore((s) => s.settings.grokModels || []);
+  // grok 引擎:预设 + 界面里配的自定义模型(值用别名,与 config.toml [model.<别名>] 对齐)
+  const customOptions = agent === 'grok'
+    ? grokModels.map((m) => ({ value: customGrokAlias(m), label: `${m.label}（自定义）` }))
+    : [];
+  const presets = [
+    ...(MODEL_PRESETS[agent] || []).map((m) => ({ value: m, label: m })),
+    ...customOptions
+  ];
+  const presetValues = presets.map((p) => p.value);
+  const isPreset = value === '' || presetValues.includes(value);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
 
@@ -482,8 +515,10 @@ function ModelPicker({ agent, value, disabled, onChange }) {
         if (e.target.value === CUSTOM_MODEL) { setDraft(value); setEditing(true); return; }
         onChange(e.target.value);
       }}>
-      <option value="">默认模型(跟随 CLI 配置)</option>
-      {presets.map((m) => <option key={m} value={m}>{m}</option>)}
+      <option value="">{
+        agent === 'deepseek' ? '默认(deepseek-v4-pro[1m])' :
+        agent === 'grok' ? '默认(DeepSeek v4-pro)' : '默认模型(跟随 CLI 配置)'}</option>
+      {presets.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
       <option value={CUSTOM_MODEL}>自定义…</option>
     </select>
   );
@@ -695,7 +730,7 @@ function SessionSetup({ hostId, onCancel }) {
       .catch(() => {});
   }, [hostId]);
 
-  const installed = env && (agent === 'codex' ? env.codex : env.claude);
+  const installed = env && agentCliInstalled(env, agent);
 
   const start = () => {
     if (permissionMode === 'system' && !window.confirm(
@@ -711,19 +746,24 @@ function SessionSetup({ hostId, onCancel }) {
         {onCancel && <button className="btn ghost" onClick={onCancel}>取消</button>}
       </div>
       <div className="agent-cards">
-        {['codex', 'claude'].map((a) => (
+        {['codex', 'claude', 'deepseek', 'grok'].map((a) => (
           <div key={a} className={`agent-card ${agent === a ? 'selected' : ''}`} onClick={() => setAgent(a)}>
-            <div className="agent-name">{a === 'codex' ? '⬡ Codex' : '✳ Claude Code'}</div>
+            <div className="agent-name">{AGENT_NAMES[a]}</div>
             <div className="muted small">
               {env == null ? '检测中...' :
-                (a === 'codex' ? env.codex : env.claude) ? `已安装 ${a === 'codex' ? env.codex : env.claude}` : '未安装'}
+                agentCliInstalled(env, a) ? `已安装 ${agentCliInstalled(env, a)}` : '未安装'}
             </div>
+            {a === 'deepseek' && <div className="muted small">deepseek-v4 · 基于 Claude Code CLI</div>}
+            {a === 'grok' && <div className="muted small">DeepSeek/GLM/Kimi/Qwen · 基于 grok CLI</div>}
           </div>
         ))}
       </div>
       {env && !installed && (
         <p className="error-text">
-          {hostId === 'local' ? '本机' : '远程'}未检测到 {agent},请先到「环境配置」页{hostId === 'local' ? '检查(本机请直接在终端安装)' : '一键安装'}。
+          {hostId === 'local' ? '本机' : '远程'}未检测到 {
+            agent === 'deepseek' ? 'claude(DeepSeek 基于 Claude Code CLI 运行)' :
+            agent === 'grok' ? 'grok CLI(国产模型引擎依赖它运行)' : agent
+          },请先到「环境配置」页{hostId === 'local' ? '检查(本机请直接在终端安装)' : '一键安装'}。
           <button className="btn small" onClick={() => useStore.getState().setTab('setup')}>去检查</button>
         </p>
       )}
@@ -732,7 +772,10 @@ function SessionSetup({ hostId, onCancel }) {
         <label>工作目录({hostId === 'local' ? '本机' : '远程'})
           <RemoteDirPicker hostId={hostId} value={cwd} onChange={setCwd} />
         </label>
-        <label>模型(可选)<input value={model} onChange={(e) => setModel(e.target.value)} placeholder={agent === 'codex' ? '如 gpt-5-codex' : '如 sonnet / opus'} /></label>
+        <label>模型(可选)<input value={model} onChange={(e) => setModel(e.target.value)} placeholder={
+          agent === 'codex' ? '如 gpt-5-codex' :
+          agent === 'deepseek' ? '默认 deepseek-v4-pro[1m]' :
+          agent === 'grok' ? '默认 deepseek/deepseek-v4-pro' : '如 sonnet / opus'} /></label>
         <div className="system-mode-setting">
           <label className="row checkbox">
             <input

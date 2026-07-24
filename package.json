@@ -1,6 +1,6 @@
 {
   "name": "remote-agent-studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "图形化 SSH 远程 AI 编程客户端:一键连接远程开发机,自动配置代理、自动安装并对话式使用 Codex / Claude Code,可视化文件传输",
   "main": "electron/main.js",
   "author": "yingchaozhou",
@@ -19,6 +19,7 @@
     "format:check": "prettier --check \"{electron,src,test,scripts}/**/*.{js,jsx}\""
   },
   "dependencies": {
+    "electron-updater": "^6.3.9",
     "ssh2": "^1.16.0"
   },
   "devDependencies": {
@@ -40,12 +41,19 @@
   "build": {
     "appId": "com.yingchao.remoteagentstudio",
     "productName": "Remote Agent Studio",
+    "directories": { "output": "dist_electron" },
     "files": [
       "electron/**/*",
       "dist/**/*",
       "package.json"
     ],
-    "mac": { "target": "dmg" },
+    "publish": { "provider": "github", "owner": "zhouyingchaoAI", "repo": "remote-agent-studio" },
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": true
+    },
     "win": { "target": "nsis" },
     "linux": { "target": "AppImage" }
   }

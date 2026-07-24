@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('api', {
     detect: invoke('setup:detect'),
     installAgent: invoke('setup:installAgent'),
     setApiKey: invoke('setup:setApiKey'),
+    setEnvKey: invoke('setup:setEnvKey'),
+    syncGrokConfig: invoke('setup:syncGrokConfig'),
     syncAuth: invoke('setup:syncAuth'),
     detectLocalCodex: invoke('setup:detectLocalCodex'),
     testRemoteAgent: invoke('setup:testRemoteAgent'),

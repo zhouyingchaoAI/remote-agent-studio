@@ -1,83 +1,93 @@
 # Remote Agent Studio 🛰️
 
-图形化 SSH 远程 AI 编程客户端:填一条 SSH 连接信息,就能在远程开发机(或本机)上**对话式使用 Codex / Claude Code**,并自动完成网络代理配置、CLI 安装与认证下发,相当于给 Codex / Claude Code 加上了"远程模式"。
+**Your AI coding agents, on any machine.** One-click SSH to a remote dev box, automatic environment setup, and a native desktop chat UI for **Codex, Claude Code, DeepSeek, and Chinese LLMs (GLM / Kimi / Qwen via grok CLI)** — with streaming output, diff review, and full file/terminal access.
 
-## 功能
+[English](README.md) · [简体中文](README.zh-CN.md)
 
-### 对话
-- **双引擎同对话切换** — Codex ↔ Claude Code 随时切换,自动上下文接力(注入对话摘要),共用一份聊天记录
-- **流式输出** — token 级增量渲染;思考过程、命令执行、文件修改(红绿 diff)、成本统计都有独立气泡
-- **模型可切换** — 预设 + 自定义模型名,对话中途切换立即生效,上下文保留
-- **排队发送** — 执行中继续发消息自动排队,逐条执行;可移出队列
-- **全自动模式** — 模型请求确认时自动回复继续(连续 5 次熔断防失控)
-- **选项/确认按钮** — "1. xxx / 2. xxx"式选项和"请确认"类提问自动生成可点击按钮
-- **Markdown 渲染** — 聊天气泡与 .md 文件预览均为阅读模式;消息里的文件路径可点击直接预览
-- **截图/附件** — ⌘V 直接粘贴截图(带缩略图预览),附件上传后 codex 以 `--image` 真正看图
-- **搜索与导出** — 会话全文搜索;一键导出对话为 Markdown
-- **用量统计** — 对话头部实时累计 token 与费用
-- **多轮续聊** — codex 按会话 ID 精确 resume,claude 按 session 续聊,跨重启不丢
+<!-- Badges: replace OWNER/REPO after pushing to GitHub -->
+[![CI](https://github.com/zhouyingchaoAI/remote-agent-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/zhouyingchaoAI/remote-agent-studio/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/zhouyingchaoAI/remote-agent-studio)](https://github.com/zhouyingchaoAI/remote-agent-studio/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue)
 
-### 连接与环境
-- **主机管理** — 多台 SSH 主机(密码/私钥),凭据经系统钥匙串加密存储
-- **主机指纹校验(TOFU)** — 首次记录指纹,变更时强制人工确认,防中间人攻击
-- **断线自动重连** — 指数退避重连并自动重建反向隧道
-- **自动配置网络代理** — SSH 反向隧道 / 局域网代理直连两种模式,连接后自动应用与连通性测试
-- **一键安装/升级** — 远程缺 Node 走 nvm 免 root 安装;codex 优先官方独立二进制(直连失败自动走代理断点续传,SHA-256 校验);本机走 npm
-- **认证下发** — 本机 `~/.codex/auth.json` 一键复制到远程,免登录;API Key 存 600 权限独立文件,不落 bashrc 明文
-- **本地模式** — 无需 SSH 直接在本机运行,环境与你的终端完全同源(交互式登录 shell 环境抓取)
+<!-- DEMO GIF: 30s, from "paste SSH info" to "agent streams a code edit". See docs/发布指南.md for the storyboard. -->
+<!-- ![Demo](docs/assets/demo.gif) -->
 
-### 文件与终端
-- **文件树 + 双栏 SFTP** — 侧边栏文件树默认打开项目目录;点击文件直接预览(文本/图片/Markdown 阅读模式)
-- **可视化传输** — 拖拽上传、进度条、失败重试、远程建目录/删除
-- **多标签终端** — 每个标签独立 shell,自动加载代理与 agent 环境,可跑 `codex login` 等交互命令
+## Why Remote Agent Studio?
 
-### 可靠性
-- 主进程崩溃日志落盘(`userData/logs/`),环境配置页一键导出诊断信息
-- 对话历史按会话分文件持久化,原子写入,崩溃不丢
-- GitHub Actions CI(Ubuntu + macOS 测试与构建)
+Every other agent GUI assumes your agent runs on *this* machine. Real work often lives elsewhere: a GPU box, a company intranet server, a cloud VM. Remote Agent Studio makes the **remote machine a first-class citizen**:
 
-## 运行
+- **One SSH entry → working agent.** Auto-detects the remote environment, installs Node.js (rootless via nvm) and the agent CLIs, configures network proxying (reverse tunnel or LAN direct), and syncs your local auth — no manual setup on the box.
+- **Four engines, one conversation.** Switch between Codex ↔ Claude Code ↔ DeepSeek ↔ Chinese models (grok CLI) mid-conversation; context is handed off automatically via injected summaries.
+- **First-class Chinese LLM support.** DeepSeek V4 via its official Anthropic-compatible endpoint; GLM / Kimi / Qwen / any OpenAI-compatible relay via [grok CLI](https://github.com/xai-org/grok-build) custom models — all configured from the GUI, keys stored in a 600-permission env file, never in plaintext config.
+- **Desktop-grade UX.** Token-level streaming, reasoning bubbles, red/green diffs, cost tracking, message queueing, auto-approve with a circuit breaker, clickable option buttons, screenshot paste, full-text search, Markdown export.
+- **Trustworthy plumbing.** SSH host-key verification (TOFU), auto-reconnect with backoff, precise session resume across restarts, crash logs, atomic conversation persistence.
+
+## Features
+
+| Area | What you get |
+|---|---|
+| Chat | 4 engines with mid-conversation switching & context handoff, streaming output, thinking/tool/diff/cost bubbles, queued sends, auto-confirm (5-strike breaker), option buttons, attachments with image support, search & Markdown export |
+| Engines | Codex CLI, Claude Code CLI, DeepSeek (Anthropic-compatible endpoint), grok CLI with GUI-managed custom endpoints for GLM / Kimi / Qwen / DeepSeek / relays |
+| Connection | Multi-host SSH (password/key, credentials in OS keychain), host fingerprint TOFU, auto-reconnect, reverse-tunnel or LAN proxy auto-config with connectivity tests, local mode (no SSH, shell-identical env) |
+| Setup | One-click install/upgrade of all CLIs (rootless Node via nvm; official standalone binaries with proxy fallback + SHA-256 verify), local auth sync to remote, API key management |
+| Files & Terminal | File tree + dual-pane SFTP, drag-and-drop transfers with progress/retry, text/image/Markdown preview, multi-tab terminals with agent env preloaded |
+| Reliability | Crash logs to disk, one-click diagnostics export, per-conversation atomic persistence, CI on Ubuntu + macOS, 95+ unit tests |
+
+## Quick Start
+
+**Download** the latest release for macOS / Windows / Linux from [Releases](https://github.com/zhouyingchaoAI/remote-agent-studio/releases), or run from source:
 
 ```bash
+git clone https://github.com/zhouyingchaoAI/remote-agent-studio.git
+cd remote-agent-studio
 npm install
-npm run dev      # 开发模式(vite + electron)
-npm run start    # 构建后运行
-npm run dist     # 打包安装包(dmg/nsis/AppImage)
-npm test         # 单元测试
+npm run dev        # development (vite + electron)
+npm run dist       # package installers (dmg / nsis / AppImage)
 ```
 
-macOS 也可直接双击 `启动.command`(会自动检测并修复从其他平台拷贝的 node_modules)。
+Then, in the app:
 
-## 使用流程
+1. **Add a host** — IP / port / user + password or private key. Or pick **Local** to run on this machine with your exact shell environment.
+2. **Setup page** — apply proxy config if needed → one-click install Codex / Claude Code / grok CLI → sync auth or paste API keys.
+3. **Chat** — pick an engine and a working directory, and start talking. Switch engine or model anytime.
+4. **Files / Terminal** — transfer files, run interactive commands.
 
-1. **添加主机** → 填 IP/端口/用户名 + 密码或私钥 → 保存并连接(或直接用「本地(本机)」)
-2. **环境配置页** → 按需应用代理 → 一键安装/升级 Codex / Claude Code → 下发认证或写入 API Key
-3. **对话页** → 选 agent、选工作目录 → 开始对话;可随时切换引擎/模型、开全自动
-4. **文件页 / 终端页** → 传文件、跑交互命令
+Using DeepSeek or other Chinese models? See the [Chinese LLM setup guide](docs/国产模型接入指南.md) (English summary inside).
 
-## 架构
+## Architecture
 
 ```
 electron/
-  main.js            IPC 路由、窗口、指纹校验、文件预览、诊断导出
-  preload.js         contextBridge 安全暴露 API
-  store.js           主机/对话/代理/指纹持久化(safeStorage 加密)
-  logger.js          主进程日志与异常兜底
-  LocalExecutor.js   本地模式执行器(终端同源环境解析)
-  chat/              附件与生成图片回收(路径安全校验)
+  main.js            IPC routing, windows, fingerprint checks, previews, diagnostics
+  preload.js         contextBridge API surface
+  store.js           hosts / conversations / proxies / fingerprints (safeStorage-encrypted)
+  LocalExecutor.js   local mode executor (login-shell env capture)
+  chat/              attachment & generated-image handling (path-safety checks)
   ssh/
-    SSHManager.js    ssh2 连接 / exec / 多 shell / SFTP / 反向隧道 / 自动重连
-    ProxyService.js  代理配置(隧道 + 环境变量 + 连通性测试)
-    Installer.js     远程环境检测、安装/升级 codex 与 claude
-    AgentSession.js  codex/claude 流式 JSON 事件 → 统一聊天消息(含增量/diff/用量)
-src/                 React 界面(zustand 状态)
-  components/        Sidebar / HostForm / ChatPanel / FilePanel / TerminalPanel / SetupPanel / FilePreview / Markdown
-test/                node:test 单元测试(70+ 用例)
-docs/                优化计划等文档
+    SSHManager.js    ssh2 connect / exec / shells / SFTP / reverse tunnel / reconnect
+    ProxyService.js  proxy config (tunnel + env + connectivity tests)
+    Installer.js     remote env detection, CLI install/upgrade, grok config management
+    AgentSession.js  codex / claude / grok stream-JSON events → unified chat messages
+    deepseek.js      DeepSeek Anthropic-compatible endpoint injection
+    grokProviders.js Chinese LLM provider registry + managed grok config generation
+src/                 React UI (zustand state)
+test/                node:test suites (95+ cases)
 ```
 
-## 安全说明
+Each conversation turn is one non-interactive streaming exec (`codex exec --json` / `claude -p --output-format stream-json` / `grok -p --output-format streaming-json`) with precise session resume — no fragile PTY scraping.
 
-- 「系统权限 / System Mode」会让 agent 绕过沙箱在远程任意执行命令,仅在可信环境使用
-- 全自动模式会替你确认模型的继续请求,连续 5 次后自动暂停,请留意其执行内容
-- 主机指纹变更告警出现时,请先向服务器管理员核实,再决定是否信任
+## Security Notes
+
+- **System Mode** lets the agent bypass sandboxing on the remote host. Use only in trusted environments.
+- Auto-confirm replies to the model's continue-prompts for you; it pauses after 5 consecutive confirmations. Watch what it does.
+- On a host fingerprint change alert, verify with your server admin before trusting.
+- API keys are stored in a 600-permission env file on the remote (never in shell rc files or config plaintext); local credentials use the OS keychain.
+
+## Contributing
+
+PRs welcome — adding a model provider is a ~10-line change. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+[MIT](LICENSE)

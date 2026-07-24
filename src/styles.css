@@ -176,6 +176,8 @@ input[type="checkbox"], input[type="radio"] { width: auto; }
 }
 .badge.codex { color: #6ee7b7; }
 .badge.claude { color: #d8b4fe; }
+.badge.deepseek { color: #93b4ff; }
+.badge.grok { color: #f2a8a8; }
 .badge.warn { color: var(--yellow); border-color: var(--yellow); }
 .badge.system-mode { color: #fecaca; border-color: var(--red); background: rgba(255,92,92,0.12); }
 .permission-switch { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--text); font-size: 12px; white-space: nowrap; cursor: pointer; }
@@ -290,6 +292,20 @@ progress { width: 140px; height: 6px; }
 .agent-select { padding: 4px 8px; font-size: 12px; font-weight: 600; border-radius: 6px; }
 .agent-select.codex { color: #7dd3a8; }
 .agent-select.claude { color: #d8a86c; }
+.agent-select.deepseek { color: #93b4ff; }
+.agent-select.grok { color: #f2a8a8; }
+
+/* 国产模型端点管理 */
+.grok-presets { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.grok-preset-row, .grok-custom-row { display: flex; align-items: center; gap: 8px; }
+.grok-preset-row input { flex: 1; }
+.grok-preset-name { min-width: 96px; font-weight: 600; }
+.grok-add { margin: 10px 0; }
+.grok-add summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+.grok-add-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
+.grok-add-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.grok-custom-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.grok-custom-row { padding: 4px 0; border-top: 1px solid var(--border); }
 .auto-switch input { accent-color: var(--accent, #4c8bf5); }
 /* diff 渲染 */
 .diff-view { margin: 6px 0 0; padding: 8px 0; background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; line-height: 1.5; overflow-x: auto; }

@@ -1,6 +1,8 @@
 /**
- * Installer - 远程环境检测与 codex / claude code 自动安装
+ * Installer - 远程环境检测与 codex / claude code / grok 自动安装
  */
+const { buildGrokConfigBlock, BLOCK_BEGIN, BLOCK_END } = require('./grokProviders');
+
 class Installer {
   constructor(ssh, proxyService) {
     this.ssh = ssh;
@@ -19,9 +21,10 @@ class Installer {
       [ -s "$HOME/.remote-agent-node-env.sh" ] && . "$HOME/.remote-agent-node-env.sh";
       command -v node >/dev/null 2>&1 && echo "NODE=$(node -v)" || echo "NODE=";
       command -v npm  >/dev/null 2>&1 && echo "NPM=$(npm -v)"  || echo "NPM=";
-      export PATH="$PATH:$HOME/.npm-global/bin:$HOME/.local/bin";
+      export PATH="$PATH:$HOME/.npm-global/bin:$HOME/.local/bin:$HOME/.grok/bin";
       command -v codex  >/dev/null 2>&1 && echo "CODEX=$(codex --version 2>/dev/null | head -1)"  || echo "CODEX=";
       command -v claude >/dev/null 2>&1 && echo "CLAUDE=$(claude --version 2>/dev/null | head -1)" || echo "CLAUDE=";
+      command -v grok   >/dev/null 2>&1 && echo "GROK=$(grok --version 2>/dev/null | head -1)"   || echo "GROK=";
     `;
     const { stdout } = await this.ssh.exec(script);
     const get = (k) => (stdout.match(new RegExp(`^${k}=(.*)$`, 'm')) || [])[1]?.trim() || '';
@@ -30,7 +33,8 @@ class Installer {
       node: get('NODE'),
       npm: get('NPM'),
       codex: get('CODEX'),
-      claude: get('CLAUDE')
+      claude: get('CLAUDE'),
+      grok: get('GROK')
     };
   }
 
@@ -113,6 +117,21 @@ class Installer {
    * 全程带代理环境;由 nvm 管理 Node 与 npm 的全局安装目录
    */
   async installAgent(agent, log) {
+    // grok:官方独立安装脚本(二进制,无需 Node.js)
+    if (agent === 'grok') {
+      if (this.ssh.isWindowsNative) {
+        throw new Error('Windows 本机请在 PowerShell 手动执行: irm https://x.ai/cli/install.ps1 | iex');
+      }
+      log('安装/升级 grok CLI(官方脚本,独立二进制)...\n');
+      const r = await this.ssh.exec(
+        `${this._env()} curl -fsSL https://x.ai/cli/install.sh | bash && ` +
+        'export PATH="$HOME/.grok/bin:$HOME/.local/bin:$PATH" && grok --version',
+        { onStdout: log, onStderr: log }
+      );
+      if (r.code !== 0) throw new Error(`grok 安装失败 (exit ${r.code}),请查看日志`);
+      log('grok 安装完成 ✓\n');
+      return this.detect();
+    }
     const pkg = agent === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-code';
 
     // 本机(macOS/Linux)安装/升级:直接用本机 npm(与用户终端同环境),
@@ -235,12 +254,27 @@ class Installer {
    * bashrc 只追加一行 source,agent 命令与终端都会显式加载该文件。
    */
   async setApiKey(agent, key, log) {
+    const varName = {
+      claude: 'ANTHROPIC_API_KEY',
+      codex: 'OPENAI_API_KEY',
+      deepseek: 'DEEPSEEK_API_KEY',
+      glm: 'ZHIPU_API_KEY',
+      kimi: 'MOONSHOT_API_KEY',
+      qwen: 'DASHSCOPE_API_KEY'
+    }[agent] || 'OPENAI_API_KEY';
+    return this.setEnvKey(varName, key, log);
+  }
+
+  /** 把任意环境变量(如自定义 provider 的 env_key)写入远程 600 权限 env 文件 */
+  async setEnvKey(varName, key, log = () => {}) {
     const trimmed = String(key || '').trim();
     // 只允许安全字符,防止拼进 shell 时被注入
     if (!/^[A-Za-z0-9_.\-]+$/.test(trimmed)) {
       throw new Error('API Key 含空格或特殊字符,请检查后重试');
     }
-    const varName = agent === 'claude' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(varName || ''))) {
+      throw new Error('环境变量名不合法(仅字母/数字/下划线,不以数字开头)');
+    }
     const envFile = '~/.remote-agent-env.sh';
     await this.ssh.exec(
       `touch ${envFile} && chmod 600 ${envFile} && ` +
@@ -254,6 +288,24 @@ class Installer {
       `printf '%s\\n' '[ -s "$HOME/.remote-agent-env.sh" ] && . "$HOME/.remote-agent-env.sh"' >> ~/.bashrc`
     );
     log(`${varName} 已写入 ${envFile}(600 权限,不落 bashrc 明文)\n`);
+  }
+
+  /**
+   * 确保 ~/.grok/config.toml 含国产模型受管块(预设 + 本次会话的自定义规格)。
+   * 整块按标记重写,块外的用户自有配置不动。API Key 走 env_key,不落 config 明文。
+   */
+  async ensureGrokConfig(extraDefs = []) {
+    if (this.ssh.isWindowsNative) return; // Windows 本机暂不自动写 config
+    const block = buildGrokConfigBlock(extraDefs);
+    // base64 传输,避免 TOML 引号/特殊字符经手 shell 转义
+    const b64 = Buffer.from(block + '\n', 'utf8').toString('base64');
+    await this.ssh.exec(
+      'mkdir -p ~/.grok && touch ~/.grok/config.toml && ' +
+      `awk 'index($0,"${BLOCK_BEGIN}"){skip=1;next} index($0,"${BLOCK_END}"){skip=0;next} !skip' ` +
+      '~/.grok/config.toml > ~/.grok/config.toml.ras-tmp && ' +
+      'mv ~/.grok/config.toml.ras-tmp ~/.grok/config.toml && ' +
+      `printf '%s' '${b64}' | base64 -d >> ~/.grok/config.toml`
+    );
   }
 }
 

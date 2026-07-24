@@ -27,7 +27,7 @@ export const useStore = create((set, get) => ({
   queued: {},           // convId -> [{id,text,files}] 排队待发送的消息
   setupLogs: {},        // hostId -> string
   envInfo: {},          // hostId -> {os,node,npm,codex,claude}
-  settings: { theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5 },
+  settings: { theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5, grokModels: [] },
   showSettings: false,
 
   setShowSettings: (v) => set({ showSettings: v }),
@@ -59,7 +59,7 @@ export const useStore = create((set, get) => ({
       agent: opts.agent, cwd: opts.cwd || '', model: opts.model || '',
       permissionMode: normalizePermissionMode(opts),
       autoApprove: !!opts.autoApprove,
-      messages: [], claudeSessionId: null, codexSessionId: null, codexStarted: false,
+      messages: [], claudeSessionId: null, codexSessionId: null, codexStarted: false, grokSessionId: null,
       createdAt: Date.now(), updatedAt: Date.now()
     };
     set((s) => ({
@@ -144,7 +144,7 @@ export const useStore = create((set, get) => ({
     persist();
   },
 
-  updateConvResume: (convId, { claudeSessionId, codexSessionId, codexStarted, lastTurnAgent }) => {
+  updateConvResume: (convId, { claudeSessionId, codexSessionId, codexStarted, grokSessionId, lastTurnAgent }) => {
     set((s) => {
       const c = s.conversations[convId];
       if (!c) return {};
@@ -152,7 +152,7 @@ export const useStore = create((set, get) => ({
         conversations: {
           ...s.conversations,
           [convId]: {
-            ...c, claudeSessionId, codexSessionId, codexStarted,
+            ...c, claudeSessionId, codexSessionId, codexStarted, grokSessionId,
             ...(lastTurnAgent ? { lastTurnAgent } : {})
           }
         }
@@ -170,15 +170,18 @@ export const useStore = create((set, get) => ({
     persist();
   },
 
-  /** 同一对话内切换引擎(codex <-> claude):目标引擎开新会话,首条消息会自动带上下文接力 */
+  /** 同一对话内切换引擎(codex / claude / deepseek):目标引擎开新会话,首条消息会自动带上下文接力 */
   updateConversationAgent: (convId, agent) => {
     set((s) => {
       const c = s.conversations[convId];
       if (!c || c.agent === agent) return {};
       // 清空目标引擎的 resume(它没经历过中间的对话,旧会话已脱节),模型恢复默认
-      const cleared = agent === 'claude'
-        ? { claudeSessionId: null }
-        : { codexSessionId: null, codexStarted: false };
+      // claude 与 deepseek 共用 claude CLI 的会话机制(claudeSessionId)
+      const cleared = agent === 'codex'
+        ? { codexSessionId: null, codexStarted: false }
+        : agent === 'grok'
+          ? { grokSessionId: null }
+          : { claudeSessionId: null };
       return {
         conversations: {
           ...s.conversations,

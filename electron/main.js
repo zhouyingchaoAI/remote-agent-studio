@@ -7,6 +7,8 @@ const { SSHManager } = require('./ssh/SSHManager');
 const { ProxyService } = require('./ssh/ProxyService');
 const { Installer } = require('./ssh/Installer');
 const { AgentSession } = require('./ssh/AgentSession');
+const { deepseekEnvPosix, DEEPSEEK_DEFAULT_MODEL } = require('./ssh/deepseek');
+const { GROK_DEFAULT_MODEL, parseGrokSpec } = require('./ssh/grokProviders');
 const { LocalExecutor } = require('./LocalExecutor');
 const { AttachmentService } = require('./chat/AttachmentService');
 const {
@@ -97,9 +99,34 @@ function createWindow() {
   else win.loadFile(path.join(__dirname, '../dist/index.html'));
 }
 
+/** 自动更新:仅打包版启用;GitHub Releases 通道;任何失败静默(不打扰用户) */
+function initAutoUpdater() {
+  if (!app.isPackaged) return;
+  try {
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.autoDownload = true;
+    autoUpdater.on('update-downloaded', (info) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      if (!win) return;
+      dialog.showMessageBox(win, {
+        type: 'info',
+        message: `新版本 ${info.version} 已下载`,
+        detail: '重启应用即可完成更新。',
+        buttons: ['立即重启', '稍后'],
+        defaultId: 0
+      }).then(({ response }) => { if (response === 0) autoUpdater.quitAndInstall(); });
+    });
+    autoUpdater.on('error', () => {}); // 网络/未发布版本等,静默
+    autoUpdater.checkForUpdates().catch(() => {});
+    // 之后每 6 小时检查一次
+    setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 6 * 60 * 60 * 1000);
+  } catch (_) { /* electron-updater 未安装(源码运行)时跳过 */ }
+}
+
 app.whenReady().then(() => {
   require('./logger').initLogger(app.getPath('userData'));
   createWindow();
+  initAutoUpdater();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
@@ -241,6 +268,23 @@ ipcMain.handle('setup:setApiKey', async (_e, { hostId, agent, key }) => {
   return true;
 });
 
+/** 图形界面:写入自定义 provider 的任意 env 变量(如中转站 key) */
+ipcMain.handle('setup:setEnvKey', async (_e, { hostId, envKey, key }) => {
+  const s = getSession(hostId);
+  const log = (t) => send('setup:log', { hostId, text: t });
+  await s.installer.setEnvKey(envKey, key, log);
+  return true;
+});
+
+/** 图形界面:把当前国产模型配置(预设 + 自定义)同步写入远程 ~/.grok/config.toml */
+ipcMain.handle('setup:syncGrokConfig', async (_e, { hostId }) => {
+  const s = getSession(hostId);
+  const log = (t) => send('setup:log', { hostId, text: t });
+  await s.installer.ensureGrokConfig(loadSettings().grokModels || []);
+  log('已同步国产模型配置到远程 ~/.grok/config.toml ✓\n');
+  return true;
+});
+
 /** 本机认证文件下发到远程(codex: ~/.codex/auth.json 等) */
 const AUTH_SYNC = {
   codex: [
@@ -249,7 +293,9 @@ const AUTH_SYNC = {
   ],
   claude: [
     { rel: '.claude/.credentials.json', required: false, mode: '600' }
-  ]
+  ],
+  deepseek: [], // 无认证文件,走 DEEPSEEK_API_KEY(~/.remote-agent-env.sh)
+  grok: []      // 国产模型走各家 env_key,无 xAI 认证文件可下发
 };
 
 /** 检测本机 Codex 是否已配置(CLI 版本 + auth.json 有效性) */
@@ -376,6 +422,16 @@ async function testRemoteAgent(s, agent, log) {
   if (agent === 'codex') {
     cmd = `${env} cd "$HOME" && codex exec --skip-git-repo-check --sandbox read-only ` +
       `'仅回复两个字:可用' 2>&1 </dev/null`;
+  } else if (agent === 'deepseek') {
+    // claude CLI + DeepSeek Anthropic 兼容端点
+    cmd = `${env} ${deepseekEnvPosix()} cd "$HOME" && ` +
+      `claude -p --permission-mode plan --model '${DEEPSEEK_DEFAULT_MODEL}' '仅回复两个字:可用' 2>&1 </dev/null`;
+  } else if (agent === 'grok') {
+    // grok CLI + 国产模型自定义端点;先确保 config 受管块存在
+    await s.installer.ensureGrokConfig(loadSettings().grokModels || []).catch(() => {});
+    const alias = parseGrokSpec(GROK_DEFAULT_MODEL).alias;
+    cmd = `${env} export PATH="$HOME/.grok/bin:$PATH"; cd "$HOME" && ` +
+      `grok --output-format json -m '${alias}' --sandbox read-only -p '仅回复两个字:可用' 2>&1 </dev/null`;
   } else {
     cmd = `${env} cd "$HOME" && claude -p --permission-mode plan '仅回复两个字:可用' 2>&1 </dev/null`;
   }
@@ -478,16 +534,27 @@ ipcMain.handle('convos:list', () => loadConvos());
 ipcMain.handle('convos:save', (_e, convos) => { saveConvos(convos); return true; });
 
 /* ---------------- Agent 对话(按 convId 隔离) ---------------- */
-ipcMain.handle('agent:start', (_e, { hostId, convId, opts, resume }) => {
+ipcMain.handle('agent:start', async (_e, { hostId, convId, opts, resume }) => {
   const s = getSession(hostId);
   const existing = s.agents.get(convId);
   if (existing) existing.cancel();
+  // grok 引擎:启动前确保 ~/.grok/config.toml 含国产模型受管块(预设 + 界面里配的自定义模型)
+  if (opts?.agent === 'grok') {
+    const custom = loadSettings().grokModels || [];
+    await s.installer.ensureGrokConfig(custom).catch((e) => {
+      send('agent:message', {
+        hostId, convId,
+        msg: { kind: 'stderr', text: `写入 ~/.grok/config.toml 失败: ${e.message}` }
+      });
+    });
+  }
   const agent = new AgentSession(s.ssh, s.proxy, opts);
   // 恢复上次会话的 resume 状态,实现跨重启续聊
   if (resume) {
     agent.claudeSessionId = resume.claudeSessionId || null;
     agent.codexSessionId = resume.codexSessionId || null;
     agent.codexStarted = !!resume.codexStarted;
+    agent.grokSessionId = resume.grokSessionId || null;
   }
   agent.on('message', (msg) => {
     // 在每轮结束时附带最新 resume 状态,供渲染层持久化
@@ -495,6 +562,7 @@ ipcMain.handle('agent:start', (_e, { hostId, convId, opts, resume }) => {
       msg.claudeSessionId = agent.claudeSessionId;
       msg.codexSessionId = agent.codexSessionId;
       msg.codexStarted = agent.codexStarted;
+      msg.grokSessionId = agent.grokSessionId;
       msg.agent = agent.opts.agent; // 本轮实际执行的引擎
     }
     send('agent:message', { hostId, convId, msg });
@@ -534,6 +602,7 @@ ipcMain.handle('agent:send', async (_e, { hostId, convId, messageId, prompt, att
       claudeSessionId: agent.claudeSessionId,
       codexSessionId: agent.codexSessionId,
       codexStarted: agent.codexStarted,
+      grokSessionId: agent.grokSessionId,
       agent: agent.opts.agent
     }
   });

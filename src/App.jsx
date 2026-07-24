@@ -60,6 +60,7 @@ export default function App() {
           claudeSessionId: msg.claudeSessionId,
           codexSessionId: msg.codexSessionId,
           codexStarted: msg.codexStarted,
+          grokSessionId: msg.grokSessionId,
           lastTurnAgent: msg.agent
         });
         // 有排队消息则自动发送下一条

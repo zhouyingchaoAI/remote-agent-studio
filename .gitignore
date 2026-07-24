@@ -1,6 +1,7 @@
 # 依赖与构建产物
 node_modules/
 dist/
+dist_electron/
 release/
 *.tsbuildinfo
 
@@ -29,3 +30,11 @@ Thumbs.db
 .superpowers/
 .agents/
 .worktrees/
+
+# 个人工作文件(与项目无关,不入库)
+WAIC_*
+waic_screenshots/
+generated_ppt_pages*/
+build_trip_report.py
+workspace/
+出差报告*.docx
