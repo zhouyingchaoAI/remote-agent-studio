@@ -130,36 +130,71 @@ class SSHManager extends EventEmitter {
     if (this.reconnectTimer.unref) this.reconnectTimer.unref();
   }
 
+  /** 是否为"通道开不出来"类错误(sshd MaxSessions 占满时的典型报错) */
+  static isChannelExhausted(err) {
+    return /channel open failure|open failed|administratively prohibited|resource shortage/i
+      .test(String(err?.message || err || ''));
+  }
+
+  /** 释放可随时重建的 SFTP 通道,给新命令腾出名额 */
+  _releaseSftp() {
+    if (!this.sftpSession) return false;
+    try { this.sftpSession.end(); } catch (_) {}
+    this.sftpSession = null;
+    return true;
+  }
+
+  /**
+   * 打开 exec 通道;通道耗尽时先回收 SFTP 通道再退避重试,
+   * 仍失败则抛出可操作的中文提示(而不是 ssh2 的 "open failed")。
+   */
+  async _openExec(command, channelOpts = {}) {
+    const MAX_ATTEMPTS = 3;
+    let lastErr;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        return await new Promise((resolve, reject) => {
+          if (!this.client) return reject(new Error('未连接'));
+          this.client.exec(command, channelOpts, (err, stream) => (err ? reject(err) : resolve(stream)));
+        });
+      } catch (err) {
+        lastErr = err;
+        if (!SSHManager.isChannelExhausted(err)) throw err;
+        this._releaseSftp(); // 回收一个通道名额
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+      }
+    }
+    throw new Error(
+      'SSH 通道已用尽,无法执行新命令。\n' +
+      '常见原因:远程 sshd 的 MaxSessions(默认 10)被终端标签、后台任务占满。\n' +
+      '处理:关闭多余的「终端」标签后重试;或在远程 /etc/ssh/sshd_config 调大 MaxSessions 后 reload sshd。\n' +
+      `原始错误:${lastErr?.message || lastErr}`
+    );
+  }
+
   /** 执行命令,整体返回 {code, stdout, stderr} */
-  exec(command, opts = {}) {
-    return new Promise((resolve, reject) => {
-      if (!this.client) return reject(new Error('未连接'));
-      this.client.exec(command, { pty: opts.pty || false }, (err, stream) => {
-        if (err) return reject(err);
-        let stdout = '', stderr = '';
-        stream.on('data', (d) => {
-          stdout += d.toString();
-          if (opts.onStdout) opts.onStdout(d.toString());
-        });
-        stream.stderr.on('data', (d) => {
-          stderr += d.toString();
-          if (opts.onStderr) opts.onStderr(d.toString());
-        });
-        stream.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
-        if (opts.stdin != null) { stream.write(opts.stdin); stream.end(); }
+  async exec(command, opts = {}) {
+    const stream = await this._openExec(command, { pty: opts.pty || false });
+    return new Promise((resolve) => {
+      let stdout = '', stderr = '';
+      stream.on('data', (d) => {
+        stdout += d.toString();
+        if (opts.onStdout) opts.onStdout(d.toString());
       });
+      stream.stderr.on('data', (d) => {
+        stderr += d.toString();
+        if (opts.onStderr) opts.onStderr(d.toString());
+      });
+      stream.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
+      if (opts.stdin != null) { stream.write(opts.stdin); stream.end(); }
     });
   }
 
   /** 流式执行,返回 stream 句柄(供 AgentSession 使用) */
   execStream(command) {
-    return new Promise((resolve, reject) => {
-      if (!this.client) return reject(new Error('未连接'));
-      this.client.exec(command, (err, stream) => {
-        if (err) return reject(err);
-        resolve(stream);
-      });
-    });
+    return this._openExec(command, {});
   }
 
   /** 打开交互 shell(支持多终端标签,按 termId 区分) */
@@ -349,12 +384,23 @@ class SSHManager extends EventEmitter {
     if (!t) return rejectConn();
     const stream = accept();
     const socket = net.connect(t.targetPort, t.targetHost);
-    socket.on('connect', () => { stream.pipe(socket); socket.pipe(stream); });
-    const cleanup = () => { try { stream.end(); } catch (_) {} try { socket.end(); } catch (_) {} };
+    // 连接阶段设超时:代理不可达时不让通道/套接字悬挂累积
+    socket.setTimeout(15000);
+    // 用 destroy 强制回收(end 是半关闭,对端不响应时通道会一直挂着)
+    const cleanup = () => {
+      try { stream.destroy(); } catch (_) { try { stream.end(); } catch (_) {} }
+      try { socket.destroy(); } catch (_) {}
+    };
+    socket.on('connect', () => {
+      socket.setTimeout(0); // 建连后取消超时,长连接正常传输
+      stream.pipe(socket);
+      socket.pipe(stream);
+    });
+    socket.on('timeout', cleanup);
     socket.on('error', cleanup);
     stream.on('error', cleanup);
-    stream.on('close', () => socket.end());
-    socket.on('close', () => stream.end());
+    stream.on('close', cleanup);
+    socket.on('close', cleanup);
   }
 }
 

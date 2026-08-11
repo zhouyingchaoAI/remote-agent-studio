@@ -1,5 +1,6 @@
+// 注意:渲染进程默认沙箱化,preload 只能 require('electron') 等白名单模块,
+// 不能 require 相对路径文件(会抛错导致 window.api 未暴露 → 白/黑屏)。
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
-const { interpretVoiceCommand } = require('./voice');
 
 const invoke = (ch) => (...args) => ipcRenderer.invoke(ch, ...args);
 const on = (ch) => (cb) => {
@@ -22,9 +23,12 @@ contextBridge.exposeInMainWorld('api', {
     transcribe: invoke('stt:transcribe'),
     test: invoke('stt:test')
   },
-  // 语音指令解释为纯函数,直接在 preload 侧同步执行(无需 IPC 往返)
-  voice: { interpret: (transcript, ctx) => interpretVoiceCommand(transcript, ctx) },
-  screenshot: { capture: invoke('screenshot:capture'), onCaptured: on('screenshot:captured') },
+  voice: { interpret: invoke('voice:interpret') },
+  screenshot: {
+    capture: invoke('screenshot:capture'),
+    shortcutStatus: invoke('screenshot:shortcutStatus'),
+    onCaptured: on('screenshot:captured')
+  },
   hosts: { list: invoke('hosts:list'), save: invoke('hosts:save') },
   ssh: {
     connect: invoke('ssh:connect'),
@@ -39,6 +43,7 @@ contextBridge.exposeInMainWorld('api', {
     syncGrokConfig: invoke('setup:syncGrokConfig'),
     syncAuth: invoke('setup:syncAuth'),
     detectLocalCodex: invoke('setup:detectLocalCodex'),
+    detectLocalClaude: invoke('setup:detectLocalClaude'),
     testRemoteAgent: invoke('setup:testRemoteAgent'),
     configureProxy: invoke('proxy:configure'),
     lanIp: invoke('net:lanIp'),
@@ -46,6 +51,62 @@ contextBridge.exposeInMainWorld('api', {
     onLog: on('setup:log')
   },
   convos: { list: invoke('convos:list'), save: invoke('convos:save') },
+  autocapture: {
+    check: invoke('autocapture:check'),
+    diagnoseRemote: invoke('autocapture:diagnoseRemote'),
+    getConfig: invoke('autocapture:getConfig'),
+    setConfig: invoke('autocapture:setConfig'),
+    runNow: invoke('autocapture:runNow'),
+    backfillEstimate: invoke('autocapture:backfillEstimate'),
+    backfill: invoke('autocapture:backfill'),
+    onProgress: on('autocapture:progress'),
+    onDone: on('autocapture:done')
+  },
+  skills: {
+    listBuiltin: invoke('skills:listBuiltin'),
+    engineDirs: invoke('skills:engineDirs'),
+    lint: invoke('skills:lint'),
+    listInstalled: invoke('skills:listInstalled'),
+    install: invoke('skills:install'),
+    remove: invoke('skills:remove'),
+    marketSources: invoke('skills:marketSources'),
+    marketList: invoke('skills:marketList'),
+    marketFetch: invoke('skills:marketFetch'),
+    onLog: on('skills:log')
+  },
+  obsidian: {
+    getConfig: invoke('obsidian:getConfig'),
+    setConfig: invoke('obsidian:setConfig'),
+    test: invoke('obsidian:test'),
+    pickVault: invoke('obsidian:pickVault'),
+    createVault: invoke('obsidian:createVault'),
+    quickStart: invoke('obsidian:quickStart'),
+    diagnose: invoke('obsidian:diagnose'),
+    saveBrief: invoke('obsidian:saveBrief'),
+    saveFromConversation: invoke('obsidian:saveFromConversation'),
+    graph: invoke('obsidian:graph'),
+    readNoteFile: invoke('obsidian:readNoteFile'),
+    deleteNote: invoke('obsidian:deleteNote'),
+    openInApp: invoke('obsidian:openInApp'),
+    onProgress: on('obsidian:progress')
+  },
+  prism: {
+    getConfig: invoke('prism:getConfig'),
+    setConfig: invoke('prism:setConfig'),
+    register: invoke('prism:register'),
+    health: invoke('prism:health'),
+    capabilities: invoke('prism:capabilities'),
+    execute: invoke('prism:execute'),
+    saveAsBrief: invoke('prism:saveAsBrief'),
+    deployPrompt: invoke('prism:deployPrompt')
+  },
+  brief: {
+    get: invoke('brief:get'),
+    run: invoke('brief:run'),
+    dates: invoke('brief:dates'),
+    today: invoke('brief:today'),
+    onProgress: on('brief:progress')
+  },
   agent: {
     start: invoke('agent:start'),
     send: invoke('agent:send'),

@@ -12,17 +12,32 @@
 
 **断线后会怎样。** 自动指数退避重连并重建反向隧道;正在执行的那一轮会中断,已产生的消息不丢,重连后可继续发。
 
+**终端能用,但对话一直报 "Channel open failure / SSH 通道已用尽"。** 远程 sshd 的 `MaxSessions`(默认 10)被占满了:终端标签、SFTP、后台任务各占一个通道,而对话每轮要新开一个 exec 通道。终端是已建好的长连接所以不受影响。处理:先关掉多余的「终端」标签(应用会自动回收 SFTP 通道并重试);仍不够就在远程 `/etc/ssh/sshd_config` 里调大 `MaxSessions`(如 `MaxSessions 50`),然后 `sudo systemctl reload sshd`。
+
 ## 安装与认证
 
 **一键安装失败。** 看「环境配置」页日志:缺 Node 会自动走 nvm 免 root 安装(慢,耐心);下载超时通常是网络问题,先把代理配好再重试;老系统(glibc < 2.28)会自动换兼容版 Node。
 
 **Codex 认证下发后仍提示未登录。** 确认本机 `~/.codex/auth.json` 存在且本机 codex 可用;ChatGPT 登录态有有效期,过期需本机重新 `codex login` 再下发。
 
-**Claude 认证下发不了。** macOS 的 Claude 凭据在钥匙串里无法复制,两个替代:写入 `ANTHROPIC_API_KEY`,或在「终端」页运行 `claude` 交互登录。
+**Claude 认证下发不了 / 我是 Pro 会员想在远程用。** 可以。macOS 上 Claude Code 的登录态存在**钥匙串**(条目 `Claude Code-credentials`)而不是文件里,所以早期版本找不到。现在点「下发 Claude 认证」会自动从钥匙串导出并写成远程的 `~/.claude/.credentials.json`(600 权限)——Claude Code 支持这个文件回退,订阅登录态因此能在远程机上直接用,不必额外买 API Key。
+
+首次导出若弹出钥匙串授权,点「允许」。如果提示找不到凭据,先在本机终端跑一次 `claude` 确认处于登录状态。
+
+**远程报 "OAuth session expired and could not be refreshed"。** 订阅登录的 token 有有效期,过期后远程无法自行刷新。处理:在本机运行一次 `claude` 确认仍是登录态,回到「环境配置」页重新点一次「下发 Claude 认证」即可。下发时日志会显示 token 的到期时间,方便你预判。
 
 **API Key 存在哪,安全吗。** 远程 `~/.remote-agent-env.sh`,600 权限,不写入 bashrc 明文,配置文件里只引用变量名;本机主机凭据经系统钥匙串加密。
 
 ## 对话与引擎
+
+**长任务跑到一半报 "Connection closed mid-response" / 经常中断。** 这是代理或网络对**长连接**超时,不是模型的问题:Claude/Codex 用 SSE 流式响应,一次回合可能持续好几分钟(截图里那次 277 秒),代理只要有空闲超时或总时长上限就会把连接切断。
+
+应用现在会自动处理:识别到这类**瞬时**中断后,利用保留的会话 ID 自动 resume 续跑(最多 3 次,指数退避 2→4→8 秒),并在对话里显示 `🔌 响应中途连接被断开,N 秒后自动续跑`。续跑提示词会要求模型先检查实际进度、从中断处继续、不重复已完成的改动。认证类错误(如 OAuth 过期)不会重试——那种重试只是白烧钱。
+
+要根治,调大代理侧的超时:
+- **Clash / Clash.Meta**:相关超时通常在几分钟量级,长任务建议适当放宽;若走的是自建 nginx 中转,见下条
+- **nginx 反代**:`proxy_read_timeout 3600s; proxy_send_timeout 3600s; proxy_buffering off;`(`proxy_buffering off` 对 SSE 很关键)
+- 也可以把大任务拆小,单轮控制在 1-2 分钟内
 
 **输出中途停了 / 进程退出码非 0。** 错误气泡会带最近输出;常见原因依次是:认证失效(重新下发/写 key)、代理断了(重新应用代理)、模型名不存在(换预设或自定义正确的名字)。
 

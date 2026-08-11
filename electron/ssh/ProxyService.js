@@ -78,15 +78,30 @@ class ProxyService {
     await this.ssh.exec(`cat > ${PROXY_FILE} <<'EOF'\n${script}\nEOF`);
     log(`代理环境已写入 ${PROXY_FILE}: ${proxyUrl}\n`);
 
-    // 连通性检测
-    log('检测代理连通性 (api.anthropic.com / api.openai.com) ...\n');
-    const test = await this.ssh.exec(
-      `. ${PROXY_FILE}; curl -sS -o /dev/null -m 12 -w '%{http_code}' https://api.anthropic.com 2>&1 | tail -c 40`
+    // 连通性检测:多次采样。单次成功掩盖不了间歇性故障,
+    // 而长任务恰恰死于「偶尔一次 CONNECT 503」——必须把波动暴露出来
+    log('检测代理连通性(连续 5 次采样,看稳定性)...\n');
+    const probe = await this.ssh.exec(
+      `. ${PROXY_FILE}; for i in 1 2 3 4 5; do `
+      + `curl -sS -o /dev/null -m 12 -w '%{http_code} ' https://api.anthropic.com 2>&1 | tail -c 24; `
+      + `done`
     );
-    const ok = /^[0-9]{3}$/.test(test.stdout.trim()) && test.stdout.trim() !== '000';
-    log(ok ? `代理连通 ✓ (HTTP ${test.stdout.trim()})\n`
-           : `代理检测未通过: ${test.stdout.trim() || test.stderr}\n`);
-    return { ok, proxyUrl };
+    const raw = String(probe.stdout || '').trim();
+    const codes = raw.split(/\s+/).filter(Boolean);
+    const good = codes.filter((c) => /^[0-9]{3}$/.test(c) && c !== '000');
+    const ok = good.length > 0;
+    const rate = codes.length ? Math.round((good.length / codes.length) * 100) : 0;
+
+    if (ok && good.length === codes.length) {
+      log(`代理连通 ✓ 5/5 成功 (HTTP ${good[0]})\n`);
+    } else if (ok) {
+      log(`⚠️ 代理不稳定:${good.length}/${codes.length} 成功(${rate}%),返回 ${codes.join(' ')}\n`
+        + '  长任务会因偶发失败中断(表现为 Reconnecting / CONNECT 503)。\n'
+        + '  建议:换一个更稳定的代理节点,或在 Clash 里为 api.anthropic.com / api.openai.com 指定固定节点。\n');
+    } else {
+      log(`代理检测未通过: ${raw || probe.stderr}\n`);
+    }
+    return { ok, proxyUrl, successRate: rate, codes };
   }
 
   /** 供 agent/安装命令使用的环境前缀 */

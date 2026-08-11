@@ -35,6 +35,12 @@ const GROK_PROVIDERS = {
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     envKey: 'DASHSCOPE_API_KEY',
     models: ['qwen3.5-coder']
+  },
+  minimax: {
+    label: 'MiniMax',
+    baseUrl: 'https://api.minimax.chat/v1',
+    envKey: 'MINIMAX_API_KEY',
+    models: ['minimax-m2.5']
   }
 };
 

@@ -100,9 +100,89 @@ class LocalExecutor {
     const { bin, args } = this.shellInvocation(command);
     const env = await this.resolveTerminalEnv();
     const child = spawn(bin, args, { env });
+    // 兜底监听:未监听的 'error' 事件会抛出并拖垮主进程。
+    // 这里只保证不抛,调用方自己的 error 监听照常生效(EventEmitter 允许多个监听者)。
+    child.on('error', () => {});
+    child.stdin.on('error', () => {});
+    child.stdout?.on('error', () => {});
+    child.stderr?.on('error', () => {});
     child.stdin.end();
     return child;
   }
+
+  /**
+   * 本机交互终端:用系统 `script` 命令分配一个真正的 PTY。
+   *
+   * 为什么不用管道:交互式 CLI(claude login、codex login、vim…)会检测 isatty,
+   * 管道下要么拒绝运行要么行为异常。`script` 能给子进程分配伪终端,
+   * 且是系统自带 —— 不必引入 node-pty 这种需要针对 Electron 重新编译的原生模块。
+   *
+   * 平台差异:BSD/macOS 是 `script -q /dev/null cmd`,Linux 是 `script -qfc "cmd" /dev/null`。
+   */
+  ptyInvocation(shell, cols, rows) {
+    // 进 shell 前先按当前尺寸设好窗口,避免换行错乱
+    const inner = `stty rows ${rows} cols ${cols} 2>/dev/null; exec ${shell} -l`;
+    if (this.platform === 'darwin') {
+      return { bin: 'script', args: ['-q', '/dev/null', '/bin/sh', '-c', inner] };
+    }
+    return { bin: 'script', args: ['-qfc', inner, '/dev/null'] };
+  }
+
+  /** 打开本机交互 shell(与 SSHManager.openShell 接口一致,供终端页复用) */
+  async openShell({ termId = 'default', cols = 80, rows = 24 } = {}) {
+    if (!this.shells) this.shells = new Map();
+    const existing = this.shells.get(termId);
+    if (existing) return existing;
+    if (this.isWindowsNative) {
+      throw new Error('Windows 本机终端暂不支持,请使用系统自带的 PowerShell/Windows Terminal');
+    }
+
+    const env = { ...(await this.resolveTerminalEnv()), TERM: 'xterm-256color' };
+    const shell = this.baseEnv.SHELL || (this.platform === 'darwin' ? '/bin/zsh' : '/bin/bash');
+    const { bin, args } = this.ptyInvocation(shell, cols, rows);
+    const child = spawn(bin, args, { env, cwd: this.homeDir });
+    // 必须监听 error:未监听的 'error' 事件在 Node 里会直接抛出,足以让主进程整个退出
+    // (例如系统缺少 script 命令、shell 路径不存在)
+    child.on('error', (err) => {
+      try { child.stdout.emit('data', Buffer.from(`\r\n[本机终端启动失败] ${err.message}\r\n`)); } catch (_) {}
+      this.shells.delete(termId);
+    });
+    // 子进程已退出后再写入会触发 EPIPE,同样是未捕获错误的来源
+    child.stdin.on('error', () => {});
+    child.stdout.on('error', () => {});
+    child.stderr?.on('error', () => {});
+
+    // 适配终端页期望的 stream 形态(与 ssh2 的 shell stream 对齐)
+    const stream = {
+      stderr: child.stderr,
+      __child: child,
+      on(event, cb) {
+        if (event === 'data') child.stdout.on('data', cb);
+        else if (event === 'close') child.on('close', (code) => cb(code));
+        return this;
+      },
+      write(data) { try { child.stdin.write(data); } catch (_) {} },
+      setWindow(r, c) {
+        // script 不转发 SIGWINCH,只能通过 stty 让子进程知道新尺寸
+        try { child.stdin.write(`stty rows ${r} cols ${c} 2>/dev/null\n`); } catch (_) {}
+      },
+      end() { try { child.stdin.end(); child.kill(); } catch (_) {} },
+      close() { try { child.kill(); } catch (_) {} },
+      signal(sig) { try { child.kill(sig === 'INT' ? 'SIGINT' : sig); } catch (_) {} }
+    };
+    child.on('close', () => this.shells.delete(termId));
+    this.shells.set(termId, stream);
+    return stream;
+  }
+
+  closeShell(termId) {
+    const s = this.shells?.get(termId);
+    if (s) { try { s.end(); } catch (_) {} this.shells.delete(termId); }
+  }
+
+  /* 与 SSHManager 同名接口,供 term:write / term:resize 直接复用 */
+  writeShell(termId, data) { const s = this.shells?.get(termId); if (s) s.write(data); }
+  resizeShell(termId, cols, rows) { const s = this.shells?.get(termId); if (s) s.setWindow(rows, cols, 0, 0); }
 
   async execStream(command) {
     const child = await this._spawn(command);

@@ -22,20 +22,27 @@ class ErrorBoundary extends React.Component {
 }
 import {
   useStore, loadHosts, loadConversations, loadSettings, sendToAgent,
-  isAwaitingConfirm, evaluateAutoConfirm, MAX_AUTO_REPLIES
+  isAwaitingConfirm, evaluateAutoConfirm, MAX_AUTO_REPLIES, MAX_AUTO_RESUME
 } from './store.js';
+import { decideGoalStep } from './goalMode.js';
 import Sidebar from './components/Sidebar.jsx';
 import HostForm from './components/HostForm.jsx';
 import ChatPanel from './components/ChatPanel.jsx';
 import FilePanel from './components/FilePanel.jsx';
 import TerminalPanel from './components/TerminalPanel.jsx';
 import SetupPanel from './components/SetupPanel.jsx';
+import BriefPanel from './components/BriefPanel.jsx';
+import GraphPanel from './components/GraphPanel.jsx';
+import SkillsPanel from './components/SkillsPanel.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 
 const TABS = [
   { key: 'chat', label: '对话', icon: '💬' },
+  { key: 'brief', label: '速览', icon: '🗞️' },
+  { key: 'graph', label: '图谱', icon: '🕸️' },
   { key: 'files', label: '文件', icon: '📁' },
   { key: 'terminal', label: '终端', icon: '⌨️' },
+  { key: 'skills', label: '技能', icon: '🧩' },
   { key: 'setup', label: '环境配置', icon: '⚙️' }
 ];
 
@@ -67,6 +74,40 @@ export default function App() {
         const next = st.shiftQueued(convId);
         const conv = st.conversations[convId];
         if (next && conv) { sendToAgent(conv.hostId, convId, next.text, next.files || []); return; }
+
+        /* 网络/代理把长响应掐断(如 Connection closed mid-response):
+           会话 ID 还在,自动 resume 续跑,不用人守着点「继续」。
+           必须排在全自动/目标模式之前 —— 这一轮是"被打断"而不是"完成了"。 */
+        if (msg.transient && conv) {
+          const done = st.autoResumeCount?.[convId] || 0;
+          if (done < MAX_AUTO_RESUME) {
+            const delay = Math.min(2000 * (2 ** done), 20000); // 指数退避,避免上游繁忙时火上浇油
+            st.setAutoResumeCount(convId, done + 1);
+            st.pushMessage(convId, {
+              role: 'agent', kind: 'raw',
+              text: `🔌 ${msg.transient},${Math.round(delay / 1000)} 秒后自动续跑(第 ${done + 1}/${MAX_AUTO_RESUME} 次)`,
+              ts: Date.now()
+            });
+            setTimeout(() => {
+              const fresh = useStore.getState().conversations[convId];
+              if (fresh) {
+                sendToAgent(fresh.hostId, convId,
+                  '刚才的响应被网络中断了。请检查当前实际进度,从中断处继续完成未完成的部分,不要重复已经做完的改动。',
+                  [], { auto: true });
+              }
+            }, delay);
+          } else {
+            st.setAutoResumeCount(convId, 0);
+            st.pushMessage(convId, {
+              role: 'agent', kind: 'raw',
+              text: `🔌 连接已中断 ${MAX_AUTO_RESUME} 次,自动续跑暂停。多为代理对长连接超时,建议调大代理超时或拆小任务后手动继续。`,
+              ts: Date.now()
+            });
+          }
+          return;
+        }
+        // 本轮正常结束 -> 重置续跑计数
+        if (conv && (st.autoResumeCount?.[convId] || 0) > 0) st.setAutoResumeCount(convId, 0);
         // 全自动模式:模型在等确认 -> 自动回复继续(连续 MAX 次后暂停防失控)
         if (conv?.autoConfirm) {
           const lastReply = [...conv.messages].reverse()
@@ -98,6 +139,35 @@ export default function App() {
                 ts: Date.now()
               });
             }
+          }
+          return;
+        }
+
+        // 目标模式:未达成则自动追一轮,直到达成/卡住/触顶(与全自动互补,后者只应答确认)
+        if (conv?.goal?.status === 'active' && conv.goal.text) {
+          const agentTexts = conv.messages
+            .filter((m) => m.role === 'agent' && (m.kind === 'text' || m.kind === 'result') && m.text)
+            .map((m) => m.text);
+          const sinceLastUser = [];
+          for (let i = conv.messages.length - 1; i >= 0; i -= 1) {
+            if (conv.messages[i].role === 'user') break;
+            sinceLastUser.push(conv.messages[i]);
+          }
+          const danger = sinceLastUser.find((m) => m.dangerous);
+          const step = decideGoalStep(conv.goal, {
+            lastText: agentTexts[agentTexts.length - 1] || '',
+            recentTexts: agentTexts,
+            dangerHit: danger ? (danger.detail || '危险命令') : null
+          });
+          if (step.action === 'continue') {
+            st.updateConversationGoal(convId, { rounds: (conv.goal.rounds || 0) + 1 });
+            sendToAgent(conv.hostId, convId, step.prompt, [], { auto: true });
+          } else if (step.action === 'complete') {
+            st.updateConversationGoal(convId, { status: 'done' });
+            st.pushMessage(convId, { role: 'agent', kind: 'raw', text: step.message, ts: Date.now() });
+          } else if (step.action === 'stop') {
+            st.updateConversationGoal(convId, { status: 'paused' });
+            st.pushMessage(convId, { role: 'agent', kind: 'raw', text: step.message, ts: Date.now() });
           }
         }
         return;
@@ -142,7 +212,9 @@ export default function App() {
                   : <span className="muted">{activeHost.username}@{activeHost.host}:{activeHost.port || 22}</span>}
               </div>
               <div className="tabs">
-                {(activeHost.local ? TABS.filter((t) => t.key === 'chat' || t.key === 'setup') : TABS).map((t) => (
+                {(activeHost.local
+                  ? TABS.filter((t) => ['chat', 'brief', 'graph', 'terminal', 'skills', 'setup'].includes(t.key))
+                  : TABS).map((t) => (
                   <button key={t.key}
                     className={`tab ${tab === t.key ? 'active' : ''}`}
                     onClick={() => setTab(t.key)}>
@@ -155,7 +227,7 @@ export default function App() {
               <PersistentWorkspace
                 hosts={hosts}
                 activeHostId={activeHostId}
-                activeView={activeHost.local && tab !== 'setup' ? 'chat' : tab}
+                activeView={activeHost.local && !['setup', 'brief', 'graph', 'terminal', 'skills'].includes(tab) ? 'chat' : tab}
                 statuses={statuses}
               />
             </div>
@@ -167,7 +239,7 @@ export default function App() {
   );
 }
 
-const PERSISTENT_VIEWS = new Set(['chat', 'files', 'terminal']);
+const PERSISTENT_VIEWS = new Set(['chat', 'brief', 'graph', 'files', 'terminal']);
 
 function PersistentWorkspace({ hosts, activeHostId, activeView, statuses }) {
   const [visitedViews, setVisitedViews] = useState([]);
@@ -201,6 +273,8 @@ function PersistentWorkspace({ hosts, activeHostId, activeView, statuses }) {
             aria-hidden={!isActive}
           >
             {view === 'chat' && <ChatPanel hostId={hostId} />}
+            {view === 'brief' && <BriefPanel hostId={hostId} />}
+            {view === 'graph' && <GraphPanel active={isActive} />}
             {view === 'files' && <FilePanel hostId={hostId} />}
             {view === 'terminal' && <TerminalPanel hostId={hostId} active={isActive} />}
           </div>
@@ -211,7 +285,13 @@ function PersistentWorkspace({ hosts, activeHostId, activeView, statuses }) {
           <SetupPanel hostId={activeHostId} host={activeHost} />
         </div>
       )}
-      {activeHost && status !== 'connected' && activeView !== 'setup' && (
+      {/* 技能页未连接也能浏览内置库与市场,只有「下发」需要连接 */}
+      {activeHost && activeView === 'skills' && (
+        <div className="workspace-layer active">
+          <SkillsPanel hostId={activeHostId} connected={status === 'connected'} />
+        </div>
+      )}
+      {activeHost && status !== 'connected' && !['setup', 'skills'].includes(activeView) && (
         <ConnectGate host={activeHost} status={status} />
       )}
     </>

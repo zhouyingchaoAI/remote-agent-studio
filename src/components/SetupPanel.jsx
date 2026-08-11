@@ -161,12 +161,12 @@ export default function SetupPanel({ hostId, host }) {
               onClick={run(() => window.api.setup.syncAuth({ hostId, agent: 'codex' }))}>
               下发 Codex 认证到远程
             </button>
-            <button className="btn" disabled={busy}
-              onClick={run(() => window.api.setup.syncAuth({ hostId, agent: 'claude' }))}>
-              下发 Claude 认证
-            </button>
           </div>}
           {!isLocal && <p className="muted small">把本机已登录的 ~/.codex/auth.json(+config.toml)复制到远程同路径,远程免登录直接使用。下发后会自动测试远程可用性。</p>}
+
+          <h3 style={{ marginTop: 18 }}>本机 Claude Code 认证</h3>
+          <LocalClaudeCard isLocal={isLocal} busy={busy}
+            onSync={run(() => window.api.setup.syncAuth({ hostId, agent: 'claude' }))} />
           {!isLocal && <div className="row gap" style={{ marginTop: 6 }}>
             <button className="btn" disabled={busy}
               onClick={run(() => window.api.setup.testRemoteAgent({ hostId, agent: 'codex' }))}>
@@ -200,6 +200,7 @@ export default function SetupPanel({ hostId, host }) {
               <option value="glm">ZHIPU_API_KEY(智谱 GLM)</option>
               <option value="kimi">MOONSHOT_API_KEY(Kimi)</option>
               <option value="qwen">DASHSCOPE_API_KEY(通义 Qwen)</option>
+              <option value="minimax">MINIMAX_API_KEY(MiniMax)</option>
             </select>
             <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-..." style={{ flex: 1 }} />
             <button className="btn" disabled={busy} onClick={saveKey}>写入远程</button>
@@ -232,7 +233,8 @@ const GROK_PRESETS = [
   { label: 'DeepSeek', model: 'deepseek-v4-pro', baseUrl: 'https://api.deepseek.com/v1', envKey: 'DEEPSEEK_API_KEY' },
   { label: '智谱 GLM', model: 'glm-5', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', envKey: 'ZHIPU_API_KEY' },
   { label: '月之暗面 Kimi', model: 'kimi-k2.5', baseUrl: 'https://api.moonshot.cn/v1', envKey: 'MOONSHOT_API_KEY' },
-  { label: '通义 Qwen', model: 'qwen3.5-coder', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', envKey: 'DASHSCOPE_API_KEY' }
+  { label: '通义 Qwen', model: 'qwen3.5-coder', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', envKey: 'DASHSCOPE_API_KEY' },
+  { label: 'MiniMax', model: 'minimax-m2.5', baseUrl: 'https://api.minimax.chat/v1', envKey: 'MINIMAX_API_KEY' }
 ];
 const BLANK_MODEL = { label: '', model: '', baseUrl: '', apiBackend: 'chat_completions', envKey: '', apiKey: '' };
 
@@ -342,6 +344,88 @@ function GrokModelsManager({ hostId, busy, setBusy }) {
         重新同步到远程 config.toml
       </button>
     </section>
+  );
+}
+
+/* 本机 Claude Code 认证卡片:检测凭据来源/有效性/到期时间,再决定能不能下发 */
+function LocalClaudeCard({ isLocal, busy, onSync }) {
+  const [info, setInfo] = useState(null);
+  const [testing, setTesting] = useState(false);
+
+  const detect = async () => {
+    setTesting(true);
+    try { setInfo(await window.api.setup.detectLocalClaude()); }
+    catch (e) { setInfo({ error: e.message }); }
+    setTesting(false);
+  };
+  useEffect(() => { detect(); }, []);
+
+  const sourceLabel = { keychain: 'macOS 钥匙串', file: '~/.claude/.credentials.json' }[info?.source] || '';
+  const hoursLeft = info?.expiresAt ? Math.round((info.expiresAt - Date.now()) / 3600000) : null;
+  const canSync = info && info.hasAuth && info.authValid;
+
+  return (
+    <div className="local-codex-card">
+      <table className="env-table"><tbody>
+        <tr><td>本机 CLI</td><td>{info?.cliVersion || <span className="muted">未在 PATH 找到</span>}</td></tr>
+        <tr><td>凭据来源</td><td>
+          {!info ? '检测中...' : info.hasAuth
+            ? <span className="ok">{sourceLabel}</span>
+            : <span className="error-text">未找到登录凭据</span>}
+        </td></tr>
+        <tr><td>登录状态</td><td>
+          {!info ? '-'
+            : info.authValid
+              ? <span className="ok">✓ 有效{info.subscription ? `(${info.subscription})` : ''}{info.account ? ` · ${info.account}` : ''}</span>
+              : info.expired
+                ? <span className="error-text">已过期,请在本机运行 claude 重新登录</span>
+                : <span className="error-text">未登录或凭据无效</span>}
+        </td></tr>
+        {info?.expiresAt > 0 && (
+          <tr><td>到期时间</td><td className={hoursLeft <= 0 ? 'error-text' : ''}>
+            {new Date(info.expiresAt).toLocaleString()}
+            {hoursLeft > 0 ? `(约 ${hoursLeft} 小时后)` : '(已过期)'}
+          </td></tr>
+        )}
+      </tbody></table>
+
+      {info && !info.hasAuth && info.platform === 'darwin' && (
+        <p className="muted small">
+          {info.keychainError || '钥匙串里没有 Claude Code 凭据'}。先在本机终端运行一次 <code>claude</code> 完成登录;
+          若弹出钥匙串授权请点「允许」。
+        </p>
+      )}
+
+      <div className="row gap" style={{ marginTop: 8 }}>
+        <button className="btn small" onClick={detect} disabled={testing}>
+          {testing ? '检测中...' : '测试本机 Claude 配置'}
+        </button>
+        {/* 未登录/已过期时,直接跳到本机终端并自动执行 claude 完成登录 */}
+        {info && !info.authValid && info.platform !== 'win32' && (
+          <button className="btn small primary" onClick={() => {
+            const st = useStore.getState();
+            st.setPendingTermCommand({ hostId: 'local', command: 'claude' });
+            st.setActiveHost('local');
+            st.setTab('terminal');
+          }} title="在本机终端里启动 claude 完成登录(登录后回来点「测试本机 Claude 配置」)">
+            在本机登录 Claude
+          </button>
+        )}
+        {!isLocal && (
+          <button className="btn small primary" disabled={busy || !canSync} onClick={onSync}
+            title={canSync ? '把本机登录态复制到远程,免去远程 OAuth 登录'
+              : '本机凭据无效或已过期,先在本机登录'}>
+            下发 Claude 认证到远程
+          </button>
+        )}
+      </div>
+      {!isLocal && (
+        <p className="muted small">
+          macOS 的登录态存在钥匙串里,下发时会自动导出成远程的 <code>~/.claude/.credentials.json</code>(600 权限),
+          订阅会员无需额外 API Key。token 到期后需回来重新下发一次。
+        </p>
+      )}
+    </div>
   );
 }
 

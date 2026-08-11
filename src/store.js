@@ -15,7 +15,7 @@ export const useStore = create((set, get) => ({
   activeHostId: null,
   statuses: {},      // hostId -> 'disconnected'|'connecting'|'connected'|'error'
   statusDetails: {}, // hostId -> string
-  tab: 'chat',       // chat | files | terminal | setup
+  tab: 'chat',       // chat | brief | files | terminal | setup
   editingHost: null, // null | {} | host
 
   // 对话历史:conversations 为 convId -> conv
@@ -41,6 +41,13 @@ export const useStore = create((set, get) => ({
   setHosts: (hosts) => set({ hosts }),
   setActiveHost: (id) => set({ activeHostId: id }),
   setTab: (tab) => set({ tab }),
+  // 待在终端里自动执行的命令(如「在本机登录 Claude」跳转过去自动敲 claude)
+  pendingTermCommand: null,
+  setPendingTermCommand: (payload) => set({ pendingTermCommand: payload }),
+  // 网络中断后的自动续跑次数(按对话计,用户发新消息时清零)
+  autoResumeCount: {},
+  setAutoResumeCount: (convId, n) =>
+    set((s) => ({ autoResumeCount: { ...s.autoResumeCount, [convId]: n } })),
   setEditingHost: (h) => set({ editingHost: h }),
   setStatus: (hostId, status, detail) =>
     set((s) => ({
@@ -155,6 +162,29 @@ export const useStore = create((set, get) => ({
             ...c, claudeSessionId, codexSessionId, codexStarted, grokSessionId,
             ...(lastTurnAgent ? { lastTurnAgent } : {})
           }
+        }
+      };
+    });
+    persist();
+  },
+
+  /* ---- 目标模式:跨轮自动推进,直到达成/卡住/触顶 ---- */
+  setConversationGoal: (convId, goal) => {
+    set((s) => {
+      const c = s.conversations[convId];
+      if (!c) return {};
+      return { conversations: { ...s.conversations, [convId]: { ...c, goal, updatedAt: Date.now() } } };
+    });
+    persist();
+  },
+  updateConversationGoal: (convId, patch) => {
+    set((s) => {
+      const c = s.conversations[convId];
+      if (!c || !c.goal) return {};
+      return {
+        conversations: {
+          ...s.conversations,
+          [convId]: { ...c, goal: { ...c.goal, ...patch }, updatedAt: Date.now() }
         }
       };
     });
@@ -287,6 +317,8 @@ export function isAwaitingConfirm(text = '') {
 
 /** 全自动模式的防失控状态(内存态,人工发言即重置) */
 const MAX_AUTO_REPLIES = 5;
+/** 网络中断后最多自动续跑几次(超过则判定链路有问题,交给人处理) */
+export const MAX_AUTO_RESUME = 3;
 const autoReplyState = new Map(); // convId -> { n, last }
 export function resetAutoReplies(convId) { autoReplyState.delete(convId); }
 /**
@@ -325,7 +357,10 @@ export function buildContextDigest(messages = [], maxChars = 6000) {
 export async function sendToAgent(hostId, convId, text, files = [], opts = {}) {
   const st = useStore.getState();
   const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  if (!opts.auto) resetAutoReplies(convId); // 人工发言重置自动确认计数
+  if (!opts.auto) {
+    resetAutoReplies(convId);        // 人工发言重置自动确认计数
+    st.setAutoResumeCount(convId, 0); // 也重置网络续跑计数(新任务从零算)
+  }
   st.setAgentRunning(convId, true);
   try {
     const attachments = files.length

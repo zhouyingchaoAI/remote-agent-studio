@@ -12,6 +12,7 @@ const { shellQuote } = require('./SSHManager');
 const { extractImagePaths, isDangerousCommand } = require('../chat/attachments');
 const { deepseekEnvPosix, deepseekEnvPowershell, resolveDeepseekModel } = require('./deepseek');
 const { parseGrokSpec } = require('./grokProviders');
+const { isTransientAgentError, describeTransient } = require('../transientErrors');
 const { randomUUID } = require('crypto');
 
 const AGENT_PATH = 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$HOME/.grok/bin:$PATH"; ' +
@@ -22,6 +23,15 @@ const DOCKER_PERMISSION_ERROR = /(?:docker\.sock|docker daemon|docker:)[\s\S]*(?
 // tracing 风格的运行日志(2026-07-15T05:55:46Z ERROR ...):不在聊天里冒泡,
 // 仅保留在诊断缓冲中,进程失败时随错误消息一起展示
 const LOG_NOISE = /^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z?\s+(ERROR|WARN|INFO|DEBUG|TRACE)\b/;
+
+/**
+ * CLI 自己的重试通告(Reconnecting... 2/5 之类)不是错误,是它在自愈。
+ * 渲染成红色错误框会刷屏、也会让人误以为任务已经失败。
+ */
+const RETRY_NOTICE = /^\s*(reconnecting|retrying|retry)\b|重连中|正在重试/i;
+function isRetryNotice(text) {
+  return RETRY_NOTICE.test(String(text || '').trim().slice(0, 60));
+}
 
 function filterStderrNoise(text) {
   return String(text).split('\n')
@@ -62,7 +72,14 @@ class AgentSession extends EventEmitter {
     this.permissionHintEmitted = false;
   }
 
-  _emitMsg(msg) { this.emit('message', msg); }
+  _emitMsg(msg) {
+    // 重试通告降级成状态提示,不占据错误气泡
+    if ((msg.kind === 'error' || msg.kind === 'stderr') && isRetryNotice(msg.text)) {
+      this.emit('message', { kind: 'status', text: String(msg.text).trim().slice(0, 160) });
+      return;
+    }
+    this.emit('message', msg);
+  }
 
   /**
    * grok headless 参数(平台无关部分)。
@@ -190,6 +207,8 @@ class AgentSession extends EventEmitter {
     this.imagePaths = [];
     this.lastLines = [];   // 最近的 stdout 行(诊断用)
     this.lastStderr = '';  // 最近的 stderr(诊断用)
+    this.lastResultText = '';
+    this.transient = null; // 本轮若因网络/代理中断,记下原因供上层自动续跑
     this._emitMsg({ kind: 'status', text: '正在远程执行...' });
 
     let buffer = '';
@@ -214,6 +233,11 @@ class AgentSession extends EventEmitter {
       });
       const exitCode = await new Promise((resolve) => stream.on('close', (code) => {
         if (buffer.trim()) this._parseLine(buffer.trim());
+        // 判定本轮是不是被网络/代理掐断的(可自动续跑),而不是认证之类的硬错误
+        const diag = [this.lastStderr, ...(this.lastLines || []), this.lastResultText || ''].join('\n');
+        if (isTransientAgentError(diag)) {
+          this.transient = describeTransient(diag);
+        }
         if (code !== 0 && code != null) {
           const detail = [this.lastStderr.trim(), ...(this.lastLines || [])]
             .filter(Boolean).join('\n').slice(-800);
@@ -501,6 +525,9 @@ class AgentSession extends EventEmitter {
       }
       case 'result':
         if (ev.session_id) this.claudeSessionId = ev.session_id;
+        // result 里可能带 "API Error: Connection closed mid-response" 这类中断信息,
+        // 即使 is_error 为真、退出码为 0,也要据此判定可续跑
+        if (ev.result) this.lastResultText = String(ev.result).slice(0, 1000);
         if (ev.usage || ev.total_cost_usd != null) {
           this._emitMsg({
             kind: 'usage',
@@ -520,4 +547,4 @@ class AgentSession extends EventEmitter {
   }
 }
 
-module.exports = { AgentSession, filterStderrNoise };
+module.exports = { AgentSession, filterStderrNoise, isRetryNotice };

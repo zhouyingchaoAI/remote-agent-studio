@@ -51,23 +51,294 @@ export default function SettingsModal() {
           <p className="muted small">终端字号改动对新开的终端标签生效;主题即时切换。</p>
 
           <hr className="settings-sep" />
-          <label className="settings-row">
-            <span>区域截图快捷键</span>
-            <input className="settings-input" value={settings.screenshotShortcut || ''}
-              placeholder="CommandOrControl+Shift+2"
-              onChange={(e) => apply({ screenshotShortcut: e.target.value.trim() })} />
-          </label>
-          <label className="settings-row">
-            <span>启用截图全局快捷键</span>
-            <input type="checkbox" checked={settings.screenshotShortcutEnabled !== false}
-              onChange={(e) => apply({ screenshotShortcutEnabled: e.target.checked })} />
-          </label>
-          <p className="muted small">格式如 CommandOrControl+Shift+2;修改后即时生效。截图会作为附件加入当前对话。</p>
+          <ScreenshotShortcutSettings settings={settings} apply={apply} />
 
           <hr className="settings-sep" />
           <SttSettings />
+
+          <hr className="settings-sep" />
+          <PrismFlowSettings />
+
+          <hr className="settings-sep" />
+          <ObsidianSettings />
         </div>
       </div>
+    </div>
+  );
+}
+
+/* 截图快捷键:显示"实际生效"的键位 —— 被输入法等占用时会自动降级到备选键 */
+function ScreenshotShortcutSettings({ settings, apply }) {
+  const [status, setStatus] = useState(null);
+  const refresh = () => window.api.screenshot.shortcutStatus().then(setStatus).catch(() => {});
+  useEffect(() => { refresh(); }, []);
+  // 设置变更后主进程会重注册,稍等再查实际结果
+  const applyAndRefresh = (patch) => { apply(patch); setTimeout(refresh, 250); };
+
+  return (
+    <>
+      <label className="settings-row">
+        <span>区域截图快捷键</span>
+        <input className="settings-input" value={settings.screenshotShortcut || ''}
+          placeholder="CommandOrControl+Shift+2"
+          onChange={(e) => applyAndRefresh({ screenshotShortcut: e.target.value.trim() })} />
+      </label>
+      <label className="settings-row">
+        <span>启用截图全局快捷键</span>
+        <input type="checkbox" checked={settings.screenshotShortcutEnabled !== false}
+          onChange={(e) => applyAndRefresh({ screenshotShortcutEnabled: e.target.checked })} />
+      </label>
+      {status && status.enabled && status.accelerator && (
+        <p className="muted small">
+          当前生效:<b>{status.accelerator}</b>
+          {status.fallback && ' (你填的组合被占用,已自动降级到备选键)'}
+        </p>
+      )}
+      {status && status.error && <p className="error-text">{status.error}</p>}
+      <p className="muted small">
+        格式如 CommandOrControl+Shift+2、Alt+Shift+A;修改后即时生效。截图完成会自动作为附件加入当前对话并把窗口带到前台。
+        输入区的「✂ 截图」按钮不依赖快捷键,随时可用。
+      </p>
+    </>
+  );
+}
+
+/* Obsidian 知识库:原子笔记 + 双链 + MOC,写进你本机 vault */
+function ObsidianSettings() {
+  const [cfg, setCfg] = useState(null);
+  const [status, setStatus] = useState('');
+  const [key, setKey] = useState('');
+  useEffect(() => { window.api.obsidian.getConfig().then(setCfg).catch(() => {}); }, []);
+  if (!cfg) return null;
+
+  const patch = (p) => { setCfg({ ...cfg, ...p }); window.api.obsidian.setConfig(p).catch(() => {}); };
+  const pick = async () => {
+    const next = await window.api.obsidian.pickVault().catch(() => null);
+    if (next) { setCfg(next); setStatus('已选择 vault'); }
+  };
+  const test = async () => {
+    setStatus('检测中…');
+    const r = await window.api.obsidian.test().catch((e) => ({ ok: false, detail: e?.message }));
+    setStatus(`${r.ok ? '✅' : '❌'} ${r.detail || ''}`);
+  };
+
+  return (
+    <div className="stt-settings">
+      <div className="settings-row"><span><b>Obsidian 知识库</b></span></div>
+      <p className="muted small">
+        把对话精华与每日速览沉淀成**原子笔记 + [[双链]] + 主题索引(MOC)**,Obsidian 图谱视图会自动长出来。
+      </p>
+      <label className="settings-row">
+        <span>写入方式</span>
+        <select value={cfg.transport} onChange={(e) => patch({ transport: e.target.value })}>
+          <option value="file">直写 vault 目录(零依赖,推荐)</option>
+          <option value="rest">Local REST API 插件</option>
+        </select>
+      </label>
+      {cfg.transport === 'file' ? (
+        <div className="settings-row">
+          <span>vault 目录</span>
+          <span className="row gap" style={{ flex: 1 }}>
+            <input className="settings-input" value={cfg.vaultPath || ''} placeholder="尚未选择"
+              onChange={(e) => patch({ vaultPath: e.target.value })} />
+            <button className="btn small" onClick={pick}>选择…</button>
+          </span>
+        </div>
+      ) : (
+        <>
+          <label className="settings-row">
+            <span>REST 地址</span>
+            <input className="settings-input" value={cfg.restBaseUrl || ''} placeholder="http://127.0.0.1:27123"
+              onChange={(e) => patch({ restBaseUrl: e.target.value })} />
+          </label>
+          <label className="settings-row">
+            <span>API Key {cfg.hasKey && <span className="muted small">(已设置)</span>}</span>
+            <span className="row gap" style={{ flex: 1 }}>
+              <input className="settings-input" type="password" value={key}
+                placeholder={cfg.hasKey ? '••••(留空不改)' : '插件设置里复制'}
+                onChange={(e) => setKey(e.target.value)} />
+              <button className="btn small" disabled={!key.trim()}
+                onClick={() => window.api.obsidian.setConfig({ apiKey: key.trim() }).then((c) => { setCfg(c); setKey(''); setStatus('Key 已保存'); })}>保存</button>
+            </span>
+          </label>
+        </>
+      )}
+      <label className="settings-row">
+        <span>落地子目录</span>
+        <input className="settings-input" value={cfg.folder || ''} placeholder="RemoteAgentStudio"
+          onChange={(e) => patch({ folder: e.target.value })} />
+      </label>
+      <div className="settings-row">
+        <span />
+        <span className="row gap"><button className="btn small" onClick={test}>测试连通与可写</button></span>
+      </div>
+      {status && <p className="muted small">{status}</p>}
+      <p className="muted small">
+        笔记只写进 vault 里的这个子目录;MOC 索引用标记块增量合并,你手写的内容不会被覆盖。
+      </p>
+      <AutoCaptureSettings />
+    </div>
+  );
+}
+
+/* 每日自动沉淀:无感知地把当天经验积累进知识库 */
+function AutoCaptureSettings() {
+  const [cfg, setCfg] = useState(null);
+  const [status, setStatus] = useState('');
+  const [busy, setBusy] = useState(false);
+  const load = () => window.api.autocapture.getConfig().then(setCfg).catch(() => {});
+  useEffect(() => { load(); }, []);
+  if (!cfg) return null;
+
+  const patch = (p) => { setCfg({ ...cfg, ...p }); window.api.autocapture.setConfig(p).catch(() => {}); };
+  const runNow = async () => {
+    setBusy(true); setStatus('正在提炼当天经验…(耗时取决于对话量)');
+    try {
+      const r = await window.api.autocapture.runNow({});
+      setStatus(r?.ok === false ? `失败:${r.error}`
+        : r?.count ? `✅ 沉淀 ${r.count} 篇(新建 ${r.created} / 补充 ${r.merged})`
+          : `没有可沉淀的内容${r?.note ? ` —— ${r.note}` : ''}`);
+      load();
+    } catch (e) { setStatus(`失败:${e?.message || e}`); }
+    setBusy(false);
+  };
+
+  const last = cfg.lastResult;
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px dashed var(--border)' }}>
+      <div className="settings-row"><span><b>每日自动沉淀</b></span></div>
+      <p className="muted small">
+        每天定时把当天对话里的**可复用经验**提炼进知识库,全程无需你操作。已有笔记会追加补充而不是覆盖,
+        并优先复用已有标题建立双链,图谱会随时间越长越密。
+      </p>
+      <label className="settings-row">
+        <span>开启自动沉淀</span>
+        <input type="checkbox" checked={!!cfg.enabled} onChange={(e) => patch({ enabled: e.target.checked })} />
+      </label>
+      <label className="settings-row">
+        <span>每日时间</span>
+        <input className="settings-input" value={cfg.time || ''} placeholder="22:00"
+          onChange={(e) => patch({ time: e.target.value.trim() })} />
+      </label>
+      <label className="settings-row">
+        <span>抽取引擎</span>
+        <select value={cfg.agent || ''} onChange={(e) => patch({ agent: e.target.value })}>
+          <option value="">自动选择(推荐,实测哪个能用就用哪个)</option>
+          <option value="codex">Codex</option>
+          <option value="claude">Claude Code</option>
+          <option value="grok">国产模型(Grok)</option>
+          <option value="deepseek">DeepSeek</option>
+        </select>
+      </label>
+      <label className="settings-row">
+        <span>抽取模型</span>
+        <input className="settings-input" value={cfg.model || ''} placeholder="minimax/minimax-m2.5"
+          onChange={(e) => patch({ model: e.target.value.trim() })} />
+      </label>
+      <div className="settings-row">
+        <span>上次运行</span>
+        <span className="muted small">
+          {cfg.lastRunAt
+            ? `${new Date(cfg.lastRunAt).toLocaleString()} · ${last?.ok ? `沉淀 ${last.count} 篇(新建 ${last.created}/补充 ${last.merged})` : `失败:${last?.error || ''}`}`
+            : '尚未运行'}
+        </span>
+      </div>
+      <div className="settings-row">
+        <span />
+        <span className="row gap"><button className="btn small" disabled={busy} onClick={runNow}>立即沉淀一次</button></span>
+      </div>
+      {status && <p className="muted small">{status}</p>}
+      <p className="muted small">
+        抽取是总结类任务,小模型足够,建议用便宜的(如 MiniMax、deepseek-v4-flash)。
+        应用当时没开机也不会丢:下次启动会自动补跑当天遗漏的那次。
+      </p>
+    </div>
+  );
+}
+
+/* 资讯聚合:接入开源项目 PrismFlowAgent(流光)。
+   通过 HTTP 调用,不并入本项目源码 —— 流光是 GPL-3.0,进程分离不影响本项目 MIT。 */
+function PrismFlowSettings() {
+  const [cfg, setCfg] = useState(null);
+  const [health, setHealth] = useState(null);
+  const [status, setStatus] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const refresh = async () => {
+    setCfg(await window.api.prism.getConfig().catch(() => null));
+    setHealth(await window.api.prism.health().catch(() => null));
+  };
+  useEffect(() => { refresh(); }, []);
+  if (!cfg) return null;
+
+  const register = async () => {
+    setBusy(true); setStatus('注册中…');
+    try {
+      const { verificationUrl } = await window.api.prism.register({ name: cfg.agentName });
+      await refresh();
+      if (verificationUrl) {
+        setStatus('已注册,请在浏览器里点「确认并批准接入」完成激活');
+        window.api.shell.openExternal(verificationUrl);
+      } else setStatus('已注册');
+    } catch (e) { setStatus(e?.message || '注册失败'); }
+    setBusy(false);
+  };
+
+  const copyDeploy = async () => {
+    const prompt = await window.api.prism.deployPrompt({}).catch(() => '');
+    if (prompt) {
+      await window.api.clipboard.writeText(prompt);
+      setStatus('部署指令已复制,粘贴到对话里发给 codex 即可');
+    }
+  };
+
+  return (
+    <div className="stt-settings">
+      <div className="settings-row"><span><b>资讯聚合(PrismFlowAgent)</b></span></div>
+      <p className="muted small">
+        开源自动化资讯系统,抓 GitHub Trending / 论文 / RSS / 社媒并 AI 总结。本应用通过它的 API 调用,
+        没把源码并进来(它是 GPL-3.0,进程分离调用不影响本项目 MIT 许可)。
+      </p>
+      <label className="settings-row">
+        <span>服务地址</span>
+        <input className="settings-input" value={cfg.baseUrl || ''} placeholder="http://localhost:3000"
+          onChange={(e) => { const v = e.target.value; setCfg({ ...cfg, baseUrl: v }); window.api.prism.setConfig({ baseUrl: v }); }}
+          onBlur={refresh} />
+      </label>
+      <label className="settings-row">
+        <span>接入名称</span>
+        <input className="settings-input" value={cfg.agentName || ''} placeholder="RemoteAgentStudio"
+          onChange={(e) => { const v = e.target.value; setCfg({ ...cfg, agentName: v }); window.api.prism.setConfig({ agentName: v }); }} />
+      </label>
+      <div className="settings-row">
+        <span>状态</span>
+        <span className="muted small">
+          {health == null ? '检测中…'
+            : health.authorized ? '✅ 已连接并授权'
+              : health.online ? '⚠️ 服务在线,未授权' : `❌ 未连接:${health.error || ''}`}
+        </span>
+      </div>
+      <div className="settings-row">
+        <span />
+        <span className="row gap">
+          <button className="btn small" disabled={busy} onClick={register}>
+            {cfg.hasKey ? '重新注册并授权' : '注册并授权'}
+          </button>
+          <button className="btn small" onClick={refresh}>重新检测</button>
+          <button className="btn small ghost" onClick={copyDeploy}>复制部署指令</button>
+          {cfg.hasKey && (
+            <button className="btn small ghost"
+              onClick={() => window.api.prism.setConfig({ apiKey: null }).then(refresh)}>清除授权</button>
+          )}
+        </span>
+      </div>
+      {cfg.verificationUrl && !health?.authorized && (
+        <p className="muted small">
+          激活链接:<a href="#" onClick={(e) => { e.preventDefault(); window.api.shell.openExternal(cfg.verificationUrl); }}>
+            {cfg.verificationUrl}</a>
+        </p>
+      )}
+      {status && <p className="muted small">{status}</p>}
     </div>
   );
 }

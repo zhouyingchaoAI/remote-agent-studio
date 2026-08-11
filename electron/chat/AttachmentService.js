@@ -67,7 +67,9 @@ class AttachmentService {
       const file = files[index];
       const stat = fs.statSync(file.path);
       if (!stat.isFile()) throw new Error(`${file.name} is not a file`);
-      if (stat.size > MAX_ATTACHMENT_BYTES) throw new Error(`${file.name} exceeds 20 MB`);
+      if (stat.size > MAX_ATTACHMENT_BYTES) {
+        throw new Error(`${file.name} 超过上限(${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB)`);
+      }
       const remotePath = isLocal
         ? path.join(targetDir, names[index])
         : path.posix.join(targetDir, names[index]);

@@ -109,8 +109,17 @@ function TermView({ hostId, termId, active }) {
         term.write('\r\n\x1b[33m[会话已关闭,可点右上角「重连终端」]\x1b[0m\r\n');
     });
 
-    window.api.term.open({ hostId, termId, cols: term.cols, rows: term.rows }).catch((e) =>
-      term.write(`\x1b[31m${e.message}\x1b[0m\r\n`));
+    window.api.term.open({ hostId, termId, cols: term.cols, rows: term.rows })
+      .then(() => {
+        // 有待执行命令(如从认证卡片点「在本机登录」跳过来)则自动敲进去
+        const pending = useStore.getState().pendingTermCommand;
+        if (pending && pending.hostId === hostId) {
+          useStore.getState().setPendingTermCommand(null);
+          // 等 shell 初始化完再发,否则会被启动输出吞掉
+          setTimeout(() => window.api.term.write({ hostId, termId, data: `${pending.command}\n` }), 1200);
+        }
+      })
+      .catch((e) => term.write(`\x1b[31m${e.message}\x1b[0m\r\n`));
 
     const disp = term.onData((data) => window.api.term.write({ hostId, termId, data }));
     const onResize = () => {

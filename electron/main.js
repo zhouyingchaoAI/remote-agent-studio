@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const dgram = require('dgram');
-const { SSHManager } = require('./ssh/SSHManager');
+const { SSHManager, shellQuote } = require('./ssh/SSHManager');
 const { ProxyService } = require('./ssh/ProxyService');
 const { Installer } = require('./ssh/Installer');
 const { AgentSession } = require('./ssh/AgentSession');
@@ -12,13 +12,28 @@ const { GROK_DEFAULT_MODEL, parseGrokSpec } = require('./ssh/grokProviders');
 const { LocalExecutor } = require('./LocalExecutor');
 const { AttachmentService } = require('./chat/AttachmentService');
 const stt = require('./stt');
+const prismflow = require('./prismflow');
+const obsidian = require('./obsidian');
+const obsidianNotes = require('./obsidianNotes');
+const obsidianGraph = require('./obsidianGraph');
+const autoCapture = require('./autoCapture');
+const claudeKeychain = require('./claudeKeychain');
+const cliSessions = require('./cliSessions');
+const skillsService = require('./skillsService');
+const skillsMarket = require('./skillsMarket');
+const { lintSkill, ENGINE_SKILL_DIRS } = require('./skills');
+const { interpretVoiceCommand } = require('./voice');
 const { captureRegion } = require('./screenshot');
 
 const DEFAULT_SCREENSHOT_SHORTCUT = 'CommandOrControl+Shift+2';
 const {
   loadHosts, saveHosts, loadConvos, saveConvos, loadProxies, saveProxy,
-  loadKnownHosts, saveKnownHost, loadSettings, saveSettings
+  loadKnownHosts, saveKnownHost, loadSettings, saveSettings,
+  loadBrief, saveBrief, listBriefDates
 } = require('./store');
+const {
+  buildBriefPrompt, extractBriefJson, normalizeBrief, isBriefEmpty, todayKey
+} = require('./brief');
 
 let win;
 const sessions = new Map(); // hostId -> {ssh, proxy, installer, agent}
@@ -133,6 +148,10 @@ function initAutoUpdater() {
 app.whenReady().then(() => {
   require('./logger').initLogger(app.getPath('userData'));
   stt.init(app, safeStorage);
+  prismflow.init(app, safeStorage);
+  obsidian.init(app, safeStorage);
+  autoCapture.init(app, { runDigest: runDailyDigest });
+  autoCapture.start();
   createWindow();
   initAutoUpdater();
   registerScreenshotShortcut();
@@ -180,6 +199,8 @@ ipcMain.handle('fs:imageThumb', (_e, filePath) => {
 });
 
 /* ---------------- 语音转写(STT) ---------------- */
+// 语音指令解释(确认/取消/选项号);放主进程以免 preload 触碰沙箱禁止的相对 require
+ipcMain.handle('voice:interpret', (_e, { transcript, ctx } = {}) => interpretVoiceCommand(transcript, ctx));
 ipcMain.handle('stt:getConfig', () => stt.getConfig());
 ipcMain.handle('stt:setConfig', (_e, cfg) => stt.setConfig(cfg || {}));
 ipcMain.handle('stt:transcribe', (_e, payload) => stt.transcribe(payload || {}));
@@ -194,21 +215,63 @@ ipcMain.handle('stt:test', async () => {
 });
 
 /* ---------------- 区域截图 ---------------- */
-async function doCaptureScreenshot() {
+async function doCaptureScreenshot({ focusAfter = false } = {}) {
   const shot = await captureRegion(app, clipboard).catch(() => null);
-  if (shot) send('screenshot:captured', shot);
+  if (!shot) return null;
+  send('screenshot:captured', shot);
+  // 全局快捷键触发时应用多半在后台:截完拉到前台,让用户看到已加入对话
+  if (focusAfter && win && !win.isDestroyed()) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  }
   return shot;
 }
 ipcMain.handle('screenshot:capture', () => doCaptureScreenshot());
 
-/** 按设置注册截图全局快捷键(设置变更时重注册) */
+// 备选快捷键:默认键常被输入法/其它软件占用,依次降级
+const SCREENSHOT_FALLBACKS = [
+  'CommandOrControl+Shift+2',
+  'CommandOrControl+Alt+A',
+  'CommandOrControl+Shift+F1',
+  'Alt+Shift+A'
+];
+let activeScreenshotShortcut = { accelerator: '', enabled: true, fallback: false, error: '' };
+
+/**
+ * 按设置注册截图全局快捷键。
+ * register() 在快捷键被占用时返回 false 而不抛错,必须检查返回值,
+ * 否则会出现"设置里写着快捷键、按下去却没反应"的静默失败。
+ */
 function registerScreenshotShortcut() {
   globalShortcut.unregisterAll();
   const s = loadSettings();
-  if (s.screenshotShortcutEnabled === false) return;
-  const accel = s.screenshotShortcut || DEFAULT_SCREENSHOT_SHORTCUT;
-  try { globalShortcut.register(accel, () => doCaptureScreenshot()); } catch (_) {}
+  if (s.screenshotShortcutEnabled === false) {
+    activeScreenshotShortcut = { accelerator: '', enabled: false, fallback: false, error: '' };
+    return activeScreenshotShortcut;
+  }
+  const preferred = s.screenshotShortcut || DEFAULT_SCREENSHOT_SHORTCUT;
+  const candidates = [preferred, ...SCREENSHOT_FALLBACKS.filter((k) => k !== preferred)];
+  for (const accel of candidates) {
+    let ok = false;
+    try { ok = globalShortcut.register(accel, () => doCaptureScreenshot({ focusAfter: true })); }
+    catch (_) { ok = false; }
+    if (ok && globalShortcut.isRegistered(accel)) {
+      activeScreenshotShortcut = {
+        accelerator: accel, enabled: true, fallback: accel !== preferred, error: ''
+      };
+      return activeScreenshotShortcut;
+    }
+  }
+  activeScreenshotShortcut = {
+    accelerator: '', enabled: true, fallback: false,
+    error: `快捷键注册失败(${preferred} 及备选键均被占用,常见于输入法/截图工具抢占)。可在设置里换一个组合。`
+  };
+  return activeScreenshotShortcut;
 }
+
+/** 界面查询实际生效的快捷键(可能与设置里填的不同) */
+ipcMain.handle('screenshot:shortcutStatus', () => activeScreenshotShortcut);
 
 ipcMain.handle('clipboard:readText', () => clipboard.readText());
 ipcMain.handle('clipboard:writeText', (_event, text) => {
@@ -421,6 +484,56 @@ ipcMain.handle('setup:detectLocalCodex', async () => {
   return result;
 });
 
+/** 检测本机 Claude Code:CLI 版本 + 凭据来源(钥匙串/文件)+ 有效性 + 到期时间 */
+ipcMain.handle('setup:detectLocalClaude', async () => {
+  const { execFile } = require('child_process');
+  const filePath = path.join(os.homedir(), '.claude', '.credentials.json');
+  const result = {
+    cliVersion: '', source: '', hasAuth: false, authValid: false, expired: false,
+    expiresAt: 0, subscription: '', account: '', filePath, platform: process.platform
+  };
+
+  // 凭据:macOS 优先钥匙串,其次文件;Linux/Win 只有文件
+  let credText = '';
+  if (process.platform === 'darwin') {
+    const cred = await claudeKeychain.exportCredentials();
+    if (cred.ok) { credText = cred.text; result.source = 'keychain'; }
+    else result.keychainError = cred.error;
+  }
+  if (!credText && fs.existsSync(filePath)) {
+    try { credText = fs.readFileSync(filePath, 'utf8'); result.source = 'file'; } catch (_) {}
+  }
+  if (credText) {
+    result.hasAuth = true;
+    const s = claudeKeychain.summarizeCredentials(credText);
+    result.authValid = s.valid && !s.expired;
+    result.expired = s.expired;
+    result.expiresAt = s.expiresAt;
+    result.subscription = s.subscription;
+    result.account = s.account;
+  }
+
+  // 本机 claude CLI 版本
+  const candidates = [
+    'claude',
+    path.join(os.homedir(), '.npm-global/bin/claude'),
+    path.join(os.homedir(), '.local/bin/claude'),
+    '/opt/homebrew/bin/claude',
+    '/usr/local/bin/claude'
+  ];
+  for (const bin of candidates) {
+    // eslint-disable-next-line no-await-in-loop
+    const v = await new Promise((resolve) => {
+      execFile(bin, ['--version'], {
+        timeout: 5000,
+        env: { ...process.env, PATH: `${process.env.PATH}:/opt/homebrew/bin:/usr/local/bin:${os.homedir()}/.npm-global/bin:${os.homedir()}/.local/bin` }
+      }, (err, stdout) => resolve(err ? '' : String(stdout).trim()));
+    });
+    if (v) { result.cliVersion = v; break; }
+  }
+  return result;
+});
+
 ipcMain.handle('setup:syncAuth', async (_e, { hostId, agent }) => {
   const s = getSession(hostId);
   const log = (t) => send('setup:log', { hostId, text: t });
@@ -445,8 +558,35 @@ ipcMain.handle('setup:syncAuth', async (_e, { hostId, agent }) => {
     log(`✓ 已下发 ~/${f.rel} → 远程 ${rp}\n`);
     synced++;
   }
-  if (agent === 'claude' && synced === 0)
-    log('未找到本机 Claude 认证文件(macOS 凭证保存在钥匙串中,无法直接复制)。\n建议:在下方写入 ANTHROPIC_API_KEY,或在「终端」页运行 claude 完成交互登录。\n');
+  // macOS 上 Claude 凭据在钥匙串里(不是文件),需要先导出再下发。
+  // 这样 Pro/Max 订阅登录态也能在远程用,不必额外买 API Key。
+  if (agent === 'claude' && synced === 0 && process.platform === 'darwin') {
+    log('本机没有凭据文件,尝试从 macOS 钥匙串导出 Claude 登录态...\n');
+    const cred = await claudeKeychain.exportCredentials();
+    if (cred.ok) {
+      const rp = `${rhome}/.claude/.credentials.json`;
+      await s.ssh.exec(`mkdir -p '${rhome}/.claude'`);
+      // 经 base64 传输,避免 JSON 里的引号被 shell 吃掉
+      const b64 = Buffer.from(cred.text, 'utf8').toString('base64');
+      const r = await s.ssh.exec(
+        `printf '%s' '${b64}' | base64 -d > '${rp}' && chmod 600 '${rp}' && echo OK`
+      );
+      if (!/OK/.test(r.stdout || '')) throw new Error('写入远程 .credentials.json 失败');
+      synced++;
+      log(`✓ 已从钥匙串导出并下发 → ${rp}(600 权限)\n`);
+      if (cred.expiresAt) {
+        const left = cred.expiresAt - Date.now();
+        log(left > 0
+          ? `  token 有效期至 ${new Date(cred.expiresAt).toLocaleString()}(约 ${Math.round(left / 3600000)} 小时后过期)\n`
+          : '  ⚠️ 该 token 已过期,请在本机运行 claude 重新登录后再下发一次\n');
+      }
+    } else {
+      log(`未能从钥匙串导出:${cred.error}\n` +
+        '备选:在下方写入 ANTHROPIC_API_KEY,或在「终端」页运行 claude 完成交互登录。\n');
+    }
+  } else if (agent === 'claude' && synced === 0) {
+    log('未找到本机 Claude 认证文件。\n建议:在下方写入 ANTHROPIC_API_KEY,或在「终端」页运行 claude 完成交互登录。\n');
+  }
 
   // 下发后自动做一次远程可用性测试
   if (synced > 0) {
@@ -479,7 +619,10 @@ async function testRemoteAgent(s, agent, log) {
     cmd = `${env} export PATH="$HOME/.grok/bin:$PATH"; cd "$HOME" && ` +
       `grok --output-format json -m '${alias}' --sandbox read-only -p '仅回复两个字:可用' 2>&1 </dev/null`;
   } else {
-    cmd = `${env} cd "$HOME" && claude -p --permission-mode plan '仅回复两个字:可用' 2>&1 </dev/null`;
+    // 默认用 opus 测试:CLI 的默认模型可能是账号已无额度的那个,
+    // 会把「额度耗尽」误报成「认证/环境有问题」
+    const model = loadSettings().claudeTestModel || 'opus';
+    cmd = `${env} cd "$HOME" && claude -p --permission-mode plan --model ${shellQuote(model)} '仅回复两个字:可用' 2>&1 </dev/null`;
   }
   const r = await s.ssh.exec(cmd);
   const out = (r.stdout || '').trim();
@@ -493,7 +636,17 @@ async function testRemoteAgent(s, agent, log) {
     return { ok: true, output: out.slice(-500) };
   }
   log(`✗ 远程 ${agent} 测试未通过 (exit ${r.code})\n`);
-  if (looksAuthErr) log('  疑似认证问题:请确认本机已登录且 auth.json 有效。\n');
+  if (/out of usage credits|usage limit|quota exceeded/i.test(out)) {
+    log('  额度已用尽(不是认证问题,登录态是好的)。\n' +
+      '  处理:换一个仍有额度的模型(对话页模型下拉,或用国产模型引擎),或为账号补充额度。\n');
+  } else if (/OAuth session expired|could not be refreshed/i.test(out)) {
+    log('  登录态已过期:请在本机运行一次 claude 确认仍是登录状态,然后回到这里重新点「下发 Claude 认证」。\n' +
+      '  (订阅登录的 token 有有效期,过期后需要重新下发一次)\n');
+  } else if (looksAuthErr) {
+    log(agent === 'claude'
+      ? '  疑似认证问题:macOS 的 Claude 凭据在钥匙串里,请点「下发 Claude 认证」自动导出;或改用 ANTHROPIC_API_KEY。\n'
+      : '  疑似认证问题:请确认本机已登录且 auth.json 有效。\n');
+  }
   else if (looksNetErr) log('  疑似网络问题:请到上方重新「应用代理配置并测试」。\n');
   log(`  输出: ${out.slice(-400)}\n`);
   return { ok: false, output: out.slice(-500) };
@@ -575,6 +728,641 @@ async function resolveProxyCfg(cfg, hostId) {
   return cfg;
 }
 
+/* ---------------- 每日速览(Daily Brief) ---------------- */
+ipcMain.handle('brief:get', (_e, { date } = {}) => loadBrief(date || todayKey()));
+ipcMain.handle('brief:dates', () => listBriefDates());
+ipcMain.handle('brief:today', () => todayKey());
+
+let briefRunning = false;
+/**
+ * 跑一次速览:用一个临时 AgentSession 执行提示词,收集最终文本后解析成结构化数据。
+ * 不写入任何对话记录,避免污染聊天历史。
+ */
+ipcMain.handle('brief:run', async (_e, { hostId, agent = 'codex', cwd = '', model = '', topics = '' } = {}) => {
+  if (briefRunning) throw new Error('已有一次速览正在进行中');
+  briefRunning = true;
+  const date = todayKey();
+  const progress = (text) => send('brief:progress', { text });
+  try {
+    const s = getSession(hostId);
+    // 只读沙箱即可:速览只需要联网检索,不该改任何文件
+    const session = new AgentSession(s.ssh, s.proxy, { agent, cwd, model, permissionMode: 'workspace' });
+    if (agent === 'grok') {
+      await s.installer.ensureGrokConfig(loadSettings().grokModels || []).catch(() => {});
+    }
+
+    let collected = '';
+    session.on('message', (msg) => {
+      if (msg.kind === 'text' || msg.kind === 'result') collected += `\n${msg.text || ''}`;
+      else if (msg.kind === 'text_delta') collected += msg.text || '';
+      // 把过程反馈给界面,长任务不至于像卡死
+      if (msg.kind === 'tool') progress(`检索中:${msg.name || ''} ${String(msg.detail || '').slice(0, 80)}`);
+      else if (msg.kind === 'status') progress(msg.text || '');
+      else if (msg.kind === 'error' || msg.kind === 'stderr') progress(String(msg.text || '').slice(0, 200));
+    });
+
+    progress('正在让 agent 联网检索…');
+    await session.send(buildBriefPrompt({ date, topics }));
+
+    const parsed = extractBriefJson(collected);
+    if (!parsed) {
+      throw new Error('未能从模型输出里解析出结构化结果(可能是检索失败或输出被截断),可重试一次');
+    }
+    const sections = normalizeBrief(parsed);
+    if (isBriefEmpty(sections)) {
+      throw new Error('本次没有检索到有效内容,请稍后重试或检查远程网络/代理');
+    }
+    const payload = { date, generatedAt: Date.now(), agent, model, sections };
+    saveBrief(date, payload);
+    return payload;
+  } finally {
+    briefRunning = false;
+  }
+});
+
+/* ---------------- PrismFlowAgent(开源资讯聚合)集成 ---------------- */
+ipcMain.handle('prism:getConfig', () => prismflow.getConfig());
+ipcMain.handle('prism:setConfig', (_e, cfg) => prismflow.setConfig(cfg || {}));
+ipcMain.handle('prism:register', (_e, { name } = {}) => prismflow.register(name));
+ipcMain.handle('prism:health', () => prismflow.health());
+ipcMain.handle('prism:deployPrompt', (_e, opts) => prismflow.buildDeployPrompt(opts || {}));
+ipcMain.handle('prism:capabilities', async () => {
+  const data = await prismflow.discovery();
+  return prismflow.extractCapabilities(data);
+});
+/** 执行流光的 agent/workflow;若输出是速览 JSON 则解析成卡片,否则原样返回文本 */
+ipcMain.handle('prism:execute', async (_e, { action, id, input } = {}) => {
+  const result = await prismflow.execute({ action, id, input });
+  const text = prismflow.extractExecuteText(result);
+  const parsed = extractBriefJson(text);
+  const sections = parsed ? normalizeBrief(parsed) : null;
+  return { text, sections: sections && !isBriefEmpty(sections) ? sections : null };
+});
+/** 把流光跑出来的结果存成当日速览 */
+ipcMain.handle('prism:saveAsBrief', (_e, { sections, text, source } = {}) => {
+  const date = todayKey();
+  const payload = { date, generatedAt: Date.now(), agent: source || 'PrismFlowAgent', sections, text };
+  saveBrief(date, payload);
+  return payload;
+});
+
+/* ---------------- Obsidian 知识库 ---------------- */
+ipcMain.handle('obsidian:getConfig', () => obsidian.getConfig());
+ipcMain.handle('obsidian:setConfig', (_e, cfg) => obsidian.setConfig(cfg || {}));
+ipcMain.handle('obsidian:test', () => obsidian.test());
+ipcMain.handle('obsidian:pickVault', async () => {
+  const r = await dialog.showOpenDialog(win, {
+    title: '选择 Obsidian vault 目录', properties: ['openDirectory']
+  });
+  if (r.canceled || !r.filePaths[0]) return null;
+  return obsidian.setConfig({ vaultPath: r.filePaths[0] });
+});
+
+/**
+ * 新建一个 vault:没用过 Obsidian 的人也能立刻开始积累。
+ * 建出的目录含 .obsidian(Obsidian 据此识别 vault)与一篇说明笔记。
+ */
+ipcMain.handle('obsidian:createVault', async () => {
+  const r = await dialog.showSaveDialog(win, {
+    title: '新建 Obsidian vault',
+    defaultPath: path.join(app.getPath('documents'), '我的知识库'),
+    buttonLabel: '创建'
+  });
+  if (r.canceled || !r.filePath) return null;
+  const vaultPath = r.filePath;
+  fs.mkdirSync(path.join(vaultPath, '.obsidian'), { recursive: true });
+  const cfg = obsidian.setConfig({ vaultPath });
+  const folder = obsidian.sanitizeRelFolder(cfg.folder);
+  fs.mkdirSync(path.join(vaultPath, folder), { recursive: true });
+  // 放一篇起始笔记,图谱页立刻有内容,不至于开局一片空白
+  const welcome = [
+    '---', 'title: 知识库说明', 'tags:', '  - MOC', '---', '',
+    '# 知识库说明', '',
+    '这个库由 Remote Agent Studio 自动维护经验沉淀。', '',
+    '## 它怎么工作', '',
+    '- 对话页点 🧠 可把当前对话提炼成原子笔记',
+    '- 开启「每日自动沉淀」后,每天定时把当天的可复用经验写进来',
+    '- 已有笔记按日期**追加**补充,你手写的内容不会被覆盖',
+    '- 同一概念复用相同标题并建立双向链接,图谱会随时间越长越密', '',
+    // 注意:这里不要写 [[xxx]],否则新库开局就带一处断链,统计看着不健康
+    '## 怎么看', '',
+    '在「图谱」页可以查看与管理,重点看**孤立笔记**和**断链**两个数字。', ''
+  ].join('\n');
+  fs.writeFileSync(path.join(vaultPath, folder, '知识库说明.md'), welcome);
+  return cfg;
+});
+
+/** 诊断:准确说清「为什么图谱是空的」,而不是笼统报错 */
+ipcMain.handle('obsidian:diagnose', () => {
+  const cfg = obsidian.getConfig();
+  const out = { ...cfg, exists: false, isVault: false, folderExists: false, mdInVault: 0, mdInFolder: 0 };
+  if (!cfg.vaultPath) return out;
+  out.exists = fs.existsSync(cfg.vaultPath);
+  if (!out.exists) return out;
+  out.isVault = fs.existsSync(path.join(cfg.vaultPath, '.obsidian'));
+  const folderPath = path.join(cfg.vaultPath, obsidian.sanitizeRelFolder(cfg.folder));
+  out.folderExists = fs.existsSync(folderPath);
+  out.mdInVault = obsidianGraph.collectMarkdown(cfg.vaultPath, { max: 200 }).length;
+  out.mdInFolder = out.folderExists ? obsidianGraph.collectMarkdown(folderPath, { max: 200 }).length : 0;
+  return out;
+});
+
+/* ------------------------------------------------------------------ 技能(Agent Skills)
+ * SKILL.md 是跨引擎开放标准,同一份技能对 claude/codex/grok 都生效。
+ * 远程主机默认是裸环境,一条技能都没有 —— 这里负责把它们装过去。 */
+
+ipcMain.handle('skills:listBuiltin', () => skillsService.listBuiltin());
+
+ipcMain.handle('skills:engineDirs', () => ENGINE_SKILL_DIRS);
+
+/** 校验用户手写/粘贴的技能,给出可执行的改进建议 */
+ipcMain.handle('skills:lint', (_e, { content } = {}) => lintSkill(content || ''));
+
+/** 列出某主机某引擎下已安装的技能 */
+ipcMain.handle('skills:listInstalled', async (_e, { hostId, engine } = {}) => {
+  const { ssh } = getSession(hostId);
+  return skillsService.listInstalled(ssh, engine || 'claude');
+});
+
+/** 下发:把选中的技能写入选中引擎的技能目录 */
+ipcMain.handle('skills:install', async (_e, { hostId, engines, skills } = {}) => {
+  const { ssh } = getSession(hostId);
+  const log = (text) => win?.webContents.send('skills:log', { hostId, text });
+  return skillsService.installSkills(ssh, { engines, skills, log });
+});
+
+ipcMain.handle('skills:remove', async (_e, { hostId, engine, name } = {}) => {
+  const { ssh } = getSession(hostId);
+  return skillsService.removeSkill(ssh, engine, name);
+});
+
+/* -- 技能市场:运行时从上游仓库拉取,不把上游代码 vendor 进本仓库 -- */
+
+ipcMain.handle('skills:marketSources', () => skillsMarket.SOURCES);
+
+ipcMain.handle('skills:marketList', async (_e, { repo, branch } = {}) => {
+  const spec = skillsMarket.parseRepoSpec(repo || '');
+  if (!spec) throw new Error('仓库格式应为 owner/repo');
+  return skillsMarket.listSource({ repo: spec, branch: branch || 'main' });
+});
+
+ipcMain.handle('skills:marketFetch', async (_e, { repo, path: p, branch } = {}) => {
+  const spec = skillsMarket.parseRepoSpec(repo || '');
+  if (!spec) throw new Error('仓库格式应为 owner/repo');
+  const content = await skillsMarket.fetchSkillContent({ repo: spec, path: p, branch: branch || 'main' });
+  return { content, ...lintSkill(content) };
+});
+
+/** 把每日速览归档成一篇笔记 */
+ipcMain.handle('obsidian:saveBrief', async (_e, { date } = {}) => {
+  const brief = loadBrief(date || todayKey());
+  if (!brief) throw new Error('没有可归档的速览');
+  const cfg = obsidian.getConfig();
+  const rel = obsidian.notePath(cfg.folder, `AI 速览 ${brief.date}`);
+  await obsidian.writeNote(rel, obsidianNotes.renderBriefNote(brief));
+  return { path: rel };
+});
+
+/**
+ * 把对话提炼成原子笔记并写入知识库:
+ * 用当前引擎跑一次抽取(输出 JSON),再渲染成带双链的笔记 + 更新 MOC。
+ */
+ipcMain.handle('obsidian:saveFromConversation', async (_e, { hostId, agent = 'codex', cwd = '', model = '', content, topic } = {}) => {
+  if (!String(content || '').trim()) throw new Error('没有可提炼的内容');
+  const s = getSession(hostId);
+  const session = new AgentSession(s.ssh, s.proxy, { agent, cwd, model, permissionMode: 'workspace' });
+  if (agent === 'grok') await s.installer.ensureGrokConfig(loadSettings().grokModels || []).catch(() => {});
+
+  let collected = '';
+  session.on('message', (msg) => {
+    if (msg.kind === 'text' || msg.kind === 'result') collected += `\n${msg.text || ''}`;
+    else if (msg.kind === 'text_delta') collected += msg.text || '';
+    else if (msg.kind === 'status') send('obsidian:progress', { text: msg.text || '' });
+  });
+  send('obsidian:progress', { text: '正在提炼原子笔记…' });
+  await session.send(obsidianNotes.buildExtractPrompt({ content, topic }));
+
+  const parsed = obsidianNotes.parseNotesJson(collected);
+  if (!parsed) throw new Error('未能从模型输出解析出笔记结构,可重试一次');
+  const { notes, moc } = obsidianNotes.normalizeNotes(parsed);
+  if (!notes.length) throw new Error('没有提炼出有效笔记');
+
+  send('obsidian:progress', { text: `正在写入 ${notes.length} 篇笔记…` });
+  const rendered = notes.map((n) => ({ ...n, content: obsidianNotes.renderNote({ ...n, source: `对话 · ${agent}` }) }));
+  const result = await obsidian.saveNotes({ notes: rendered, mocName: moc });
+  return { ...result, count: rendered.length, mocName: moc };
+});
+
+/* ---------------- Obsidian 知识图谱 ---------------- */
+ipcMain.handle('obsidian:graph', (_e, { scope = 'vault' } = {}) => {
+  const cfg = obsidian.getConfig();
+  // scope=folder 只看本工具的落地目录,vault 则看整个库
+  return obsidianGraph.scanVault(cfg.vaultPath, {
+    subFolder: scope === 'folder' ? obsidian.sanitizeRelFolder(cfg.folder) : ''
+  });
+});
+
+/** 按相对路径读一篇笔记(路径经 vault 边界校验) */
+ipcMain.handle('obsidian:readNoteFile', (_e, { relPath } = {}) => {
+  const cfg = obsidian.getConfig();
+  if (!cfg.vaultPath) throw new Error('未配置 vault');
+  const abs = obsidian.assertInsideVault(cfg.vaultPath, path.join(cfg.vaultPath, relPath || ''));
+  return { relPath, content: fs.readFileSync(abs, 'utf8') };
+});
+
+/** 删除笔记(移到系统废纸篓,避免误删不可恢复) */
+ipcMain.handle('obsidian:deleteNote', async (_e, { relPath } = {}) => {
+  const cfg = obsidian.getConfig();
+  if (!cfg.vaultPath) throw new Error('未配置 vault');
+  const abs = obsidian.assertInsideVault(cfg.vaultPath, path.join(cfg.vaultPath, relPath || ''));
+  await shell.trashItem(abs);   // 进废纸篓而不是直接 rm
+  return { ok: true };
+});
+
+/** 在 Obsidian 里打开该笔记 */
+ipcMain.handle('obsidian:openInApp', (_e, { relPath } = {}) => {
+  const cfg = obsidian.getConfig();
+  if (!cfg.vaultPath) throw new Error('未配置 vault');
+  const vaultName = path.basename(cfg.vaultPath);
+  const file = String(relPath || '').replace(/\.md$/i, '');
+  shell.openExternal(`obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(file)}`);
+  return { ok: true };
+});
+
+/* ---------------- 每日自动沉淀(无感知积累经验) ---------------- */
+
+/** 把一段对话压成纯文本(只保留有信息量的部分) */
+function conversationToText(conv) {
+  const lines = [];
+  for (const m of conv.messages || []) {
+    if (m.role === 'user') lines.push(`【我】${m.text || ''}`);
+    else if (m.kind === 'text' || m.kind === 'result') lines.push(`【${conv.agent || 'agent'}】${m.text || ''}`);
+    else if (m.kind === 'tool') lines.push(`[工具] ${m.name || ''} ${String(m.detail || '').slice(0, 200)}`);
+    else if (m.kind === 'error') lines.push(`[错误] ${String(m.text || '').slice(0, 200)}`);
+  }
+  return lines.filter(Boolean).join('\n');
+}
+
+/** 当天有实质产出的对话才值得沉淀:有来回、有工具动作或足够长度 */
+function pickConversationsForDigest(convos, date) {
+  const start = new Date(`${date}T00:00:00`).getTime();
+  const end = start + 86400000;
+  return (convos || [])
+    .filter((c) => {
+      const t = c.updatedAt || 0;
+      if (t < start || t >= end) return false;
+      const msgs = c.messages || [];
+      const userTurns = msgs.filter((m) => m.role === 'user').length;
+      const hasTool = msgs.some((m) => m.kind === 'tool' || m.kind === 'diff');
+      const text = conversationToText(c);
+      return userTurns >= 1 && (hasTool || text.length > 600);
+    })
+    .map((c) => ({ title: c.title, content: conversationToText(c) }));
+}
+
+/** 单批回溯的字符预算:太大容易被模型截断,太小又浪费调用次数 */
+const BACKFILL_CHARS_PER_BATCH = 20000;
+
+/** 全部历史对话(按时间正序,老的先沉淀,后面的才能链到前面) */
+function pickAllConversations() {
+  return (loadConvos() || [])
+    .filter((c) => {
+      const msgs = c.messages || [];
+      const userTurns = msgs.filter((m) => m.role === 'user').length;
+      const hasTool = msgs.some((m) => m.kind === 'tool' || m.kind === 'diff');
+      return userTurns >= 1 && (hasTool || conversationToText(c).length > 400);
+    })
+    .sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0))
+    .map((c) => ({ title: c.title, content: conversationToText(c) }));
+}
+
+/** 每日汇总任务:抽取 -> 合并入库(供定时器与「立即运行」共用) */
+async function runDailyDigest({ date, cfg }) {
+  const obsCfg = obsidian.getConfig();
+  if (obsCfg.transport === 'file' && !obsCfg.vaultPath) throw new Error('未配置 Obsidian vault 路径');
+
+  const conversations = pickConversationsForDigest(loadConvos(), date);
+  if (conversations.length < (cfg.minConversations || 1)) {
+    return { count: 0, created: 0, merged: 0, note: '当天没有值得沉淀的对话' };
+  }
+
+  const s = getSession(cfg.hostId || 'local');
+  await s.installer.ensureGrokConfig(loadSettings().grokModels || []).catch(() => {});
+  // 定时任务同样自动挑可用引擎:半夜跑失败没人看得到,不能因为配置过期就白跑
+  const picked = await pickWorkingExtractor(s, { preferred: cfg.agent, model: cfg.model });
+  if (!picked.agent) {
+    throw new Error(`没有可用的抽取引擎:${picked.tried.join('; ')}`);
+  }
+  const agent = picked.agent;
+  const session = new AgentSession(s.ssh, s.proxy, {
+    agent, cwd: '', model: picked.model || '', permissionMode: 'workspace'
+  });
+
+  let collected = '';
+  session.on('message', (msg) => {
+    if (msg.kind === 'text' || msg.kind === 'result') collected += `\n${msg.text || ''}`;
+    else if (msg.kind === 'text_delta') collected += msg.text || '';
+  });
+
+  await session.send(obsidianNotes.buildDailyExtractPrompt({
+    date, conversations, existingTitles: obsidian.listExistingTitles()
+  }));
+
+  const parsed = obsidianNotes.parseNotesJson(collected);
+  if (!parsed) throw new Error('未能解析出笔记结构');
+  const { notes, moc } = obsidianNotes.normalizeNotes(parsed);
+  if (!notes.length) return { count: 0, created: 0, merged: 0, note: '模型判断当天无可沉淀内容' };
+
+  const r = await obsidian.saveNotesMerging({ notes, mocName: moc, date, source: `每日沉淀 · ${agent}` });
+  send('autocapture:done', { date, count: notes.length, created: r.created, merged: r.merged });
+  return { count: notes.length, created: r.created, merged: r.merged, moc: r.moc };
+}
+
+/** 开启前自检:把「会不会静默失败」提前暴露出来 */
+ipcMain.handle('autocapture:check', async () => {
+  const cfg = autoCapture.getConfig();
+  const obs = obsidian.getConfig();
+  const out = { vault: false, cli: false, host: cfg.hostId || 'local', agent: cfg.agent, model: cfg.model, notes: [] };
+
+  // 1) vault 可写
+  if (obs.transport === 'rest') out.vault = !!obs.hasKey;
+  else out.vault = !!obs.vaultPath && fs.existsSync(obs.vaultPath);
+  if (!out.vault) out.notes.push('未配置知识库(vault)——到图谱页或设置里先选一个');
+
+  // 2) 抽取引擎的 CLI 在目标主机上是否可用
+  try {
+    const s = getSession(out.host);
+    const env = await s.installer.detect();
+    const need = { codex: env.codex, claude: env.claude, deepseek: env.claude, grok: env.grok }[out.agent];
+    out.cli = !!need;
+    out.cliVersion = need || '';
+    if (!need) {
+      out.notes.push(`主机「${out.host}」上没有 ${out.agent === 'grok' ? 'grok' : out.agent} CLI——去环境配置页安装,或换一个已装好的引擎`);
+    }
+  } catch (e) {
+    out.notes.push(`连不上主机「${out.host}」:${String(e?.message || e).slice(0, 120)}`);
+  }
+
+  out.ok = out.vault && out.cli;
+  if (out.ok) out.notes.push('前置条件齐全,可以开启');
+  return out;
+});
+
+/**
+ * 一键初始化知识库:没配 vault 就自动建一个,省掉所有中间步骤。
+ * 之前的流程要「选目录 → 回溯 → 开自动沉淀」三步,用户很容易卡在第一步。
+ */
+ipcMain.handle('obsidian:quickStart', () => {
+  const cfg = obsidian.getConfig();
+  if (cfg.vaultPath && fs.existsSync(cfg.vaultPath)) return { ...cfg, created: false };
+
+  // 默认建在「文稿/我的知识库」,不弹窗;想换位置可到设置里改
+  let base = path.join(app.getPath('documents'), '我的知识库');
+  let n = 1;
+  while (fs.existsSync(base)) { base = path.join(app.getPath('documents'), `我的知识库-${++n}`); }
+  fs.mkdirSync(path.join(base, '.obsidian'), { recursive: true });
+  const next = obsidian.setConfig({ vaultPath: base });
+  const folder = obsidian.sanitizeRelFolder(next.folder);
+  fs.mkdirSync(path.join(base, folder), { recursive: true });
+  fs.writeFileSync(path.join(base, folder, '知识库说明.md'), [
+    '---', 'title: 知识库说明', 'tags:', '  - MOC', '---', '',
+    '# 知识库说明', '',
+    '本库由 Remote Agent Studio 自动维护:把对话里的可复用经验沉淀成原子笔记,',
+    '同一概念复用相同标题并互相链接,图谱会随时间越长越密。', '',
+    '- 已有笔记按日期追加补充,手写内容不会被覆盖',
+    '- 在「图谱」页可查看与管理,重点看孤立笔记与断链两个数字', ''
+  ].join('\n'));
+  return { ...next, created: true, vaultPath: base };
+});
+
+/** 收集所有来源:应用对话 + 本机 CLI 会话 + 已连接远程主机上的 CLI 会话 */
+async function gatherAllSources({ includeCliSessions = true, includeRemote = true } = {}) {
+  const convos = pickAllConversations();
+  const local = includeCliSessions ? cliSessions.scanLocalSessions() : [];
+
+  // 远程只列文件不取内容 —— 内容在回溯时分页拉,避免一次几十 MB 压垮 SSH
+  const remoteFiles = [];
+  if (includeRemote) {
+    for (const [hostId, s] of sessions.entries()) {
+      if (hostId === LOCAL_ID || !s?.ssh || s.ssh.status !== 'connected') continue;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const files = await cliSessions.listRemoteSessionFiles((cmd) => s.ssh.exec(cmd));
+        remoteFiles.push(...files.map((f) => ({ ...f, hostId })));
+      } catch (_) { /* 单台失败不影响其它 */ }
+    }
+  }
+  return { convos, local, remoteFiles };
+}
+
+/** 预估:全量回溯会处理哪些来源、多少字 */
+ipcMain.handle('autocapture:backfillEstimate', async (_e, opts = {}) => {
+  const { convos, local, remoteFiles } = await gatherAllSources(opts);
+  const localSum = cliSessions.summarize(local);
+  // 远程按文件大小估算(还没取内容),解析后通常会小不少
+  const remoteBytes = remoteFiles.reduce((n, f) => n + Math.min(f.size, 400000), 0);
+  const remoteProjects = new Set(remoteFiles.map((f) => cliSessions.projectFromRemotePath(f.file)));
+  const chars = convos.reduce((n, c) => n + c.content.length, 0) + localSum.chars + remoteBytes;
+  return {
+    conversations: convos.length,
+    cliSessions: localSum.sessions,
+    remoteSessions: remoteFiles.length,
+    projects: localSum.projects + remoteProjects.size,
+    topProjects: [
+      ...localSum.topProjects,
+      ...[...remoteProjects].slice(0, 8).map((project) => ({
+        project, count: remoteFiles.filter((f) => cliSessions.projectFromRemotePath(f.file) === project).length
+      }))
+    ].sort((a, b) => b.count - a.count).slice(0, 10),
+    chars,
+    batches: Math.max(1, Math.ceil(chars / BACKFILL_CHARS_PER_BATCH))
+  };
+});
+
+/**
+ * 全量回溯沉淀:把**所有历史对话**提炼进知识库。
+ * 分批处理(按字符预算切),每批之间刷新已有笔记标题,
+ * 这样后面的批次能链到前面新建的笔记上,而不是各自为政造孤点。
+ */
+ipcMain.handle('autocapture:backfill', async (_e, { maxBatches = 40, includeCliSessions = true } = {}) => {
+  const cfg = autoCapture.getConfig();
+  const obsCfg = obsidian.getConfig();
+  if (obsCfg.transport === 'file' && !obsCfg.vaultPath) throw new Error('未配置 Obsidian vault 路径');
+
+  // 应用内对话 + 本机/远程所有项目的 CLI 会话(后两者往往是经验的大头)
+  send('autocapture:progress', { text: '正在收集各来源(含远程主机上的项目会话)…' });
+  const { convos, local, remoteFiles } = await gatherAllSources({ includeCliSessions });
+  const all = [...convos, ...local.map((s) => ({ title: s.title, content: s.content }))];
+  if (!all.length && !remoteFiles.length) return { count: 0, created: 0, merged: 0, note: '没有可沉淀的历史对话' };
+
+  // 按字符预算分批,避免单次提示词过长被截断
+  const batches = [];
+  let cur = [], curLen = 0;
+  for (const c of all) {
+    if (curLen + c.content.length > BACKFILL_CHARS_PER_BATCH && cur.length) { batches.push(cur); cur = []; curLen = 0; }
+    cur.push(c); curLen += c.content.length;
+  }
+  if (cur.length) batches.push(cur);
+
+  // 远程会话:按传输预算分页,每页在提炼时才拉内容 —— 这样「全部历史」才真的是全部,
+  // 又不至于一次把几十上百 MB 灌进内存或压垮 SSH
+  const remotePages = cliSessions.pageRemoteFiles(remoteFiles);
+  const todo = [...batches, ...remotePages.map((page) => ({ __remotePage: page }))].slice(0, maxBatches);
+
+  const s = getSession(cfg.hostId || 'local');
+  await s.installer.ensureGrokConfig(loadSettings().grokModels || []).catch(() => {});
+
+  // 自动挑一个真的能用的引擎:配置里那个不行就换,而不是直接失败
+  send('autocapture:progress', { text: '正在挑选可用的抽取引擎…' });
+  const picked = await pickWorkingExtractor(s, { preferred: cfg.agent, model: cfg.model });
+  if (!picked.agent) {
+    throw new Error(
+      `没有可用的抽取引擎(主机 ${cfg.hostId || 'local'}):\n  ${picked.tried.join('\n  ')}\n`
+      + '→ 到「环境配置」页安装并登录任一引擎(codex 最省事),或在设置里换一台已配好的主机。'
+    );
+  }
+  const agent = picked.agent;
+  if (agent !== cfg.agent) {
+    send('autocapture:progress', { text: `配置的 ${cfg.agent} 不可用,已自动改用 ${agent}` });
+  }
+  const useModel = picked.model || '';
+
+  let created = 0, merged = 0, total = 0;
+  const errors = [];
+  for (let i = 0; i < todo.length; i += 1) {
+    send('autocapture:progress', { text: `正在提炼第 ${i + 1}/${todo.length} 批(共 ${all.length} 段对话)…`, done: i, total: todo.length });
+    const session = new AgentSession(s.ssh, s.proxy, { agent, cwd: '', model: useModel, permissionMode: 'workspace' });
+    let collected = '';
+    session.on('message', (m) => {
+      if (m.kind === 'text' || m.kind === 'result') collected += `\n${m.text || ''}`;
+      else if (m.kind === 'text_delta') collected += m.text || '';
+    });
+    try {
+      // 远程页:此时才去拉这一页的内容
+      let conversations = todo[i];
+      if (conversations.__remotePage) {
+        const page = conversations.__remotePage;
+        const hostId = page[0]?.hostId;
+        const hs = sessions.get(hostId);
+        if (!hs?.ssh) { errors.push(`第 ${i + 1} 批:主机 ${hostId} 已断开,跳过`); continue; }
+        send('autocapture:progress', { text: `正在从 ${hostId} 拉取第 ${i + 1}/${todo.length} 批会话(${page.length} 个文件)…` });
+        // eslint-disable-next-line no-await-in-loop
+        const fetched = await cliSessions.fetchRemoteSessionPage(
+          (cmd) => hs.ssh.exec(cmd), page, { hostLabel: hostId }
+        );
+        if (!fetched.length) { errors.push(`第 ${i + 1} 批:${hostId} 这页没有有效会话`); continue; }
+        conversations = fetched.map((f) => ({ title: f.title, content: f.content }));
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await session.send(obsidianNotes.buildDailyExtractPrompt({
+        date: '历史回溯',
+        conversations,
+        existingTitles: obsidian.listExistingTitles()   // 每批都刷新,后批才能链到前批
+      }));
+      const parsed = obsidianNotes.parseNotesJson(collected);
+      if (!parsed) {
+        // 记下原因而不是静默跳过 —— 否则用户只看到「沉淀 0 篇」无从下手
+        errors.push(`第 ${i + 1} 批:模型没返回可解析的 JSON${collected.trim() ? `(输出前 120 字:${collected.trim().slice(0, 120)})` : '(输出为空,多半是模型调用失败)'}`);
+        continue;
+      }
+      const { notes, moc } = obsidianNotes.normalizeNotes(parsed);
+      if (!notes.length) { errors.push(`第 ${i + 1} 批:模型判断无可沉淀内容`); continue; }
+      // eslint-disable-next-line no-await-in-loop
+      const r = await obsidian.saveNotesMerging({ notes, mocName: moc, source: `历史回溯 · ${agent}` });
+      created += r.created; merged += r.merged; total += notes.length;
+    } catch (e) {
+      const reason = String(e?.message || e).slice(0, 160);
+      errors.push(`第 ${i + 1} 批失败:${reason}`);
+      send('autocapture:progress', { text: `第 ${i + 1} 批失败(已跳过):${reason}` });
+    }
+  }
+  send('autocapture:progress', { text: '', done: todo.length, total: todo.length });
+  return { count: total, created, merged, batches: todo.length, conversations: all.length, errors };
+});
+
+/**
+ * 自动挑一个「真的能用」的抽取引擎。
+ * 手工配引擎太容易配错(装了但没登录、装了但架构不符、有额度的模型没选上),
+ * 与其让用户猜,不如逐个实测:先看 CLI 在不在,再实调一次确认能出结果。
+ */
+async function pickWorkingExtractor(s, { preferred, model } = {}) {
+  const env = await s.installer.detect().catch(() => ({}));
+  const installed = { codex: env.codex, claude: env.claude, deepseek: env.claude, grok: env.grok };
+  // 优先用用户指定的;其余按「配置成本低 → 高」排序
+  const order = [...new Set([preferred, 'codex', 'claude', 'grok', 'deepseek'].filter(Boolean))];
+  const tried = [];
+  for (const agent of order) {
+    if (!installed[agent]) { tried.push(`${agent}:未安装`); continue; }
+    // 指定了模型只对指定引擎生效,自动挑选时一律用该引擎的默认模型
+    // eslint-disable-next-line no-await-in-loop
+    const pre = await preflightExtractor(s, agent, agent === preferred ? model : '');
+    if (pre.ok) return { agent, model: agent === preferred ? model : '', tried };
+    tried.push(`${agent}:${String(pre.reason || '').split('\n')[0].slice(0, 80)}`);
+  }
+  return { agent: null, tried };
+}
+
+/** 抽取引擎连通性预检:实际调一次极小的请求,确认模型真能出结果 */
+async function preflightExtractor(s, agent, model) {
+  try {
+    const env = await s.installer.detect();
+    const cli = { codex: env.codex, claude: env.claude, deepseek: env.claude, grok: env.grok }[agent];
+    if (!cli) {
+      return { ok: false, reason: `目标主机上没有 ${agent === 'deepseek' ? 'claude' : agent} CLI,请到「环境配置」页安装,或在设置里换一个已装好的引擎` };
+    }
+    const probe = new AgentSession(s.ssh, s.proxy, { agent, cwd: '', model: model || '', permissionMode: 'workspace' });
+    let out = '';
+    probe.on('message', (m) => {
+      if (m.kind === 'text' || m.kind === 'result') out += m.text || '';
+      else if (m.kind === 'text_delta') out += m.text || '';
+      else if (m.kind === 'error' || m.kind === 'stderr') out += `\n[err] ${m.text || ''}`;
+    });
+    await probe.send('只回复两个字:可用');
+    if (!out.trim()) return { ok: false, reason: '模型没有任何输出(可能是 API Key 未配置、额度用尽或网络不通)' };
+    if (/error|not found|unauthorized|credit|quota|api key|not signed in/i.test(out)) {
+      let hint = '';
+      // 常见且可一键解决的情况,直接给出处置建议,别让用户自己翻文档
+      if (/not signed in|XAI_API_KEY|grok login/i.test(out)) {
+        hint = '\n→ grok CLI 未登录。最快的办法:到「设置 → Obsidian 知识库 → 每日自动沉淀」把「抽取引擎」改成已经能用的引擎(如 codex);'
+          + '或在「环境配置 → 国产模型端点配置」添加你的中转站端点并写入对应 API Key。';
+      } else if (/credit|quota|额度/i.test(out)) {
+        hint = '\n→ 该模型额度不足,换一个仍有额度的模型或引擎。';
+      } else if (/api key|unauthorized/i.test(out)) {
+        hint = '\n→ API Key 未配置或无效,到「环境配置」页写入对应的 Key。';
+      }
+      return { ok: false, reason: out.trim().slice(0, 240) + hint };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: String(e?.message || e).slice(0, 200) };
+  }
+}
+
+/** 逐台诊断远程会话记录的真实情况(路径/数量/CLI 安装),不再靠猜 */
+ipcMain.handle('autocapture:diagnoseRemote', async () => {
+  const results = [];
+  for (const [hostId, s] of sessions.entries()) {
+    if (hostId === LOCAL_ID) continue;
+    if (!s?.ssh || s.ssh.status !== 'connected') {
+      results.push({ hostId, connected: false });
+      continue;
+    }
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await s.ssh.exec(cliSessions.buildRemoteDiagnoseCommand());
+      results.push({ hostId, connected: true, ...cliSessions.parseRemoteDiagnose(r.stdout) });
+    } catch (e) {
+      results.push({ hostId, connected: true, error: String(e?.message || e).slice(0, 160) });
+    }
+  }
+  return results;
+});
+
+ipcMain.handle('autocapture:getConfig', () => autoCapture.getConfig());
+ipcMain.handle('autocapture:setConfig', (_e, cfg) => autoCapture.setConfig(cfg || {}));
+ipcMain.handle('autocapture:runNow', (_e, { date } = {}) =>
+  autoCapture.runOnce({ force: true, date: date || autoCapture.dayKey(new Date()) }));
+
 /* ---------------- 对话历史持久化 ---------------- */
 ipcMain.handle('convos:list', () => loadConvos());
 ipcMain.handle('convos:save', (_e, convos) => { saveConvos(convos); return true; });
@@ -610,6 +1398,7 @@ ipcMain.handle('agent:start', async (_e, { hostId, convId, opts, resume }) => {
       msg.codexStarted = agent.codexStarted;
       msg.grokSessionId = agent.grokSessionId;
       msg.agent = agent.opts.agent; // 本轮实际执行的引擎
+      msg.transient = agent.transient || null; // 本轮是否被网络/代理掐断(可自动续跑)
     }
     send('agent:message', { hostId, convId, msg });
   });
@@ -649,7 +1438,8 @@ ipcMain.handle('agent:send', async (_e, { hostId, convId, messageId, prompt, att
       codexSessionId: agent.codexSessionId,
       codexStarted: agent.codexStarted,
       grokSessionId: agent.grokSessionId,
-      agent: agent.opts.agent
+      agent: agent.opts.agent,
+      transient: agent.transient || null
     }
   });
   return true;

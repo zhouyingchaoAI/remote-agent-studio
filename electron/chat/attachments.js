@@ -1,6 +1,9 @@
 const path = require('path');
 
-const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+// 20MB 对工程文档(扫描报告、图纸、大表格)太小了;
+// 走 SFTP 上传本身没有这个量级的限制,放宽到 200MB 更贴合实际使用
+const MAX_ATTACHMENT_BYTES = 200 * 1024 * 1024;
+const formatMB = (bytes) => `${Math.round(bytes / 1024 / 1024)} MB`;
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
 
 function classifyFile(name) {
@@ -95,6 +98,7 @@ function isDangerousCommand(command) {
 
 module.exports = {
   MAX_ATTACHMENT_BYTES,
+  formatMB,
   IMAGE_EXTENSIONS,
   classifyFile,
   sanitizeFilename,

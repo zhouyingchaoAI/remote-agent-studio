@@ -6,12 +6,14 @@ const globals = {
     requestAnimationFrame: 'readonly', cancelAnimationFrame: 'readonly',
     ResizeObserver: 'readonly', localStorage: 'readonly', Uint8Array: 'readonly',
     prompt: 'readonly', confirm: 'readonly', alert: 'readonly',
-    navigator: 'readonly', MediaRecorder: 'readonly', Blob: 'readonly', FormData: 'readonly'
+    navigator: 'readonly', MediaRecorder: 'readonly', Blob: 'readonly', FormData: 'readonly',
+    getComputedStyle: 'readonly', devicePixelRatio: 'readonly'
   },
   node: {
     require: 'readonly', module: 'writable', process: 'readonly', __dirname: 'readonly',
     Buffer: 'readonly', console: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly',
     setInterval: 'readonly', clearInterval: 'readonly', global: 'readonly',
+    setImmediate: 'readonly', queueMicrotask: 'readonly',
     // Node 18+ 全局
     fetch: 'readonly', FormData: 'readonly', Blob: 'readonly', AbortController: 'readonly'
   }

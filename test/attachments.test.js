@@ -103,7 +103,8 @@ test('local preparation enforces the actual file size instead of renderer metada
   await assert.rejects(() => service.prepare({
     hostId: 'local', convId: 'c1', messageId: 'm1', isLocal: true,
     files: [{ path: largePath, name: 'large.bin', size: 1 }]
-  }), /20 MB/);
+    // 断言「按实际大小拒绝」这件事,不写死具体 MB 数,免得调整上限就得改测试
+  }), new RegExp(`${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB`));
 });
 
 test('image resolution rejects paths outside the conversation cache', async () => {

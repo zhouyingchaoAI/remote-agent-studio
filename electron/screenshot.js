@@ -94,7 +94,9 @@ async function captureViaClipboard(app, clipboard, out) {
 
   if (process.platform === 'win32') {
     // Win10+ 截图工具(选择区域后自动进剪贴板)
-    spawn('cmd', ['/c', 'start', 'ms-screenclip:'], { stdio: 'ignore', shell: false });
+    // 同样要监听 error:未监听时启动失败会抛出并拖垮主进程
+    spawn('cmd', ['/c', 'start', 'ms-screenclip:'], { stdio: 'ignore', shell: false })
+      .on('error', () => {});
   }
 
   const deadline = Date.now() + 30000;

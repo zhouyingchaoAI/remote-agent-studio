@@ -11,6 +11,56 @@ class Installer {
 
   _env() { return this.proxy ? this.proxy.envPrefix() : ''; }
 
+  /** PATH 前缀:各安装位置的统一顺序(校验与清理都要用同一套,否则查的不是实际执行的那个) */
+  static get BIN_PATH() {
+    return 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$HOME/.grok/bin:$PATH";';
+  }
+
+  /** 探测远程架构,用于选包与给出准确的错误提示 */
+  async remoteArch() {
+    try {
+      const r = await this.ssh.exec('uname -m');
+      const machine = String(r.stdout || '').trim();
+      const family = /^(x86_64|amd64)$/.test(machine) ? 'x86_64'
+        : /^(aarch64|arm64)$/.test(machine) ? 'aarch64' : machine;
+      return { machine, family, supported: family === 'x86_64' || family === 'aarch64' };
+    } catch (_) { return { machine: '未知', family: '', supported: false }; }
+  }
+
+  /**
+   * 安装后校验:二进制是否真能执行。
+   * 架构不符时系统只会给 "Exec format error" 这种晦涩信息,这里翻译成人话。
+   */
+  async verifyBinary(bin) {
+    const r = await this.ssh.exec(`${Installer.BIN_PATH} ${bin} --version 2>&1`);
+    const out = `${r.stdout || ''}${r.stderr || ''}`.trim();
+    // 退出码为 0 即视为可执行(有些命令不打印版本号,不能因为输出为空就判失败)
+    if (r.code === 0) return { ok: true, version: out.split('\n')[0] || '' };
+    if (/exec format error|cannot execute binary file/i.test(out)) {
+      const { machine } = await this.remoteArch();
+      return {
+        ok: false, archMismatch: true,
+        message: `安装的 ${bin} 与主机架构(${machine})不匹配,需要该架构的版本`
+      };
+    }
+    return { ok: false, message: out.slice(0, 200) || `退出码 ${r.code}` };
+  }
+
+  /**
+   * 清理 PATH 上无法执行的同名二进制。
+   * 架构不符的残留软链会挡住后续正确安装的版本,
+   * 表现成「显示安装成功,一运行就报错」这种最难排查的情况。
+   */
+  async cleanupBrokenBinary(name, log = () => {}) {
+    const dirs = ['$HOME/.local/bin', '$HOME/.grok/bin', '$HOME/.npm-global/bin'];
+    const script = dirs.map((d) =>
+      `if [ -e "${d}/${name}" ] && ! "${d}/${name}" --version >/dev/null 2>&1; then `
+      + `rm -f "${d}/${name}"; echo "已清理无法执行的 ${d}/${name}"; fi`
+    ).join('; ');
+    const r = await this.ssh.exec(script).catch(() => null);
+    if (r?.stdout?.trim()) log(`${r.stdout.trim()}\n`);
+  }
+
   /** 检测远程环境: node/npm/codex/claude 版本、系统信息 */
   async detect() {
     if (this.ssh.isWindowsNative) return this.ssh.detectEnvironment();
@@ -122,14 +172,22 @@ class Installer {
       if (this.ssh.isWindowsNative) {
         throw new Error('Windows 本机请在 PowerShell 手动执行: irm https://x.ai/cli/install.ps1 | iex');
       }
-      log('安装/升级 grok CLI(官方脚本,独立二进制)...\n');
+      const arch = await this.remoteArch();
+      log(`安装/升级 grok CLI(官方脚本,独立二进制)· 主机架构 ${arch.machine}...\n`);
+      await this.cleanupBrokenBinary('grok', log);   // 先清掉可能残留的错架构二进制
       const r = await this.ssh.exec(
-        `${this._env()} curl -fsSL https://x.ai/cli/install.sh | bash && ` +
-        'export PATH="$HOME/.grok/bin:$HOME/.local/bin:$PATH" && grok --version',
+        `${this._env()} curl -fsSL https://x.ai/cli/install.sh | bash`,
         { onStdout: log, onStderr: log }
       );
-      if (r.code !== 0) throw new Error(`grok 安装失败 (exit ${r.code}),请查看日志`);
-      log('grok 安装完成 ✓\n');
+      // 装完统一校验能不能真的执行,而不是只看安装脚本的退出码
+      const v = await this.verifyBinary('grok');
+      if (!v.ok) {
+        await this.cleanupBrokenBinary('grok', log);
+        throw new Error(v.archMismatch
+          ? `${v.message}。官方可能尚未提供 ${arch.machine} 版本的 grok CLI,可改用其它引擎(claude / codex)。`
+          : `grok 安装失败 (exit ${r.code}):${v.message}`);
+      }
+      log(`grok 安装完成 ✓(${v.version})\n`);
       return this.detect();
     }
     const pkg = agent === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-code';
@@ -175,7 +233,15 @@ class Installer {
         release_tag="${'${release_url##*/}'}";
         version="${'${release_tag#rust-v}'}";
         [ -n "$version" ] || { echo "Unable to resolve the latest Codex version"; exit 1; };
-        asset="codex-package-x86_64-unknown-linux-musl.tar.gz";
+        # 按实际架构选包:写死 x86_64 会在 ARM 机器(如昇腾/鲲鹏/树莓派)上装出跑不了的二进制
+        machine="$(uname -m)";
+        case "$machine" in
+          x86_64|amd64) pkg_arch="x86_64";;
+          aarch64|arm64) pkg_arch="aarch64";;
+          *) echo "No prebuilt Codex binary for $machine; will fall back to npm"; exit 3;;
+        esac;
+        asset="codex-package-$pkg_arch-unknown-linux-musl.tar.gz";
+        echo "Detected $machine -> $asset";
         base="https://github.com/openai/codex/releases/download/$release_tag";
         temp_dir="$HOME/.cache/remote-agent-codex/$version";
         mkdir -p "$temp_dir" || exit 1;
@@ -183,7 +249,8 @@ class Installer {
         archive="$temp_dir/$asset";
         curl -fsSL "$base/codex-package_SHA256SUMS" -o "$manifest" || exit 1;
         expected="$(awk -v asset="$asset" '$2 == asset && length($1) == 64 && $1 !~ /[^0-9a-fA-F]/ { print tolower($1); exit }' "$manifest")";
-        [ -n "$expected" ] || { echo "Codex package checksum is missing"; exit 1; };
+        # 官方没为该架构发包时,别硬来,交给 npm 回退
+        [ -n "$expected" ] || { echo "No official $pkg_arch package in this release; will fall back to npm"; exit 3; };
         url="$base/$asset";
         rm -f "$temp_dir"/part.* 2>/dev/null;
         echo "Downloading Codex $version ...";
@@ -223,6 +290,10 @@ class Installer {
         log('codex 安装完成 ✓\n');
         return this.detect();
       }
+      // 关键:独立安装可能已经建好了指向错误架构二进制的软链,
+      // 它在 PATH 里优先于 npm 安装的版本,不清掉的话回退安装会被它挡住
+      // (表现为「安装完成 ✓」但一运行就 Exec format error)
+      await this.cleanupBrokenBinary('codex', log);
       log(`Codex 独立安装失败 (exit ${result.code}),回退到 npm 安装...\n`);
     }
 
@@ -240,6 +311,14 @@ class Installer {
       npm install -g ${pkg}@latest && ${agent} --version`;
     const r = await this.ssh.exec(cmd, { onStdout: log, onStderr: log });
     if (r.code !== 0) throw new Error(`${pkg} 安装失败 (exit ${r.code})`);
+    // npm 装完也校验一次:确保 PATH 上生效的确实是能执行的那个
+    const v = await this.verifyBinary(agent);
+    if (!v.ok) {
+      await this.cleanupBrokenBinary(agent, log);
+      const retry = await this.verifyBinary(agent);
+      if (!retry.ok) throw new Error(`${agent} 安装后无法执行:${retry.message}`);
+      log(`已清理冲突的旧二进制,现使用 ${retry.version}\n`);
+    }
     // 兼容旧版本曾安装到 ~/.npm-global 的 agent
     await this.ssh.exec(
       `grep -q npm-global ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.bashrc`
@@ -260,7 +339,8 @@ class Installer {
       deepseek: 'DEEPSEEK_API_KEY',
       glm: 'ZHIPU_API_KEY',
       kimi: 'MOONSHOT_API_KEY',
-      qwen: 'DASHSCOPE_API_KEY'
+      qwen: 'DASHSCOPE_API_KEY',
+      minimax: 'MINIMAX_API_KEY'
     }[agent] || 'OPENAI_API_KEY';
     return this.setEnvKey(varName, key, log);
   }

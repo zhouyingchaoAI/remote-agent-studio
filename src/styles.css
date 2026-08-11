@@ -24,6 +24,14 @@
   --red: #d64545;
   --yellow: #b7791f;
 }
+/* 对话可读栏宽度上限:窄屏铺满,宽屏内容居中不超过它。
+   1360px 适配 1300~1600 逻辑宽度的窗口(内容尽量铺开),更宽的屏则自动居中留白。 */
+:root { --chat-column: 1360px; }
+/* 超宽屏(4K/带鱼屏)适当放宽,但仍防止一行横跨整屏 */
+@media (min-width: 2000px) { :root { --chat-column: 1600px; } }
+/* 窄窗口下取消阅读栏限制,把每一像素都用上 */
+@media (max-width: 1000px) { :root { --chat-column: 100%; } }
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
@@ -134,7 +142,7 @@ pre, code { font-family: Menlo, Consolas, monospace; }
 }
 .tab:hover { color: var(--text); }
 .tab.active { background: var(--bg3); color: var(--text); }
-.content { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.content { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; position: relative; }
 .workspace-layer { position: absolute; inset: 0; display: none; min-width: 0; min-height: 0; }
 .workspace-layer.active { display: flex; }
 
@@ -165,7 +173,9 @@ input[type="checkbox"], input[type="radio"] { width: auto; }
 .radio { display: flex; margin: 10px 0 4px; font-size: 13px; cursor: pointer; }
 
 /* chat */
-.chat-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+/* min-width:0 必不可少:flex 子项默认不肯收缩到内容宽度以下,
+   一条很宽的消息(代码块/长串)会把整个面板撑出可视区,右侧内容被裁掉 */
+.chat-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .chat-header {
   display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 8px 16px;
   border-bottom: 1px solid var(--border);
@@ -182,9 +192,19 @@ input[type="checkbox"], input[type="radio"] { width: auto; }
 .badge.system-mode { color: #fecaca; border-color: var(--red); background: rgba(255,92,92,0.12); }
 .permission-switch { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--text); font-size: 12px; white-space: nowrap; cursor: pointer; }
 .permission-switch input { accent-color: var(--red); }
-.chat-list { flex: 1; overflow-y: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 10px; }
-.msg { max-width: 78%; border-radius: 12px; padding: 10px 14px; line-height: 1.55; }
-.msg pre { white-space: pre-wrap; word-break: break-word; font-family: inherit; }
+/* 自适应阅读栏:窄屏铺满,宽屏把内容收进居中的 --chat-column(避免一行横跨整屏难读)。
+   左右内边距随窗口自动增长,不需要断点也能平滑适配任意分辨率。 */
+.chat-list {
+  flex: 1; overflow-y: auto; overflow-x: hidden; min-width: 0;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 18px max(22px, calc((100% - var(--chat-column)) / 2));
+}
+/* 82% 保留对话感;px 封顶避免超宽屏下单行过长(约 75 个汉字已是阅读上限) */
+.msg { max-width: min(82%, 1100px); min-width: 0; border-radius: 12px; padding: 10px 14px; line-height: 1.55; overflow-wrap: anywhere; }
+.msg pre { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; font-family: inherit; max-width: 100%; }
+/* 宽内容(代码块/diff)在气泡内部横向滚动,不去撑大外层布局 */
+.msg .md, .msg .md-p, .msg .md-li { min-width: 0; max-width: 100%; }
+.msg .md-code, .msg .diff-view { max-width: 100%; }
 .msg.user { align-self: flex-end; background: var(--accent); color: #fff; }
 .msg.agent { align-self: flex-start; background: var(--bg3); border: 1px solid var(--border); }
 .msg.thin { align-self: flex-start; padding: 4px 0; max-width: 90%; cursor: pointer; }
@@ -203,7 +223,11 @@ input[type="checkbox"], input[type="radio"] { width: auto; }
 .typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite; }
 .typing span:nth-child(2) { animation-delay: 0.2s; }
 .typing span:nth-child(3) { animation-delay: 0.4s; }
-.chat-input { display: flex; flex-wrap: wrap; gap: 10px; padding: 14px 18px; border-top: 1px solid var(--border); position: relative; }
+/* 输入区与消息列对齐(同一条阅读栏),宽屏下不会一个居中一个贴边 */
+.chat-input {
+  display: flex; flex-wrap: wrap; gap: 10px; border-top: 1px solid var(--border); position: relative;
+  padding: 14px max(18px, calc((100% - var(--chat-column)) / 2));
+}
 .chat-input.drag-active { background: rgba(76,139,245,0.08); box-shadow: inset 0 0 0 1px var(--accent); }
 .chat-input textarea { flex: 1; resize: none; height: 62px; min-width: 240px; }
 .attachment-queue { width: 100%; display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
@@ -294,6 +318,90 @@ progress { width: 140px; height: 6px; }
 .agent-select.claude { color: #d8a86c; }
 .agent-select.deepseek { color: #93b4ff; }
 .agent-select.grok { color: #f2a8a8; }
+
+/* 知识图谱 */
+.graph-panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 14px 18px 0; }
+.graph-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.graph-head h2 { font-size: 18px; }
+.graph-stats { display: flex; gap: 14px; flex-wrap: wrap; padding: 6px 0 10px; border-bottom: 1px solid var(--border); }
+.warn-text { color: var(--yellow); }
+/* 自动沉淀状态条 */
+.autocap-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; margin: 6px 0 2px; border-radius: 8px;
+  background: var(--bg2); border: 1px solid var(--border); font-size: 12px;
+}
+.autocap-bar.on { border-color: var(--green); background: rgba(62,207,142,0.07); }
+.autocap-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.autocap-bar.on .autocap-dot { background: var(--green); }
+.autocap-notes { width: 100%; padding-top: 6px; border-top: 1px dashed var(--border); margin-top: 4px; }
+.graph-body { flex: 1; min-height: 0; display: flex; gap: 12px; padding: 10px 0; }
+.graph-canvas-wrap { flex: 1; min-width: 0; position: relative; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.graph-canvas-wrap canvas { display: block; cursor: grab; }
+.graph-legend { position: absolute; left: 10px; bottom: 8px; display: flex; gap: 12px; align-items: center; pointer-events: none; }
+.graph-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+.graph-legend .dot.node { background: var(--accent); }
+.graph-legend .dot.moc { background: var(--accent2); }
+.graph-legend .dot.orphan { background: var(--red); }
+.graph-side { width: 340px; flex: none; display: flex; flex-direction: column; min-height: 0; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.graph-side-head { padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 13px; }
+.graph-list { overflow-y: auto; max-height: 45%; }
+.graph-list-item { display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; border-bottom: 1px solid var(--border); }
+.graph-list-item:hover { background: var(--bg3); }
+.graph-list-item.orphan .graph-list-title { color: var(--red); }
+.graph-list-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.graph-detail { display: flex; flex-direction: column; min-height: 0; padding: 0 12px 12px; overflow-y: auto; }
+.graph-detail-title { font-size: 15px; margin: 8px 0 2px; overflow-wrap: anywhere; }
+.graph-tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.graph-links-info { margin: 4px 0; }
+.graph-backlinks { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.graph-note-body { border-top: 1px solid var(--border); padding-top: 10px; font-size: 13px; overflow-wrap: anywhere; }
+.btn.danger { color: var(--red); border-color: var(--red); }
+
+/* 每日速览 */
+.brief-panel { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 18px max(22px, calc((100% - var(--chat-column)) / 2)); }
+.brief-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.brief-head h2 { font-size: 18px; }
+.brief-date { padding: 5px 8px; font-size: 12px; }
+.brief-topics { flex: 1; min-width: 200px; max-width: 360px; padding: 5px 10px; font-size: 12px; }
+.brief-progress { padding: 8px 0; }
+.brief-error { margin-bottom: 10px; }
+.brief-meta { margin-bottom: 12px; }
+/* 自适应:窄窗单列,宽窗自动铺成多列 */
+.brief-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; align-items: start; }
+.brief-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+.brief-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.brief-item { padding: 8px 0; border-top: 1px solid var(--border); min-width: 0; }
+.brief-item:first-of-type { border-top: none; }
+.brief-item-title { font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.brief-item-title a { color: var(--accent); text-decoration: none; cursor: pointer; }
+.brief-item-title a:hover { text-decoration: underline; }
+.brief-item-summary { margin-top: 3px; color: var(--text); font-size: 13px; line-height: 1.6; opacity: 0.9; overflow-wrap: anywhere; }
+.brief-item-meta { margin-top: 3px; }
+.brief-raw { white-space: pre-wrap; word-break: break-word; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: 13px; line-height: 1.6; max-width: 100%; }
+
+/* 目标模式状态条 */
+.goal-bar {
+  display: flex; align-items: center; gap: 10px; padding: 7px max(22px, calc((100% - var(--chat-column)) / 2));
+  border-bottom: 1px solid var(--border); background: rgba(79,140,255,0.08); font-size: 12px;
+}
+.goal-bar.paused { background: rgba(240,180,41,0.10); }
+.goal-bar.done { background: rgba(62,207,142,0.10); }
+.goal-tag { font-weight: 700; white-space: nowrap; }
+.goal-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46%; }
+
+/* 斜杠命令菜单 */
+.slash-menu {
+  position: absolute; bottom: calc(100% + 6px); left: 18px; right: 18px; max-height: 260px; overflow-y: auto;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 6px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.35); z-index: 20;
+}
+.slash-item { display: flex; align-items: baseline; gap: 10px; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+.slash-item.active, .slash-item:hover { background: var(--bg3); }
+.slash-name { font-weight: 700; color: var(--accent); white-space: nowrap; }
+.slash-args { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.slash-desc { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slash-hint { padding: 4px 10px 2px; border-top: 1px solid var(--border); margin-top: 4px; }
 
 /* 语音输入 / 截图按钮 */
 .mic-button.recording { color: #fca5a5; border-color: var(--red); animation: mic-pulse 1s ease-in-out infinite; }
@@ -425,3 +533,27 @@ progress { width: 140px; height: 6px; }
 .env-table { width: 100%; margin-bottom: 12px; border-collapse: collapse; }
 .env-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .env-table td:first-child { color: var(--muted); width: 110px; }
+
+/* ---------------- 技能(Agent Skills)管理 ---------------- */
+.skills-panel { display: flex; height: 100%; min-height: 0; gap: 14px; padding: 14px; overflow: hidden; }
+.skills-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; }
+.skills-side { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; gap: 14px;
+  border-left: 1px solid var(--border); padding-left: 14px; min-height: 0; }
+.skills-side .flex1 { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.skills-tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-shrink: 0; }
+
+.skill-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.skill-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--bg2); }
+.skill-card.picked { border-color: var(--accent); background: rgba(90,140,255,0.06); }
+.skill-head { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.skill-head b { font-size: 13px; }
+.skill-desc { margin: 6px 0 8px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.skill-search { width: 100%; margin-top: 10px; }
+.skill-install-btn { width: 100%; }
+.check-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; cursor: pointer; }
+.check-row code { margin-left: auto; font-size: 11px; }
+
+/* 预览弹窗:技能正文是 markdown,需要比设置弹窗宽得多 */
+.skill-modal { width: min(820px, 94vw); display: flex; flex-direction: column; max-height: 86vh; }
+.skill-source { flex: 1; overflow: auto; margin: 0; padding: 14px 16px; font-size: 12px;
+  line-height: 1.7; white-space: pre-wrap; word-break: break-word; background: var(--bg); }

@@ -129,7 +129,9 @@ function saveProxy(hostId, cfg) {
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 const DEFAULT_SETTINGS = {
   theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5, grokModels: [],
-  screenshotShortcut: 'CommandOrControl+Shift+2', screenshotShortcutEnabled: true
+  screenshotShortcut: 'CommandOrControl+Shift+2', screenshotShortcutEnabled: true,
+  // 远程 claude 可用性测试用的模型:CLI 默认模型可能已无额度,固定用 opus 更能反映真实状态
+  claudeTestModel: 'opus'
 };
 
 function loadSettings() {
@@ -143,7 +145,42 @@ function saveSettings(settings) {
   return merged;
 }
 
+/* -------- 每日速览缓存(userData/briefs/<date>.json) -------- */
+const briefDir = () => path.join(app.getPath('userData'), 'briefs');
+const briefFile = (date) => path.join(briefDir(), `${String(date).replace(/[^\d-]/g, '')}.json`);
+
+function loadBrief(date) {
+  try { return JSON.parse(fs.readFileSync(briefFile(date), 'utf8')); }
+  catch (_) { return null; }
+}
+
+function saveBrief(date, payload) {
+  fs.mkdirSync(briefDir(), { recursive: true });
+  const tmp = `${briefFile(date)}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(payload, null, 2));
+  fs.renameSync(tmp, briefFile(date)); // 原子写,避免中断留下半截文件
+  // 只保留最近 30 天
+  try {
+    const files = fs.readdirSync(briefDir()).filter((f) => f.endsWith('.json')).sort();
+    for (const f of files.slice(0, Math.max(0, files.length - 30))) {
+      fs.rmSync(path.join(briefDir(), f), { force: true });
+    }
+  } catch (_) {}
+  return payload;
+}
+
+/** 已缓存的日期列表(倒序) */
+function listBriefDates() {
+  try {
+    return fs.readdirSync(briefDir())
+      .filter((f) => f.endsWith('.json'))
+      .map((f) => f.replace(/\.json$/, ''))
+      .sort((a, b) => b.localeCompare(a));
+  } catch (_) { return []; }
+}
+
 module.exports = {
   loadHosts, saveHosts, loadConvos, saveConvos, loadProxies, saveProxy,
-  loadKnownHosts, saveKnownHost, loadSettings, saveSettings
+  loadKnownHosts, saveKnownHost, loadSettings, saveSettings,
+  loadBrief, saveBrief, listBriefDates
 };

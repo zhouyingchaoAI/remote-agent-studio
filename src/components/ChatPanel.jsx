@@ -1,6 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useStore, sendToAgent, isAwaitingConfirm } from '../store.js';
 import { useVoiceInput } from '../useVoiceInput.js';
+import { buildPromptHistory, stepPromptHistory } from '../promptHistory.js';
+import { extractOptions } from '../quickReplies.js';
+import { matchCommands, applyCompletion, parseSlash, parseGoalArgs, helpText } from '../slashCommands.js';
+import { createGoal, buildContinuePrompt, GOAL_DEFAULT_MAX_ROUNDS } from '../goalMode.js';
 import FilePreview from './FilePreview.jsx';
 import Markdown from './Markdown.jsx';
 
@@ -44,16 +48,6 @@ function formatTokens(n) {
   return n + ' tok';
 }
 
-/* 从消息文本中提取「1. xxx / 2. xxx」式选项(序号从 1 连续才算) */
-function extractOptions(text = '') {
-  const opts = [];
-  for (const line of String(text).split('\n')) {
-    const m = line.match(/^\s*(\d{1,2})[.)、::]\s*(.+)$/);
-    if (m) opts.push({ n: m[1], label: m[2].trim().slice(0, 50) });
-  }
-  if (opts.length >= 2 && opts[0].n === '1') return opts.slice(0, 8);
-  return [];
-}
 
 export default function ChatPanel({ hostId }) {
   const activeConvId = useStore((s) => s.activeConvByHost[hostId]);
@@ -195,6 +189,7 @@ function ChatView({ hostId, conv }) {
   const composingRef = useRef(false);
   const [filePreview, setFilePreview] = useState(null); // {path, name}
   const [visibleCount, setVisibleCount] = useState(200); // 长对话窗口化渲染
+  const [slashIndex, setSlashIndex] = useState(0);       // 斜杠命令菜单选中项
   const permissionMode = conv.permissionMode || (conv.autoApprove ? 'system' : 'workspace');
 
   // 进入对话/切换模型或权限时,在主进程(重新)初始化 agent 会话(带 resume 状态续聊)
@@ -211,11 +206,90 @@ function ChatView({ hostId, conv }) {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [conv.messages, running]);
 
+  /** 本地消息(命令回执),不发给模型 */
+  const localNote = (text) =>
+    useStore.getState().pushMessage(conv.id, { role: 'agent', kind: 'raw', text, ts: Date.now() });
+
+  /** 处理斜杠命令;返回 true 表示已消费,不再发给模型 */
+  const runSlashCommand = (raw) => {
+    const { isCommand, name, args, known } = parseSlash(raw);
+    if (!isCommand) return false;
+    if (!known) { localNote(`未知命令 /${name}。输入 /help 查看全部命令。`); return true; }
+    const st = useStore.getState();
+
+    switch (name) {
+      case 'help': localNote(helpText()); return true;
+      case 'clear': setInput(''); return true;
+      case 'new': setActiveConv(hostId, null); return true;
+      case 'skill': st.setTab('skills'); return true;
+      case 'export': {
+        window.api.files.saveText({
+          defaultName: `${conv.title || '对话'}.md`, content: conversationToMarkdown(conv)
+        }).then((r) => { if (r?.saved) localNote(`已导出到 ${r.path}`); }).catch(() => {});
+        return true;
+      }
+      case 'engine': {
+        const target = args.trim().toLowerCase();
+        if (!['codex', 'claude', 'deepseek', 'grok'].includes(target)) {
+          localNote('用法:/engine codex | claude | deepseek | grok'); return true;
+        }
+        setStarted(false); updateConversationAgent(conv.id, target);
+        localNote(`已切换引擎:${target}(上下文自动接力)`); return true;
+      }
+      case 'model': {
+        setStarted(false); updateConversationModel(conv.id, args.trim());
+        localNote(args.trim() ? `已切换模型:${args.trim()}` : '已恢复默认模型'); return true;
+      }
+      case 'mode': {
+        const target = args.trim().toLowerCase();
+        if (!['workspace', 'system'].includes(target)) { localNote('用法:/mode workspace | system'); return true; }
+        changePermissionMode(target); localNote(`权限模式:${target}`); return true;
+      }
+      case 'auto': {
+        const on = !/^off|关|0$/i.test(args.trim());
+        st.updateConversationAutoConfirm(conv.id, on);
+        localNote(`全自动:${on ? '开' : '关'}`); return true;
+      }
+      case 'goal': {
+        const { sub, text } = parseGoalArgs(args);
+        const goal = conv.goal;
+        if (sub === 'set') {
+          st.setConversationGoal(conv.id, createGoal(text));
+          localNote(`🎯 目标已设定:${text}\n每轮结束后会自动推进,直到达成或触发上限(${GOAL_DEFAULT_MAX_ROUNDS} 轮)。\n随时可用 /goal pause 暂停、/goal clear 清除。`);
+          // 立刻开跑
+          setTimeout(() => sendToAgent(hostId, conv.id, buildContinuePrompt({ ...createGoal(text), rounds: 0 }), [], { auto: true }), 0);
+          return true;
+        }
+        if (!goal?.text) { localNote('当前没有目标。用 /goal <目标描述> 设定一个。'); return true; }
+        if (sub === 'status') {
+          localNote(`🎯 目标:${goal.text}\n状态:${goal.status} · 已推进 ${goal.rounds || 0}/${goal.maxRounds || GOAL_DEFAULT_MAX_ROUNDS} 轮`);
+        } else if (sub === 'pause') {
+          st.updateConversationGoal(conv.id, { status: 'paused' }); localNote('🎯 目标模式已暂停');
+        } else if (sub === 'resume') {
+          st.updateConversationGoal(conv.id, { status: 'active' });
+          localNote('🎯 目标模式已继续');
+          setTimeout(() => sendToAgent(hostId, conv.id, buildContinuePrompt(goal), [], { auto: true }), 0);
+        } else if (sub === 'clear') {
+          st.setConversationGoal(conv.id, null); localNote('🎯 目标已清除');
+        }
+        return true;
+      }
+      default: return false;
+    }
+  };
+
   const send = async (textOverride) => {
-    const prompt = (textOverride ?? input).trim() ||
-      (pendingFiles.length ? 'Please process the attached files.' : '');
+    const raw = (textOverride ?? input).trim();
+    // 斜杠命令在本地执行,不消耗模型
+    if (textOverride == null && raw.startsWith('/')) {
+      if (runSlashCommand(raw)) { setInput(''); setSlashIndex(0); return; }
+    }
+    const prompt = raw || (pendingFiles.length ? 'Please process the attached files.' : '');
     if (!prompt) return;
     setAttachmentError('');
+    // 发送后回到"草稿"态,下次 ↑ 从最新一条重新开始
+    historyRef.current.index = null;
+    historyRef.current.draft = '';
     if (textOverride == null) setInput('');
     const files = textOverride == null ? pendingFiles : [];
     if (textOverride == null) setPendingFiles([]);
@@ -231,9 +305,13 @@ function ChatView({ hostId, conv }) {
   };
 
   const addFiles = (files) => {
-    const next = files.filter((file) => file.path && file.size <= 20 * 1024 * 1024);
-    const oversized = files.find((file) => file.size > 20 * 1024 * 1024);
-    setAttachmentError(oversized ? `${oversized.name} exceeds 20 MB` : '');
+    const MAX_MB = 200;   // 与主进程 MAX_ATTACHMENT_BYTES 保持一致
+    const limit = MAX_MB * 1024 * 1024;
+    const next = files.filter((file) => file.path && file.size <= limit);
+    const oversized = files.find((file) => file.size > limit);
+    setAttachmentError(oversized
+      ? `${oversized.name} 超过 ${MAX_MB} MB 上限(实际 ${Math.round(oversized.size / 1024 / 1024)} MB)`
+      : '');
     setPendingFiles((current) => {
       const known = new Set(current.map((file) => file.path));
       return [...current, ...next.filter((file) => !known.has(file.path))];
@@ -250,6 +328,27 @@ function ChatView({ hostId, conv }) {
   };
 
   const pickFiles = async () => addFiles(await window.api.dialog.pickFiles());
+
+  /* ---- 历史输入回溯(↑/↓,类似终端):最近发送的在前,连续重复只留一条 ---- */
+  const promptHistory = useMemo(() => buildPromptHistory(conv.messages), [conv.messages]);
+  // index=null 表示正在编辑草稿;0 为最近一条,越大越早
+  const historyRef = useRef({ index: null, draft: '' });
+  const inputRef = useRef(null);
+
+  /** step: +1 更早,-1 更新;返回是否消费了这次按键 */
+  const recallHistory = (step) => {
+    const result = stepPromptHistory(historyRef.current, promptHistory, step, input);
+    if (!result.handled) return false;
+    historyRef.current = { index: result.index, draft: result.draft };
+    setInput(result.value);
+    // 光标移到末尾(等 React 应用完新值)
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) el.selectionStart = el.selectionEnd = el.value.length;
+    });
+    return true;
+  };
+  const resetHistoryNav = () => { historyRef.current.index = null; };
 
   // 语音输入:转写结果追加到输入框
   const voice = useVoiceInput((text) => setInput((cur) => (cur ? `${cur} ${text}` : text)));
@@ -271,12 +370,46 @@ function ChatView({ hostId, conv }) {
     if (img) { addFiles([img]); return true; }
     return false;
   };
+  /**
+   * 粘贴:同时支持三种来源
+   *  1) 从访达/资源管理器复制的真实文件(有磁盘路径)
+   *  2) 截图等剪贴板图片数据(无路径,需先落盘)
+   *  3) 普通文本(交给输入框默认行为)
+   */
   const onPaste = (event) => {
-    const items = [...(event.clipboardData?.items || [])];
+    const dt = event.clipboardData;
+    if (!dt) return;
+
+    // 1) 真实文件:用与拖拽同一套路径解析
+    const pasted = [...(dt.files || [])];
+    if (pasted.length) {
+      const resolved = pasted.map((file) => {
+        // 内存中的文件(截图数据)拿不到磁盘路径,getPathForFile 可能返回空或抛错
+        let path = '';
+        try { path = window.api.dialog.pathForDroppedFile(file) || ''; } catch (_) { path = ''; }
+        return { file, path, name: file.name, size: file.size };
+      });
+      const withPath = resolved.filter((r) => r.path);
+      if (withPath.length) {
+        event.preventDefault();
+        addFiles(withPath.map(({ path, name, size }) => ({ path, name, size })));
+        return;
+      }
+      // 拿不到路径的多半是内存里的图片数据(如截图),走落盘那条路
+      if (resolved.some((r) => r.file.type?.startsWith('image/'))) {
+        event.preventDefault();
+        attachClipboardImage();
+        return;
+      }
+    }
+
+    // 2) 没有 files 但有图片数据(部分应用只提供 items)
+    const items = [...(dt.items || [])];
     if (items.some((it) => it.type?.startsWith('image/'))) {
-      event.preventDefault(); // 是图片就不当文本粘贴
+      event.preventDefault();
       attachClipboardImage();
     }
+    // 3) 其余情况保持默认粘贴行为
   };
   const dropFiles = (event) => {
     event.preventDefault();
@@ -329,6 +462,24 @@ function ChatView({ hostId, conv }) {
             {conv.usage.costUsd > 0 && ` · $${conv.usage.costUsd.toFixed(2)}`}
           </span>
         )}
+        <button className="icon-btn" title="存入 Obsidian 知识库(提炼成原子笔记 + 双链)"
+          disabled={running}
+          onClick={async () => {
+            const note = (t) => useStore.getState().pushMessage(conv.id, { role: 'agent', kind: 'raw', text: t, ts: Date.now() });
+            const cfg = await window.api.obsidian.getConfig().catch(() => null);
+            if (!cfg || (cfg.transport === 'file' && !cfg.vaultPath)) {
+              note('请先到「设置 → Obsidian 知识库」选择 vault 目录。');
+              return;
+            }
+            note('🧠 正在提炼知识笔记…');
+            try {
+              const r = await window.api.obsidian.saveFromConversation({
+                hostId, agent: conv.agent, cwd: conv.cwd, model: conv.model,
+                content: conversationToMarkdown(conv), topic: conv.title
+              });
+              note(`🧠 已写入 ${r.count} 篇笔记到 ${r.folder}/,并更新索引「${r.mocName}」。打开 Obsidian 即可看到图谱。`);
+            } catch (e) { note(`❌ 存入知识库失败:${e?.message || e}`); }
+          }}>🧠</button>
         <button className="icon-btn" title="导出对话为 Markdown"
           onClick={async () => {
             const r = await window.api.files.saveText({
@@ -357,6 +508,7 @@ function ChatView({ hostId, conv }) {
           <span>System Mode</span>
         </label>
       </div>
+      <GoalBar conv={conv} />
       <div className="chat-list" ref={listRef}>
         {conv.messages.length === 0 && (
           <div className="muted center pad">向{hostId === 'local' ? '本机' : '远程'}的 {conv.agent === 'codex' ? 'Codex' : 'Claude Code'} 发出第一条指令吧</div>
@@ -415,6 +567,8 @@ function ChatView({ hostId, conv }) {
         )}
         {attachmentError && <div className="attachment-error">{attachmentError}</div>}
         {dragActive && <div className="drop-hint">Drop files to attach</div>}
+        <SlashMenu input={input} index={slashIndex}
+          onPick={(c) => { setInput(applyCompletion(c)); setSlashIndex(0); inputRef.current?.focus(); }} />
         <button className="btn attach-button" type="button" onClick={pickFiles} disabled={running} title="Add attachments">附件</button>
         <button className="btn attach-button" type="button" onClick={captureScreenshot}
           title="区域截图(默认快捷键 ⌘/Ctrl+Shift+2)">✂ 截图</button>
@@ -426,16 +580,45 @@ function ChatView({ hostId, conv }) {
         {voice.error && <span className="voice-error" title={voice.error}>{voice.error}</span>}
         <textarea
           autoFocus
+          ref={inputRef}
           value={input}
-          placeholder={started ? '输入指令,Enter 发送,⌘V 粘贴截图,🎤 语音输入,Shift+Enter 换行' : '正在初始化会话...'}
-          onChange={(e) => setInput(e.target.value)}
+          placeholder={started ? '输入指令,Enter 发送,↑↓ 调历史,⌘V 粘贴截图/文件,🎤 语音,Shift+Enter 换行' : '正在初始化会话...'}
+          onChange={(e) => { setInput(e.target.value); resetHistoryNav(); }}
           onPaste={onPaste}
           onCompositionStart={() => { composingRef.current = true; }}
           onCompositionEnd={() => { composingRef.current = false; }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !composingRef.current) {
+            const composing = e.nativeEvent.isComposing || composingRef.current;
+            // 斜杠命令菜单:↑↓ 选择,Tab/Enter 补全,Esc 关闭
+            const cmds = matchCommands(input);
+            if (cmds.length && !composing) {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIndex((i) => (i + 1) % cmds.length); return; }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIndex((i) => (i - 1 + cmds.length) % cmds.length); return; }
+              if (e.key === 'Escape') { e.preventDefault(); setInput(''); return; }
+              if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+                const picked = cmds[Math.min(slashIndex, cmds.length - 1)];
+                // 无参数命令按 Enter 直接执行,有参数的先补全等你填
+                if (e.key === 'Tab' || picked.args) {
+                  e.preventDefault();
+                  setInput(applyCompletion(picked));
+                  setSlashIndex(0);
+                  return;
+                }
+              }
+            }
+            if (e.key === 'Enter' && !e.shiftKey && !composing) {
               e.preventDefault();
               send();
+              return;
+            }
+            // ↑/↓ 调历史:仅当光标在首行/末行时接管,避免打断多行编辑与输入法候选
+            if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !composing) {
+              const el = e.currentTarget;
+              const collapsed = el.selectionStart === el.selectionEnd;
+              const onFirstLine = collapsed && !el.value.slice(0, el.selectionStart).includes('\n');
+              const onLastLine = collapsed && !el.value.slice(el.selectionEnd).includes('\n');
+              if (e.key === 'ArrowUp' && onFirstLine && recallHistory(1)) e.preventDefault();
+              else if (e.key === 'ArrowDown' && onLastLine && recallHistory(-1)) e.preventDefault();
             }
           }}
         />
@@ -463,7 +646,7 @@ const MODEL_PRESETS = {
   // grok 引擎:国产模型统一走 grok CLI + 各家 OpenAI 兼容端点,格式 provider/模型ID
   grok: [
     'deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash',
-    'glm/glm-5', 'kimi/kimi-k2.5', 'qwen/qwen3.5-coder'
+    'glm/glm-5', 'kimi/kimi-k2.5', 'qwen/qwen3.5-coder', 'minimax/minimax-m2.5'
   ]
 };
 const AGENT_NAMES = {
@@ -547,11 +730,58 @@ function ModelPicker({ agent, value, disabled, onChange }) {
   );
 }
 
+/* 斜杠命令补全菜单 */
+function SlashMenu({ input, index, onPick }) {
+  const cmds = matchCommands(input);
+  if (!cmds.length) return null;
+  return (
+    <div className="slash-menu">
+      {cmds.map((c, i) => (
+        <div key={c.name} className={`slash-item ${i === Math.min(index, cmds.length - 1) ? 'active' : ''}`}
+          onMouseDown={(e) => { e.preventDefault(); onPick(c); }}>
+          <span className="slash-name">/{c.name}</span>
+          {c.args && <span className="slash-args">{c.args}</span>}
+          <span className="slash-desc muted small">{c.desc}</span>
+        </div>
+      ))}
+      <div className="slash-hint muted small">↑↓ 选择 · Tab 补全 · Esc 关闭</div>
+    </div>
+  );
+}
+
+/* 目标模式状态条:显示目标与进度,可暂停/继续/清除 */
+function GoalBar({ conv }) {
+  const goal = conv.goal;
+  if (!goal?.text) return null;
+  const st = useStore.getState();
+  const label = { active: '推进中', paused: '已暂停', done: '已达成' }[goal.status] || goal.status;
+  return (
+    <div className={`goal-bar ${goal.status}`}>
+      <span className="goal-tag">🎯 目标</span>
+      <span className="goal-text" title={goal.text}>{goal.text}</span>
+      <span className="muted small">{label} · {goal.rounds || 0}/{goal.maxRounds || GOAL_DEFAULT_MAX_ROUNDS} 轮</span>
+      <span className="flex1" />
+      {goal.status === 'active' && (
+        <button className="btn small ghost"
+          onClick={() => st.updateConversationGoal(conv.id, { status: 'paused' })}>暂停</button>
+      )}
+      {goal.status !== 'active' && (
+        <button className="btn small"
+          onClick={() => {
+            st.updateConversationGoal(conv.id, { status: 'active' });
+            sendToAgent(conv.hostId, conv.id, buildContinuePrompt(goal), [], { auto: true });
+          }}>继续</button>
+      )}
+      <button className="btn small ghost" onClick={() => st.setConversationGoal(conv.id, null)}>清除</button>
+    </div>
+  );
+}
+
 /* 语音确认/选择:录音转写后按关键词匹配「确认/取消/选项号」并触发对应按钮 */
 function VoiceReplyButton({ mode, options, onReply }) {
   const [hint, setHint] = useState('');
-  const voice = useVoiceInput((text) => {
-    const value = window.api.voice.interpret(text, { mode, options });
+  const voice = useVoiceInput(async (text) => {
+    const value = await window.api.voice.interpret({ transcript: text, ctx: { mode, options } }).catch(() => null);
     if (value != null) { setHint(''); onReply(value); }
     else setHint(`没听懂「${text.slice(0, 20)}」`);
   });
