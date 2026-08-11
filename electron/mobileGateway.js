@@ -91,6 +91,11 @@ async function route({ method, pathname, body, query = {} }, deps) {
     }
   }
 
+  // 桌面端对话列表 —— 手机据此挑一个接着聊,实现两端同步
+  if (method === 'GET' && pathname === '/api/conversations') {
+    return { status: 200, body: { conversations: await deps.listConversations(query?.hostId || '') } };
+  }
+
   // 只读查看:固定命令白名单,不接受任意命令
   if (method === 'POST' && pathname === '/api/inspect') {
     try {
@@ -120,7 +125,8 @@ async function route({ method, pathname, body, query = {} }, deps) {
         status: 200,
         body: await deps.startTask({
           hostId, prompt,
-          cwd: body?.cwd, engine: body?.engine, model: body?.model,
+          convId: body?.convId, cwd: body?.cwd,
+          engine: body?.engine, model: body?.model,
           newSession: !!body?.newSession
         })
       };

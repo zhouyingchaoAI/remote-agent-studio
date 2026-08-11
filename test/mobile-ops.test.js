@@ -115,29 +115,47 @@ test('引擎白名单', () => {
 
 /* ------------------------------------------------------------ 多轮续聊 */
 
-test('同一主机同一项目的会话被记住,换项目则相互独立', () => {
-  mobileService.resetMobileConvo('h1', '/srv/api');
-  mobileService.resetMobileConvo('h1', '/srv/web');
+test('续跑状态按对话隔离,同对话累计轮次', () => {
+  mobileService.resetResume('c_a');
+  mobileService.resetResume('c_b');
 
-  const a1 = mobileService.getMobileConvo('h1', '/srv/api');
-  mobileService.rememberResume('h1', '/srv/api', { codexSessionId: 'sess-api', codexStarted: true });
-  const a2 = mobileService.getMobileConvo('h1', '/srv/api');
-  assert.equal(a2.convId, a1.convId, '同项目应复用同一会话');
-  assert.equal(a2.codexSessionId, 'sess-api');
-  assert.equal(a2.turns, 1);
+  mobileService.rememberResume('c_a', { codexSessionId: 'sess-a', codexStarted: true });
+  const a = mobileService.getResume('c_a');
+  assert.equal(a.codexSessionId, 'sess-a');
+  assert.equal(a.turns, 1);
 
-  const b = mobileService.getMobileConvo('h1', '/srv/web');
-  assert.notEqual(b.convId, a1.convId, '不同项目必须隔离');
-  assert.equal(b.codexSessionId, null);
+  mobileService.rememberResume('c_a', { codexSessionId: 'sess-a' });
+  assert.equal(mobileService.getResume('c_a').turns, 2);
+
+  assert.equal(mobileService.getResume('c_b').codexSessionId, null, '不同对话必须隔离');
+});
+
+test('接续桌面对话时从持久化记录播种,否则等于失忆', () => {
+  // 模拟渲染层已存进对话文件的续跑状态(应用刚重启,内存里还没有)
+  const persisted = {
+    id: 'c_desktop', claudeSessionId: 'claude-xyz',
+    codexSessionId: 'codex-xyz', codexStarted: true
+  };
+  const seeded = mobileService.getResume('c_desktop_first_touch', persisted);
+  assert.equal(seeded.claudeSessionId, 'claude-xyz');
+  assert.equal(seeded.codexSessionId, 'codex-xyz');
+  assert.equal(seeded.codexStarted, true);
+  assert.equal(seeded.turns, 0, '播种不算已跑轮次');
+
+  // 已有缓存时不该被持久化记录覆盖(内存里的更新)
+  mobileService.rememberResume('c_desktop_first_touch', { codexSessionId: 'newer' });
+  assert.equal(
+    mobileService.getResume('c_desktop_first_touch', persisted).codexSessionId, 'newer'
+  );
 });
 
 test('开新话题会丢掉 resume 状态', () => {
-  mobileService.resetMobileConvo('h9', '/p');
-  mobileService.rememberResume('h9', '/p', { claudeSessionId: 'abc' });
-  assert.equal(mobileService.getMobileConvo('h9', '/p').claudeSessionId, 'abc');
+  mobileService.resetResume('c_x');
+  mobileService.rememberResume('c_x', { claudeSessionId: 'abc' });
+  assert.equal(mobileService.getResume('c_x').claudeSessionId, 'abc');
 
-  mobileService.resetMobileConvo('h9', '/p');
-  assert.equal(mobileService.getMobileConvo('h9', '/p').claudeSessionId, null);
+  mobileService.resetResume('c_x');
+  assert.equal(mobileService.getResume('c_x').claudeSessionId, null);
 });
 
 /* ------------------------------------------------------------ 路由 */
@@ -146,6 +164,7 @@ function deps(overrides = {}) {
   return {
     listHosts: async () => [],
     listProjects: async (hostId) => [{ path: `/p/${hostId}`, name: hostId }],
+    listConversations: async (hostId) => [{ convId: 'c_1', hostId, title: '旧对话' }],
     startTask: async (a) => ({ taskId: 't1', ...a }),
     getTask: async () => null,
     listTasks: async () => [],
@@ -165,14 +184,26 @@ test('项目列表走查询参数,缺 hostId 时报错而不是返回空', async
   assert.equal(ok.body.projects[0].path, '/p/h1');
 });
 
-test('提交任务时 cwd / engine / newSession 都被透传', async () => {
+test('提交任务时 convId / cwd / engine / newSession 都被透传', async () => {
   const r = await route({
     method: 'POST', pathname: '/api/tasks',
-    body: { hostId: 'h1', prompt: '修 bug', cwd: '/srv/api', engine: 'claude', newSession: true }
+    body: {
+      hostId: 'h1', prompt: '修 bug', convId: 'c_1',
+      cwd: '/srv/api', engine: 'claude', newSession: true
+    }
   }, deps());
+  assert.equal(r.body.convId, 'c_1');
   assert.equal(r.body.cwd, '/srv/api');
   assert.equal(r.body.engine, 'claude');
   assert.equal(r.body.newSession, true);
+});
+
+test('桌面对话列表可供手机接续', async () => {
+  const r = await route({
+    method: 'GET', pathname: '/api/conversations', query: { hostId: 'h1' }
+  }, deps());
+  assert.equal(r.status, 200);
+  assert.equal(r.body.conversations[0].convId, 'c_1');
 });
 
 test('inspect 的错误原样返回,让用户知道为什么被拒', async () => {
@@ -190,7 +221,8 @@ test('桥接技能已教会 OpenClaw 用新接口,且仍是合法 SKILL.md', () 
   assert.equal(r.ok, true, r.error);
   assert.deepEqual(r.warnings, []);
 
-  for (const must of ['/api/projects', '/api/inspect', '/api/reset', 'newSession', 'cwd']) {
+  for (const must of ['/api/projects', '/api/inspect', '/api/reset', '/api/conversations',
+    'convId', 'newSession', 'cwd']) {
     assert.ok(md.includes(must), `技能应说明 ${must}`);
   }
   // 明确告知能力边界,免得 agent 硬编不存在的接口

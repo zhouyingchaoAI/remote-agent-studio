@@ -68,7 +68,8 @@ contextBridge.exposeInMainWorld('api', {
     rotateToken: invoke('mobile:rotateToken'),
     installBridge: invoke('mobile:installBridge'),
     previewBridge: invoke('mobile:previewBridge'),
-    listTasks: invoke('mobile:listTasks')
+    listTasks: invoke('mobile:listTasks'),
+    onConversation: on('mobile:conversation')
   },
   skills: {
     listBuiltin: invoke('skills:listBuiltin'),

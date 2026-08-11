@@ -62,6 +62,10 @@ export default function App() {
       useStore.getState().setStatus(hostId, status, detail));
     const offLog = window.api.setup.onLog(({ hostId, text }) =>
       useStore.getState().appendSetupLog(hostId, text));
+    // 手机端新开的对话:接纳进来,否则它的消息会因对话不存在而被丢弃
+    const offMobileConv = window.api.mobile.onConversation(({ conv }) => {
+      if (conv?.id) useStore.getState().adoptConversation(conv);
+    });
     const offMsg = window.api.agent.onMessage(({ convId, msg }) => {
       const st = useStore.getState();
       if (msg.kind === 'done') {
@@ -185,7 +189,7 @@ export default function App() {
         return st.finalizeStream(convId, msg.kind, msg);
       st.pushMessage(convId, { role: 'agent', ...msg, ts: Date.now() });
     });
-    return () => { offStatus(); offLog(); offMsg(); };
+    return () => { offStatus(); offLog(); offMsg(); offMobileConv(); };
   }, []);
 
   return (

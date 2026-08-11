@@ -131,30 +131,37 @@ function listTasks() {
 
 function clearTasks() { tasks.clear(); }
 
-/* ------------------------------------------------------- 会话记忆(多轮续聊)
- * 手机端每条消息都新建 agent 的话,第二句「那再改一下 X」它完全不记得第一句。
- * 按「主机 + 项目目录」记住各引擎的 resume id,下一轮接着聊。 */
+/* ------------------------------------------------------- 续跑状态(多轮续聊)
+ * 按 convId 记 resume id。渲染层也会把它持久化进对话文件,
+ * 但那是异步的 —— 这份内存缓存保证同一对话连发两条时不会丢上下文。 */
 
-const convos = new Map(); // `${hostId}::${cwd}` -> {convId, claudeSessionId, ...}
+const resumes = new Map(); // convId -> {claudeSessionId, ..., turns}
 
-function sessionKey(hostId, cwd = '') { return `${hostId}::${cwd}`; }
+const BLANK = () => ({
+  claudeSessionId: null, codexSessionId: null, codexStarted: false, grokSessionId: null, turns: 0
+});
 
-/** 取(或新建)该项目的移动端会话 */
-function getMobileConvo(hostId, cwd = '') {
-  const key = sessionKey(hostId, cwd);
-  if (!convos.has(key)) {
-    convos.set(key, {
-      convId: `mobile_${Math.random().toString(36).slice(2, 10)}`,
-      claudeSessionId: null, codexSessionId: null, codexStarted: false, grokSessionId: null,
+/**
+ * 取该对话的续跑状态。
+ * @param persisted 桌面端已持久化的对话记录,用于首次接续时播种 ——
+ *                  没有它的话,手机接续桌面对话会从零开始,等于失忆。
+ */
+function getResume(convId, persisted = null) {
+  if (!resumes.has(convId)) {
+    resumes.set(convId, persisted ? {
+      claudeSessionId: persisted.claudeSessionId || null,
+      codexSessionId: persisted.codexSessionId || null,
+      codexStarted: !!persisted.codexStarted,
+      grokSessionId: persisted.grokSessionId || null,
       turns: 0
-    });
+    } : BLANK());
   }
-  return convos.get(key);
+  return resumes.get(convId);
 }
 
-/** 每轮结束后把 resume 状态存回去 */
-function rememberResume(hostId, cwd, agent) {
-  const c = getMobileConvo(hostId, cwd);
+/** 每轮结束后存回 */
+function rememberResume(convId, agent) {
+  const c = getResume(convId);
   c.claudeSessionId = agent.claudeSessionId || c.claudeSessionId;
   c.codexSessionId = agent.codexSessionId || c.codexSessionId;
   c.codexStarted = agent.codexStarted || c.codexStarted;
@@ -164,16 +171,13 @@ function rememberResume(hostId, cwd, agent) {
 }
 
 /** 开新话题:丢掉上下文重新开始 */
-function resetMobileConvo(hostId, cwd = '') {
-  convos.delete(sessionKey(hostId, cwd));
-  return getMobileConvo(hostId, cwd);
+function resetResume(convId) {
+  resumes.set(convId, BLANK());
+  return resumes.get(convId);
 }
 
-function listMobileConvos() {
-  return [...convos.entries()].map(([key, c]) => {
-    const [hostId, cwd] = key.split('::');
-    return { hostId, cwd, turns: c.turns, convId: c.convId };
-  });
+function listResumes() {
+  return [...resumes.entries()].map(([convId, c]) => ({ convId, turns: c.turns }));
 }
 
 /* ---------------------------------------------------------------- 桥接技能 */
@@ -246,6 +250,19 @@ curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/api/projects?hostId=<主机id>
 **用户提到项目名就匹配对应的 path;没提就问,不要默认跑在家目录** ——
 跑错项目比不跑更糟。
 
+## 2.5 想接着电脑上那个对话继续?
+
+\`\`\`bash
+curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/api/conversations?hostId=<主机id>"
+\`\`\`
+
+返回最近 20 个对话:\`{"conversations":[{"convId":"c_...","title":"...","cwd":"...","lastText":"..."}]}\`
+
+用户说「继续刚才电脑上那个」「接着 xxx 那个对话」时,匹配到 \`convId\`,
+提交任务时带上它 —— 上下文、项目目录、引擎都会自动跟随,不用重复交代。
+
+**手机上新开的任务也会实时出现在电脑端的对话列表里**,两边是同一个对话。
+
 ## 3. 提交任务
 
 \`\`\`bash
@@ -260,14 +277,15 @@ curl -sS -X POST $BASE/api/tasks \\
 
 | 参数 | 说明 |
 |---|---|
-| \`cwd\` | 项目目录。**强烈建议每次都带** |
+| \`convId\` | 接续某个已有对话(电脑上的或手机之前开的),带了就不用再带 cwd |
+| \`cwd\` | 项目目录。新开对话时**强烈建议带上** |
 | \`engine\` | \`codex\`(默认)/ \`claude\` / \`deepseek\` / \`grok\`,用户明确要求才改 |
 | \`model\` | 具体模型名,用户明确要求才带 |
 | \`newSession\` | \`true\` 表示开新话题,丢掉之前的上下文 |
 
-**同一个主机 + 同一个项目的连续任务会自动接上上下文**(返回里的 \`turn\` 就是第几轮),
-所以用户说「那再改一下 X」时直接发新任务即可,不用重复交代背景。
-用户说「重新开始」「换个话题」时才带 \`newSession: true\`。
+返回里的 \`convId\` 要记住,同一话题的后续消息都带上它 —— 这样上下文才连得上。
+用户说「那再改一下 X」时直接用同一个 \`convId\` 发新任务,不用重复交代背景。
+用户说「重新开始」「换个话题」时带 \`newSession: true\`。
 
 转达任务时**保留用户的原话**,不要替他简化或"优化"需求 —— 你不知道他省略了什么上下文。
 
@@ -370,7 +388,7 @@ function installBridgeSkill({ port, token }) {
 module.exports = {
   init, getConfig, setConfig, getToken, rotateToken, ensureToken,
   createTask, getTask, listTasks, clearTasks, tasks,
-  getMobileConvo, rememberResume, resetMobileConvo, listMobileConvos, sessionKey,
+  getResume, rememberResume, resetResume, listResumes,
   detectOpenClaw, renderBridgeSkill, installBridgeSkill,
   SKILL_DIR, TOKEN_FILE, DEFAULTS
 };

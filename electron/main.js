@@ -894,32 +894,80 @@ function mobileListHosts() {
  * 复用桌面端同一套 AgentSession,并把消息同时推给渲染层 ——
  * 手机上发起的任务在桌面端也看得见全过程,不会变成黑盒。
  */
-async function mobileStartTask({ hostId, prompt, cwd = '', engine, model, newSession }) {
+/** 桌面端对话列表 —— 手机端据此挑一个接着聊 */
+function mobileListConversations(hostId) {
+  return loadConvos()
+    .filter((c) => !hostId || c.hostId === hostId)
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .slice(0, 20)
+    .map((c) => ({
+      convId: c.id, hostId: c.hostId, title: c.title || '未命名',
+      cwd: c.cwd || '', agent: c.agent || 'codex',
+      messages: (c.messages || []).length,
+      updatedAt: c.updatedAt || 0,
+      lastText: String((c.messages || []).filter((m) => m.text).slice(-1)[0]?.text || '').slice(0, 120)
+    }));
+}
+
+/**
+ * 跑一个来自手机的任务。
+ *
+ * 关键:任务一律落在「渲染层已知的对话」上 —— 新开的由主进程生成 id 并通知
+ * 渲染层接纳,接续桌面对话则直接用它的 id。这样消息显示、历史持久化、
+ * resume 续跑全部复用现成逻辑,两端看到的是同一个对话而不是各存一份。
+ */
+async function mobileStartTask({ hostId, prompt, convId, cwd = '', engine, model, newSession }) {
   const s = getSession(hostId); // 主机没连接会在这里抛错,直接变成 400
   const cfg = mobileService.getConfig();
-  const agentName = mobileOps.normalizeEngine(engine);
-  const task = mobileService.createTask({ hostId, prompt });
 
-  // 多轮续聊:按「主机 + 项目」记住 resume 状态,
-  // 否则第二句「那再改一下 X」它完全不记得第一句干了什么
-  if (newSession) mobileService.resetMobileConvo(hostId, cwd);
-  const convo = mobileService.getMobileConvo(hostId, cwd);
-  const convId = convo.convId;
+  // 接续桌面对话:主机/目录/引擎跟随该对话,手机端不用重复交代
+  let existing = null;
+  if (convId) {
+    existing = loadConvos().find((c) => c.id === convId);
+    if (!existing) throw new Error(`对话 ${convId} 不存在,先调 GET /api/conversations 拿列表`);
+    if (existing.hostId !== hostId) throw new Error('该对话不属于这台主机');
+  }
+
+  const agentName = mobileOps.normalizeEngine(engine || existing?.agent);
+  const workDir = cwd || existing?.cwd || '';
+  const targetConvId = existing?.id || `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+  if (newSession) mobileService.resetResume(targetConvId);
+  const resume = mobileService.getResume(targetConvId, existing);
+  const task = mobileService.createTask({ hostId, prompt });
+  task.cwd = workDir;
+  task.convId = targetConvId;
+  task.turn = resume.turns + 1;
+
+  // 新对话必须先让渲染层接纳 —— pushMessage 对未知对话是直接丢弃的,
+  // 不接纳的话手机任务在桌面端完全隐身
+  if (!existing) {
+    send('mobile:conversation', {
+      conv: {
+        id: targetConvId, hostId, agent: agentName, cwd: workDir, model: model || '',
+        title: `📱 ${prompt.slice(0, 20)}`,
+        permissionMode: cfg.allowSystemMode ? 'system' : 'workspace'
+      }
+    });
+  }
+  // 手机发的这句话要作为用户消息出现在桌面端,否则对话读起来没有上下文
+  send('agent:message', {
+    hostId, convId: targetConvId,
+    msg: { kind: 'raw', role: 'user', text: prompt, fromMobile: true }
+  });
 
   const agent = new AgentSession(s.ssh, s.proxy, {
     agent: agentName,
-    cwd: cwd || undefined,
-    model: model || undefined,
+    cwd: workDir || undefined,
+    model: model || existing?.model || undefined,
     // 手机端默认不放开系统权限:一句话就在服务器上全权执行风险太高
     permissionMode: cfg.allowSystemMode ? 'system' : 'workspace'
   });
-  agent.claudeSessionId = convo.claudeSessionId;
-  agent.codexSessionId = convo.codexSessionId;
-  agent.codexStarted = convo.codexStarted;
-  agent.grokSessionId = convo.grokSessionId;
-  task.cwd = cwd;
-  task.turn = convo.turns + 1;
-  s.agents.set(convId, agent);
+  agent.claudeSessionId = resume.claudeSessionId;
+  agent.codexSessionId = resume.codexSessionId;
+  agent.codexStarted = resume.codexStarted;
+  agent.grokSessionId = resume.grokSessionId;
+  s.agents.set(targetConvId, agent);
 
   agent.on('message', (msg) => {
     if (msg.kind === 'assistant' || msg.kind === 'text') task.reply += msg.text || '';
@@ -928,7 +976,7 @@ async function mobileStartTask({ hostId, prompt, cwd = '', engine, model, newSes
       if (msg.dangerous) task.dangerous.push(String(msg.detail || '').slice(0, 200));
     }
     if (msg.kind === 'error' || msg.kind === 'stderr') task.error += `${msg.text || ''}\n`;
-    send('agent:message', { hostId, convId, msg }); // 桌面端同步可见
+    send('agent:message', { hostId, convId: targetConvId, msg });
   });
 
   // 不 await:接口立刻返回 taskId,手机侧轮询进度
@@ -937,11 +985,24 @@ async function mobileStartTask({ hostId, prompt, cwd = '', engine, model, newSes
     .catch((e) => { task.status = 'error'; task.error = e.message; })
     .finally(() => {
       task.finishedAt = Date.now();
-      mobileService.rememberResume(hostId, cwd, agent); // 存回 resume,供下一轮接力
-      s.agents.delete(convId);
+      mobileService.rememberResume(targetConvId, agent);
+      s.agents.delete(targetConvId);
+      // 补一条 done:渲染层据此收尾并把 resume 状态持久化进对话,
+      // 于是桌面端点「继续」能无缝接着手机那轮往下聊
+      send('agent:message', {
+        hostId, convId: targetConvId,
+        msg: {
+          kind: 'done', agent: agentName,
+          claudeSessionId: agent.claudeSessionId, codexSessionId: agent.codexSessionId,
+          codexStarted: agent.codexStarted, grokSessionId: agent.grokSessionId
+        }
+      });
     });
 
-  return { taskId: task.id, hostId, cwd, engine: agentName, turn: task.turn, status: 'running' };
+  return {
+    taskId: task.id, hostId, convId: targetConvId, cwd: workDir,
+    engine: agentName, turn: task.turn, status: 'running'
+  };
 }
 
 /** 项目列表:历史用过的目录优先,再补上远程扫到的 git 仓库 */
@@ -988,13 +1049,15 @@ async function startMobileGateway() {
     deps: {
       listHosts: mobileListHosts,
       listProjects: mobileListProjects,
+      listConversations: mobileListConversations,
       startTask: mobileStartTask,
       getTask: (id) => mobileService.getTask(id),
       listTasks: () => mobileService.listTasks(),
       cancelTask: mobileCancelTask,
       inspect: mobileInspect,
-      resetSession: ({ hostId, cwd }) => {
-        mobileService.resetMobileConvo(hostId, cwd || '');
+      resetSession: ({ convId }) => {
+        if (!convId) throw new Error('需要 convId');
+        mobileService.resetResume(convId);
         return { ok: true };
       }
     }

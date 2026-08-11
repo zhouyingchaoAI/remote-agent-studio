@@ -58,6 +58,26 @@ export const useStore = create((set, get) => ({
   setActiveConv: (hostId, convId) =>
     set((s) => ({ activeConvByHost: { ...s.activeConvByHost, [hostId]: convId } })),
 
+  /**
+   * 接纳一个由主进程创建的对话(手机端发起的任务)。
+   * 用主进程给的 id,这样后续 agent:message 能正常落位 ——
+   * pushMessage 对不存在的对话是直接丢弃的,不接纳就等于手机任务在桌面端隐身。
+   * 幂等:同 id 重复接纳不覆盖已有消息。
+   */
+  adoptConversation: (conv) => {
+    const s = get();
+    if (s.conversations[conv.id]) return conv.id;
+    const full = {
+      messages: [], claudeSessionId: null, codexSessionId: null,
+      codexStarted: false, grokSessionId: null,
+      permissionMode: 'workspace', autoApprove: false, model: '',
+      createdAt: Date.now(), ...conv, updatedAt: Date.now()
+    };
+    set((st) => ({ conversations: { ...st.conversations, [conv.id]: full } }));
+    persist();
+    return conv.id;
+  },
+
   createConversation: (hostId, opts) => {
     const id = `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const conv = {
