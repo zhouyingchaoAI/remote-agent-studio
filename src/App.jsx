@@ -25,6 +25,7 @@ import {
   isAwaitingConfirm, evaluateAutoConfirm, MAX_AUTO_REPLIES, MAX_AUTO_RESUME
 } from './store.js';
 import { decideGoalStep } from './goalMode.js';
+import { autoConfirmOutcome, autoPauseMessage } from './turnFlow.js';
 import Sidebar from './components/Sidebar.jsx';
 import HostForm from './components/HostForm.jsx';
 import ChatPanel from './components/ChatPanel.jsx';
@@ -110,52 +111,53 @@ export default function App() {
         }
         // 本轮正常结束 -> 重置续跑计数
         if (conv && (st.autoResumeCount?.[convId] || 0) > 0) st.setAutoResumeCount(convId, 0);
-        // 全自动模式:模型在等确认 -> 自动回复继续(连续 MAX 次后暂停防失控)
+        // 本轮(上一条用户消息之后)产生的消息,危险命令判定用
+        const sinceLastUser = [];
+        for (let i = (conv?.messages?.length || 0) - 1; i >= 0; i -= 1) {
+          if (conv.messages[i].role === 'user') break;
+          sinceLastUser.push(conv.messages[i]);
+        }
+        const danger = sinceLastUser.find((m) => m.dangerous);
+
+        /* 全自动:只负责「模型反问要不要继续」时替你点头。
+         * 它没事可做时必须把控制权交给目标模式 —— 早先这里无条件 return,
+         * 导致开了全自动之后目标模式永远不执行,目标停住、轮次不涨。 */
         if (conv?.autoConfirm) {
           const lastReply = [...conv.messages].reverse()
             .find((m) => m.role === 'agent' && (m.kind === 'text' || m.kind === 'result') && m.text);
-          // 全自动刹车:本轮若出现危险命令,不自动确认,提示人工复核
-          const sinceLastUser = [];
-          for (let i = conv.messages.length - 1; i >= 0; i -= 1) {
-            if (conv.messages[i].role === 'user') break;
-            sinceLastUser.push(conv.messages[i]);
+          const awaiting = !!(lastReply && isAwaitingConfirm(lastReply.text));
+          // evaluateAutoConfirm 会累加计数,只在确实要应答时才调用
+          const verdict = (!danger && awaiting) ? evaluateAutoConfirm(convId, lastReply.text) : null;
+          const outcome = autoConfirmOutcome({
+            enabled: true, dangerHit: danger, awaitingConfirm: awaiting, verdictOk: verdict?.ok
+          });
+
+          if (outcome === 'sent') {
+            sendToAgent(conv.hostId, convId,
+              '确认,请继续执行;后续决策请自行选择最合理的方案,不要再次询问。', [], { auto: true });
+            return;
           }
-          const dangerHit = sinceLastUser.find((m) => m.dangerous);
-          if (dangerHit) {
+          if (outcome === 'paused') {
             st.pushMessage(convId, {
               role: 'agent', kind: 'raw',
-              text: `🛑 全自动已暂停:本轮包含危险命令「${String(dangerHit.detail || '').slice(0, 80)}」,请人工确认后再继续。`,
+              text: autoPauseMessage({
+                dangerHit: danger ? (danger.detail || '危险命令') : null,
+                verdictReason: verdict?.reason, maxReplies: MAX_AUTO_REPLIES
+              }),
               ts: Date.now()
             });
-          } else if (lastReply && isAwaitingConfirm(lastReply.text)) {
-            const verdict = evaluateAutoConfirm(convId, lastReply.text);
-            if (verdict.ok) {
-              sendToAgent(conv.hostId, convId,
-                '确认,请继续执行;后续决策请自行选择最合理的方案,不要再次询问。', [], { auto: true });
-            } else {
-              st.pushMessage(convId, {
-                role: 'agent', kind: 'raw',
-                text: verdict.reason === 'repeat'
-                  ? '🤖 模型重复发出同一确认请求,全自动已暂停(可能陷入循环或不可行的流程),请人工核实后再继续。'
-                  : `🤖 全自动模式已连续自动确认 ${MAX_AUTO_REPLIES} 次,已暂停,请人工查看后继续。`,
-                ts: Date.now()
-              });
-            }
+            // 目标模式也一并暂停,否则它会立刻再踢一轮,把刹车抵消掉
+            if (conv?.goal?.status === 'active') st.updateConversationGoal(convId, { status: 'paused' });
+            return;
           }
-          return;
+          // outcome === 'idle' -> 落到下面的目标模式
         }
 
-        // 目标模式:未达成则自动追一轮,直到达成/卡住/触顶(与全自动互补,后者只应答确认)
+        // 目标模式:未达成则自动追一轮,直到达成/卡住/触顶
         if (conv?.goal?.status === 'active' && conv.goal.text) {
           const agentTexts = conv.messages
             .filter((m) => m.role === 'agent' && (m.kind === 'text' || m.kind === 'result') && m.text)
             .map((m) => m.text);
-          const sinceLastUser = [];
-          for (let i = conv.messages.length - 1; i >= 0; i -= 1) {
-            if (conv.messages[i].role === 'user') break;
-            sinceLastUser.push(conv.messages[i]);
-          }
-          const danger = sinceLastUser.find((m) => m.dangerous);
           const step = decideGoalStep(conv.goal, {
             lastText: agentTexts[agentTexts.length - 1] || '',
             recentTexts: agentTexts,
