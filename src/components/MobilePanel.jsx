@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import SetupTerminal from './SetupTerminal.jsx';
 
 /**
  * 移动接入:通过 OpenClaw + 腾讯官方微信通道,用手机微信驱动远程 agent。
@@ -15,9 +16,25 @@ export default function MobilePanel() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [preview, setPreview] = useState('');
+  const [termOpen, setTermOpen] = useState(false);
+  const [qrZoom, setQrZoom] = useState(false); // 扫码时放大字号
+  const termRef = useRef(null);
 
   const refresh = async () => setCfg(await window.api.mobile.getConfig());
   useEffect(() => { refresh(); }, []);
+
+  /** 在内嵌终端里执行命令。终端没开就先开,等挂载好再敲 */
+  const runInTerm = (command) => {
+    setNote('');
+    if (!termOpen) {
+      setTermOpen(true);
+      setTimeout(() => termRef.current?.run(command), 400);
+    } else {
+      termRef.current?.run(command);
+    }
+    // 装完 OpenClaw / 扫完码后状态会变,过一会儿自动刷新检测结果
+    setTimeout(refresh, 8000);
+  };
 
   const patch = async (p) => {
     setBusy(true); setNote('');
@@ -80,18 +97,19 @@ export default function MobilePanel() {
       <Step n="2" title="安装 OpenClaw" done={oc.installed}>
         {oc.installed
           ? <p className="ok-text small">✓ 已检测到 {oc.dir}</p>
-          : <p className="muted small">需要 Node ≥ 22。在终端执行:</p>}
-        <Cmd text={INSTALL_OPENCLAW} />
+          : <p className="muted small">需要 Node ≥ 22。点一下就在下方终端里执行,不用切到外面:</p>}
+        <Cmd text={INSTALL_OPENCLAW} onRun={() => runInTerm(INSTALL_OPENCLAW)} />
       </Step>
 
-      <Step n="3" title="接入微信" done={oc.installed}>
+      <Step n="3" title="接入微信(扫码)" done={oc.installed}>
         <p className="muted small">
-          腾讯官方通道插件(MIT 开源)。执行后会出现二维码,用你自己的微信扫码登录:
+          腾讯官方通道插件(MIT 开源)。执行后<b>下方终端里会打印二维码</b>,
+          用你自己的微信扫它登录:
         </p>
-        <Cmd text={INSTALL_WEIXIN} />
+        <Cmd text={INSTALL_WEIXIN} onRun={() => { setQrZoom(true); runInTerm(INSTALL_WEIXIN); }} />
         <p className="muted small">
-          扫码用的微信号即为唯一可以指挥它的人。OpenClaw 默认对陌生人启用配对码策略,
-          别把它设成对所有人开放。
+          扫码用的微信号即为唯一能指挥它的人。OpenClaw 默认对陌生人启用配对码策略,
+          别改成对所有人开放。
         </p>
       </Step>
 
@@ -113,6 +131,33 @@ export default function MobilePanel() {
       </Step>
 
       {note && <p className="muted small">{note}</p>}
+
+      <section className="term-section">
+        <h3>
+          执行终端
+          <span className="flex1" />
+          {termOpen && (
+            <>
+              <label className="check-row inline" title="二维码太小扫不动时打开">
+                <input type="checkbox" checked={qrZoom} onChange={(e) => setQrZoom(e.target.checked)} />
+                <span className="small">放大二维码</span>
+              </label>
+              <button className="btn small ghost" onClick={() => termRef.current?.interrupt()}>中断</button>
+              <button className="btn small ghost" onClick={() => termRef.current?.clear()}>清屏</button>
+            </>
+          )}
+          <button className="btn small ghost" onClick={() => setTermOpen((v) => !v)}>
+            {termOpen ? '收起' : '展开'}
+          </button>
+        </h3>
+        {termOpen ? (
+          <div className={`term-host ${qrZoom ? 'zoom' : ''}`}>
+            <SetupTerminal ref={termRef} termId="mobile-setup" fontSize={qrZoom ? 17 : 12} />
+          </div>
+        ) : (
+          <p className="muted small">上面任一步骤点「执行」都会在这里跑,微信二维码也在这里显示。</p>
+        )}
+      </section>
 
       <section>
         <h3>装好之后怎么用</h3>
@@ -151,11 +196,12 @@ function Step({ n, title, done, children }) {
   );
 }
 
-function Cmd({ text }) {
+function Cmd({ text, onRun }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="cmd-row">
       <code>{text}</code>
+      {onRun && <button className="btn small primary" onClick={onRun}>执行</button>}
       <button className="btn small ghost" onClick={() => {
         navigator.clipboard.writeText(text).then(() => {
           setCopied(true);

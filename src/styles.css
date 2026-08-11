@@ -573,3 +573,14 @@ progress { width: 140px; height: 6px; }
   background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
 .cmd-row code { flex: 1; min-width: 0; font-size: 12px; overflow-x: auto; white-space: nowrap; }
 .mobile-examples { margin: 6px 0 0; padding-left: 20px; line-height: 1.9; }
+
+/* 移动接入页里的内嵌执行终端(微信二维码在这里显示) */
+.term-section h3 { display: flex; align-items: center; gap: 8px; }
+.term-section .flex1 { flex: 1; }
+.check-row.inline { padding: 0; gap: 5px; }
+.term-host { height: 340px; border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden; background: #0b0d12; }
+/* 扫码时给足高度:二维码约 40 行,放大后需要更大画布 */
+.term-host.zoom { height: 620px; }
+.setup-term { height: 100%; display: flex; flex-direction: column; }
+.setup-term-box { flex: 1; min-height: 0; padding: 6px; }
