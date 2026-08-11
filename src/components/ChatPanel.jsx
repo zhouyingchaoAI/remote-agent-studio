@@ -4,7 +4,10 @@ import { useVoiceInput } from '../useVoiceInput.js';
 import { buildPromptHistory, stepPromptHistory } from '../promptHistory.js';
 import { extractOptions } from '../quickReplies.js';
 import { matchCommands, applyCompletion, parseSlash, parseGoalArgs, helpText } from '../slashCommands.js';
-import { createGoal, buildContinuePrompt, GOAL_DEFAULT_MAX_ROUNDS } from '../goalMode.js';
+import {
+  createGoal, buildContinuePrompt, resumeGoalPatch, setGoalMaxRounds,
+  GOAL_DEFAULT_MAX_ROUNDS, GOAL_EXTEND_ROUNDS
+} from '../goalMode.js';
 import FilePreview from './FilePreview.jsx';
 import Markdown from './Markdown.jsx';
 
@@ -251,7 +254,7 @@ function ChatView({ hostId, conv }) {
         localNote(`全自动:${on ? '开' : '关'}`); return true;
       }
       case 'goal': {
-        const { sub, text } = parseGoalArgs(args);
+        const { sub, text, rounds } = parseGoalArgs(args);
         const goal = conv.goal;
         if (sub === 'set') {
           st.setConversationGoal(conv.id, createGoal(text));
@@ -266,9 +269,19 @@ function ChatView({ hostId, conv }) {
         } else if (sub === 'pause') {
           st.updateConversationGoal(conv.id, { status: 'paused' }); localNote('🎯 目标模式已暂停');
         } else if (sub === 'resume') {
-          st.updateConversationGoal(conv.id, { status: 'active' });
-          localNote('🎯 目标模式已继续');
+          // 触顶停下的必须同时抬预算,否则跑完一轮又立刻触顶
+          const patch = resumeGoalPatch(goal);
+          st.updateConversationGoal(conv.id, patch);
+          localNote(patch.maxRounds
+            ? `🎯 目标模式已继续,轮次预算提到 ${patch.maxRounds}`
+            : '🎯 目标模式已继续');
           setTimeout(() => sendToAgent(hostId, conv.id, buildContinuePrompt(goal), [], { auto: true }), 0);
+        } else if (sub === 'max') {
+          try {
+            const patch = setGoalMaxRounds(goal, rounds);
+            st.updateConversationGoal(conv.id, patch);
+            localNote(`🎯 轮次预算已设为 ${patch.maxRounds}(当前 ${goal.rounds || 0} 轮)`);
+          } catch (e) { localNote(`🎯 ${e.message}`); }
         } else if (sub === 'clear') {
           st.setConversationGoal(conv.id, null); localNote('🎯 目标已清除');
         }
@@ -767,10 +780,14 @@ function GoalBar({ conv }) {
       )}
       {goal.status !== 'active' && (
         <button className="btn small"
+          title="触顶暂停时会自动追加轮次预算,否则跑一轮又会立刻停下"
           onClick={() => {
-            st.updateConversationGoal(conv.id, { status: 'active' });
+            st.updateConversationGoal(conv.id, resumeGoalPatch(goal));
             sendToAgent(conv.hostId, conv.id, buildContinuePrompt(goal), [], { auto: true });
-          }}>继续</button>
+          }}>
+          {(goal.rounds || 0) >= (goal.maxRounds || GOAL_DEFAULT_MAX_ROUNDS)
+            ? `继续(+${GOAL_EXTEND_ROUNDS} 轮)` : '继续'}
+        </button>
       )}
       <button className="btn small ghost" onClick={() => st.setConversationGoal(conv.id, null)}>清除</button>
     </div>

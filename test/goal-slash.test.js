@@ -105,3 +105,51 @@ test('helpText 列出全部命令', () => {
   const h = slash.helpText();
   for (const c of slash.COMMANDS) assert.ok(h.includes(`/${c.name}`));
 });
+
+/* ---- 触顶后「继续」只多跑一轮就又停(用户 2026-08-11 反馈的真实现象) ---- */
+
+test('触顶暂停后点继续,不能跑一轮又立刻触顶', () => {
+  const { resumeGoalPatch, decideGoalStep, GOAL_EXTEND_ROUNDS } = require('../src/goalMode.js');
+
+  // 复现:25/25 触顶暂停
+  let goal = { text: '按任务书开发', status: 'active', rounds: 25, maxRounds: 25 };
+  const hit = decideGoalStep(goal, { lastText: '继续排查' });
+  assert.equal(hit.action, 'stop');
+  assert.equal(hit.reason, 'maxRounds');
+
+  // 旧行为(只改 status)会立刻再次触顶 —— 这就是 bug
+  const buggy = { ...goal, status: 'active', rounds: 26 };
+  assert.equal(decideGoalStep(buggy, { lastText: '继续排查' }).action, 'stop',
+    '仅恢复 status 的话,下一轮必然又停');
+
+  // 新行为:恢复时追加预算
+  goal = { ...goal, status: 'paused' };
+  const patch = resumeGoalPatch(goal);
+  assert.equal(patch.status, 'active');
+  assert.equal(patch.maxRounds, 25 + GOAL_EXTEND_ROUNDS);
+
+  const resumed = { ...goal, ...patch, rounds: 26 };
+  assert.equal(decideGoalStep(resumed, { lastText: '继续排查' }).action, 'continue',
+    '追加预算后应能接着跑');
+});
+
+test('未触顶时恢复不该无谓抬高预算', () => {
+  const { resumeGoalPatch } = require('../src/goalMode.js');
+  const patch = resumeGoalPatch({ status: 'paused', rounds: 3, maxRounds: 25 });
+  assert.deepEqual(patch, { status: 'active' });
+});
+
+test('/goal max 解析与边界', () => {
+  const { parseGoalArgs } = require('../src/slashCommands.js');
+  const { setGoalMaxRounds, GOAL_MAX_ROUNDS_CAP } = require('../src/goalMode.js');
+
+  assert.deepEqual(parseGoalArgs('max 100'), { sub: 'max', rounds: 100 });
+  assert.deepEqual(parseGoalArgs('max  8'), { sub: 'max', rounds: 8 });
+  assert.equal(parseGoalArgs('max abc').sub, 'set'); // 不是数字就当成目标描述
+
+  // 设的值比已跑轮次还小 -> 抬到 rounds+1,否则设完立刻又触顶
+  assert.equal(setGoalMaxRounds({ rounds: 30 }, 10).maxRounds, 31);
+  // 封顶
+  assert.equal(setGoalMaxRounds({ rounds: 0 }, 99999).maxRounds, GOAL_MAX_ROUNDS_CAP);
+  assert.throws(() => setGoalMaxRounds({ rounds: 0 }, 0), /正整数/);
+});

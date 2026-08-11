@@ -9,6 +9,10 @@
  */
 
 export const GOAL_DEFAULT_MAX_ROUNDS = 25;
+/** 每次点「继续」追加的轮次预算 */
+export const GOAL_EXTEND_ROUNDS = 25;
+/** 上限的上限:再怎么加也不能无限烧 */
+export const GOAL_MAX_ROUNDS_CAP = 500;
 
 /** 模型宣称完成的说法 */
 const DONE_PATTERNS = [
@@ -71,7 +75,12 @@ export function decideGoalStep(goal, ctx = {}) {
     return { action: 'stop', reason: 'danger', message: `🛑 目标模式已暂停:本轮出现危险命令「${String(ctx.dangerHit).slice(0, 80)}」,请人工确认后再继续。` };
   }
   if ((goal.rounds || 0) >= maxRounds) {
-    return { action: 'stop', reason: 'maxRounds', message: `🎯 目标模式已达轮次上限(${maxRounds} 轮)并暂停,避免无限循环。确认进展后可点「继续」。` };
+    return {
+      action: 'stop', reason: 'maxRounds',
+      message: `🎯 已达轮次上限(${maxRounds} 轮)并暂停,避免无限循环烧钱。\n`
+        + `点「继续」会再给 ${GOAL_EXTEND_ROUNDS} 轮;`
+        + `任务本来就大的话,用 /goal max 100 一次把预算调高。`
+    };
   }
   if (isStalled(ctx.recentTexts)) {
     return { action: 'stop', reason: 'stalled', message: '🎯 目标模式检测到连续多轮输出雷同,疑似原地打转,已暂停。请人工看一眼再决定。' };
@@ -99,6 +108,29 @@ export function buildContinuePrompt(goal) {
     '4. 若目标已真正达成,请明确回复"目标已达成"并给出验证证据',
     '5. 若确实需要我提供信息或授权才能继续,请明确说明缺什么'
   ].join('\n');
+}
+
+/**
+ * 恢复推进时要打的补丁。
+ *
+ * 只把 status 改回 active 是不够的 —— 因触顶而暂停时 rounds 已经等于 maxRounds,
+ * 下一轮结束会立刻再次触顶暂停,表现为「点一次继续只多跑一轮」。
+ * 所以触顶恢复必须同时把预算往上抬。
+ */
+export function resumeGoalPatch(goal, { extra = GOAL_EXTEND_ROUNDS } = {}) {
+  const rounds = goal?.rounds || 0;
+  const maxRounds = goal?.maxRounds || GOAL_DEFAULT_MAX_ROUNDS;
+  if (rounds < maxRounds) return { status: 'active' }; // 不是触顶停的,预算还有,不用动
+  return { status: 'active', maxRounds: Math.min(rounds + extra, GOAL_MAX_ROUNDS_CAP) };
+}
+
+/** 手动设定轮次预算(/goal max N) */
+export function setGoalMaxRounds(goal, n) {
+  const want = parseInt(n, 10);
+  if (!Number.isFinite(want) || want < 1) throw new Error('轮次上限要是正整数');
+  const capped = Math.min(want, GOAL_MAX_ROUNDS_CAP);
+  // 已经跑过的轮次不能比上限还大,否则设完立刻又触顶
+  return { maxRounds: Math.max(capped, (goal?.rounds || 0) + 1), status: 'active' };
 }
 
 /** 新建目标对象 */

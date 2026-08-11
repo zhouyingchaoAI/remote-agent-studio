@@ -5,7 +5,7 @@
  */
 
 export const COMMANDS = [
-  { name: 'goal', args: '<目标描述> | status | pause | resume | clear',
+  { name: 'goal', args: '<目标描述> | status | pause | resume | max <轮数> | clear',
     desc: '目标模式:设定目标后跨轮自动推进,直到达成或触发上限' },
   { name: 'engine', args: 'codex | claude | deepseek | grok',
     desc: '切换引擎(同对话内上下文自动接力)' },
@@ -61,6 +61,9 @@ export function parseGoalArgs(args = '') {
   if (['status', 'pause', 'resume', 'clear', 'stop'].includes(lower)) {
     return { sub: lower === 'stop' ? 'pause' : lower };
   }
+  // /goal max 100 —— 大任务一次把预算调够,不用反复点「继续」
+  const max = lower.match(/^max\s+(\d+)$/);
+  if (max) return { sub: 'max', rounds: parseInt(max[1], 10) };
   return { sub: 'set', text: a };
 }
 
