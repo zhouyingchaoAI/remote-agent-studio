@@ -67,7 +67,7 @@ function readBody(req, limit = MAX_BODY) {
  * @param deps { listHosts, startTask, getTask, listTasks, cancelTask }
  * @returns {status, body}
  */
-async function route({ method, pathname, body }, deps) {
+async function route({ method, pathname, body, query = {} }, deps) {
   if (method === 'GET' && pathname === '/api/health') {
     return { status: 200, body: { ok: true, service: 'remote-agent-studio' } };
   }
@@ -80,6 +80,35 @@ async function route({ method, pathname, body }, deps) {
     return { status: 200, body: { tasks: await deps.listTasks() } };
   }
 
+  // 项目列表:历史用过的目录 + 远程扫描到的 git 仓库
+  if (method === 'GET' && pathname === '/api/projects') {
+    const hostId = String(query?.hostId || '').trim();
+    if (!hostId) return { status: 400, body: { error: '缺少 hostId 查询参数' } };
+    try {
+      return { status: 200, body: { projects: await deps.listProjects(hostId) } };
+    } catch (e) {
+      return { status: 400, body: { error: e.message } };
+    }
+  }
+
+  // 只读查看:固定命令白名单,不接受任意命令
+  if (method === 'POST' && pathname === '/api/inspect') {
+    try {
+      return { status: 200, body: await deps.inspect(body || {}) };
+    } catch (e) {
+      return { status: 400, body: { error: e.message } };
+    }
+  }
+
+  // 开新话题:丢掉该项目的上下文
+  if (method === 'POST' && pathname === '/api/reset') {
+    try {
+      return { status: 200, body: await deps.resetSession(body || {}) };
+    } catch (e) {
+      return { status: 400, body: { error: e.message } };
+    }
+  }
+
   if (method === 'POST' && pathname === '/api/tasks') {
     const prompt = String(body?.prompt || '').trim();
     const hostId = String(body?.hostId || '').trim();
@@ -87,7 +116,14 @@ async function route({ method, pathname, body }, deps) {
     if (prompt.length > MAX_PROMPT) return { status: 400, body: { error: `prompt 过长(上限 ${MAX_PROMPT} 字符)` } };
     if (!hostId) return { status: 400, body: { error: '缺少 hostId,先调 GET /api/hosts 拿列表' } };
     try {
-      return { status: 200, body: await deps.startTask({ hostId, prompt, engine: body?.engine, model: body?.model }) };
+      return {
+        status: 200,
+        body: await deps.startTask({
+          hostId, prompt,
+          cwd: body?.cwd, engine: body?.engine, model: body?.model,
+          newSession: !!body?.newSession
+        })
+      };
     } catch (e) {
       return { status: 400, body: { error: e.message } };
     }
@@ -136,7 +172,11 @@ function createGateway({ token, port = DEFAULT_PORT, deps }) {
 
       const body = req.method === 'POST' ? await readBody(req) : {};
       const { status, body: out } = await route(
-        { method: req.method, pathname: url.pathname, body }, deps
+        {
+          method: req.method, pathname: url.pathname, body,
+          query: Object.fromEntries(url.searchParams)
+        },
+        deps
       );
       reply(status, out);
     } catch (e) {

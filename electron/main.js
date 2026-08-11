@@ -24,6 +24,7 @@ const skillsMarket = require('./skillsMarket');
 const { lintSkill, ENGINE_SKILL_DIRS } = require('./skills');
 const mobileService = require('./mobileService');
 const { createGateway } = require('./mobileGateway');
+const mobileOps = require('./mobileOps');
 const { interpretVoiceCommand } = require('./voice');
 const { captureRegion } = require('./screenshot');
 
@@ -893,18 +894,31 @@ function mobileListHosts() {
  * 复用桌面端同一套 AgentSession,并把消息同时推给渲染层 ——
  * 手机上发起的任务在桌面端也看得见全过程,不会变成黑盒。
  */
-async function mobileStartTask({ hostId, prompt, engine, model }) {
+async function mobileStartTask({ hostId, prompt, cwd = '', engine, model, newSession }) {
   const s = getSession(hostId); // 主机没连接会在这里抛错,直接变成 400
   const cfg = mobileService.getConfig();
+  const agentName = mobileOps.normalizeEngine(engine);
   const task = mobileService.createTask({ hostId, prompt });
-  const convId = `mobile_${task.id}`;
+
+  // 多轮续聊:按「主机 + 项目」记住 resume 状态,
+  // 否则第二句「那再改一下 X」它完全不记得第一句干了什么
+  if (newSession) mobileService.resetMobileConvo(hostId, cwd);
+  const convo = mobileService.getMobileConvo(hostId, cwd);
+  const convId = convo.convId;
 
   const agent = new AgentSession(s.ssh, s.proxy, {
-    agent: engine || 'codex',
+    agent: agentName,
+    cwd: cwd || undefined,
     model: model || undefined,
     // 手机端默认不放开系统权限:一句话就在服务器上全权执行风险太高
     permissionMode: cfg.allowSystemMode ? 'system' : 'workspace'
   });
+  agent.claudeSessionId = convo.claudeSessionId;
+  agent.codexSessionId = convo.codexSessionId;
+  agent.codexStarted = convo.codexStarted;
+  agent.grokSessionId = convo.grokSessionId;
+  task.cwd = cwd;
+  task.turn = convo.turns + 1;
   s.agents.set(convId, agent);
 
   agent.on('message', (msg) => {
@@ -923,10 +937,35 @@ async function mobileStartTask({ hostId, prompt, engine, model }) {
     .catch((e) => { task.status = 'error'; task.error = e.message; })
     .finally(() => {
       task.finishedAt = Date.now();
+      mobileService.rememberResume(hostId, cwd, agent); // 存回 resume,供下一轮接力
       s.agents.delete(convId);
     });
 
-  return { taskId: task.id, hostId, status: 'running' };
+  return { taskId: task.id, hostId, cwd, engine: agentName, turn: task.turn, status: 'running' };
+}
+
+/** 项目列表:历史用过的目录优先,再补上远程扫到的 git 仓库 */
+async function mobileListProjects(hostId) {
+  const fromHistory = mobileOps.projectsFromConvos(loadConvos(), hostId);
+  let fromScan = [];
+  try {
+    const { ssh } = getSession(hostId);
+    const r = await ssh.exec(mobileOps.buildProjectScanCommand());
+    fromScan = mobileOps.parseProjectScan(r.stdout);
+  } catch (_) {
+    // 主机没连上就只给历史项目,不要让整个接口失败 ——
+    // 手机上「看看我有哪些项目」不该因为没连接就完全没结果
+  }
+  return mobileOps.mergeProjects(fromHistory, fromScan);
+}
+
+/** 只读查看:固定命令白名单,手机端选不了任意命令 */
+async function mobileInspect({ hostId, cwd, kind, path: rel, lines }) {
+  const { ssh } = getSession(hostId);
+  const { command, label } = mobileOps.buildInspectCommand({ kind, cwd, path: rel, lines });
+  const r = await ssh.exec(command);
+  const { text, truncated } = mobileOps.truncateOutput(`${r.stdout || ''}${r.stderr || ''}`);
+  return { label, output: text, truncated, exitCode: r.code };
 }
 
 function mobileCancelTask(id) {
@@ -948,10 +987,16 @@ async function startMobileGateway() {
     token, port,
     deps: {
       listHosts: mobileListHosts,
+      listProjects: mobileListProjects,
       startTask: mobileStartTask,
       getTask: (id) => mobileService.getTask(id),
       listTasks: () => mobileService.listTasks(),
-      cancelTask: mobileCancelTask
+      cancelTask: mobileCancelTask,
+      inspect: mobileInspect,
+      resetSession: ({ hostId, cwd }) => {
+        mobileService.resetMobileConvo(hostId, cwd || '');
+        return { ok: true };
+      }
     }
   });
   return { port: mobileGatewayHandle.port };

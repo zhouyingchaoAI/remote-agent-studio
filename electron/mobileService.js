@@ -114,7 +114,7 @@ function getTask(id) {
   const t = tasks.get(id);
   if (!t) return null;
   return {
-    id: t.id, hostId: t.hostId, status: t.status,
+    id: t.id, hostId: t.hostId, cwd: t.cwd || '', turn: t.turn || 1, status: t.status,
     reply: t.reply, tools: t.tools.slice(-20), dangerous: t.dangerous,
     error: t.error, elapsedMs: (t.finishedAt || Date.now()) - t.createdAt
   };
@@ -130,6 +130,51 @@ function listTasks() {
 }
 
 function clearTasks() { tasks.clear(); }
+
+/* ------------------------------------------------------- 会话记忆(多轮续聊)
+ * 手机端每条消息都新建 agent 的话,第二句「那再改一下 X」它完全不记得第一句。
+ * 按「主机 + 项目目录」记住各引擎的 resume id,下一轮接着聊。 */
+
+const convos = new Map(); // `${hostId}::${cwd}` -> {convId, claudeSessionId, ...}
+
+function sessionKey(hostId, cwd = '') { return `${hostId}::${cwd}`; }
+
+/** 取(或新建)该项目的移动端会话 */
+function getMobileConvo(hostId, cwd = '') {
+  const key = sessionKey(hostId, cwd);
+  if (!convos.has(key)) {
+    convos.set(key, {
+      convId: `mobile_${Math.random().toString(36).slice(2, 10)}`,
+      claudeSessionId: null, codexSessionId: null, codexStarted: false, grokSessionId: null,
+      turns: 0
+    });
+  }
+  return convos.get(key);
+}
+
+/** 每轮结束后把 resume 状态存回去 */
+function rememberResume(hostId, cwd, agent) {
+  const c = getMobileConvo(hostId, cwd);
+  c.claudeSessionId = agent.claudeSessionId || c.claudeSessionId;
+  c.codexSessionId = agent.codexSessionId || c.codexSessionId;
+  c.codexStarted = agent.codexStarted || c.codexStarted;
+  c.grokSessionId = agent.grokSessionId || c.grokSessionId;
+  c.turns += 1;
+  return c;
+}
+
+/** 开新话题:丢掉上下文重新开始 */
+function resetMobileConvo(hostId, cwd = '') {
+  convos.delete(sessionKey(hostId, cwd));
+  return getMobileConvo(hostId, cwd);
+}
+
+function listMobileConvos() {
+  return [...convos.entries()].map(([key, c]) => {
+    const [hostId, cwd] = key.split('::');
+    return { hostId, cwd, turns: c.turns, convId: c.convId };
+  });
+}
 
 /* ---------------------------------------------------------------- 桥接技能 */
 
@@ -189,19 +234,44 @@ curl -sS -H "Authorization: Bearer $TOKEN" $BASE/api/hosts
 - 用户没说 → 如果只有一台 connected 的就用它;有多台就**先问用户用哪台**,不要瞎猜
 - 目标主机 \`status\` 不是 \`connected\` → 告诉用户该主机未连接,请在桌面端连上
 
-## 2. 提交任务
+## 2. 再确定是哪个项目
+
+\`\`\`bash
+curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/api/projects?hostId=<主机id>"
+\`\`\`
+
+返回 \`{"projects":[{"path":"/home/u/api","name":"api","source":"history"}]}\`。
+\`source=history\` 是用户最近真实用过的,排在前面,优先从这些里匹配。
+
+**用户提到项目名就匹配对应的 path;没提就问,不要默认跑在家目录** ——
+跑错项目比不跑更糟。
+
+## 3. 提交任务
 
 \`\`\`bash
 curl -sS -X POST $BASE/api/tasks \\
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \\
-  -d '{"hostId":"<主机id>","prompt":"<用户的任务,原样转达>"}'
+  -d '{"hostId":"<主机id>","cwd":"<项目path>","prompt":"<用户的任务,原样转达>"}'
 \`\`\`
 
-返回 \`{"taskId":"t..."}\`。
+返回 \`{"taskId":"t...","turn":2}\`。
+
+可选参数:
+
+| 参数 | 说明 |
+|---|---|
+| \`cwd\` | 项目目录。**强烈建议每次都带** |
+| \`engine\` | \`codex\`(默认)/ \`claude\` / \`deepseek\` / \`grok\`,用户明确要求才改 |
+| \`model\` | 具体模型名,用户明确要求才带 |
+| \`newSession\` | \`true\` 表示开新话题,丢掉之前的上下文 |
+
+**同一个主机 + 同一个项目的连续任务会自动接上上下文**(返回里的 \`turn\` 就是第几轮),
+所以用户说「那再改一下 X」时直接发新任务即可,不用重复交代背景。
+用户说「重新开始」「换个话题」时才带 \`newSession: true\`。
 
 转达任务时**保留用户的原话**,不要替他简化或"优化"需求 —— 你不知道他省略了什么上下文。
 
-## 3. 轮询结果
+## 4. 轮询结果
 
 任务通常要跑几十秒到几分钟。轮询,不要一次就放弃:
 
@@ -222,7 +292,31 @@ echo "$R"
 | \`done\` | 完成 | 把 \`reply\` 转述给用户 |
 | \`error\` | 失败 | 把 \`error\` 原文告诉用户,别自己编原因 |
 
-## 4. 回报给用户
+## 5. 查看代码 / diff / 日志(只读)
+
+用户只想「看一眼」而不是让 agent 干活时,用这个接口 —— 秒回,不用等 agent。
+
+\`\`\`bash
+curl -sS -X POST $BASE/api/inspect \\
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \\
+  -d '{"hostId":"<id>","cwd":"<项目path>","kind":"diff"}'
+\`\`\`
+
+\`kind\` 只能是这几种(其它一律被拒):
+
+| kind | 作用 | 需要 path |
+|---|---|---|
+| \`status\` | git 工作区状态 | 否 |
+| \`diff\` | 未提交改动(先概览后详情) | 可选,限定单个文件 |
+| \`log\` | 最近 20 条提交 | 否 |
+| \`ls\` | 列目录 | 可选 |
+| \`file\` | 读文件前 N 行 | **是** |
+| \`tail\` | 读文件末 N 行(看日志) | **是** |
+
+\`path\` 必须是**项目内的相对路径**,带 \`..\` 或绝对路径会被拒绝。
+\`lines\` 可选,上限 500。
+
+## 6. 回报给用户
 
 微信是窄屏,回报要短:
 
@@ -230,11 +324,28 @@ echo "$R"
 - 有 \`dangerous\` 数组时,**必须逐条告知用户执行过哪些危险命令**,这是不能省的
 - 长日志、完整 diff 不要贴进微信,提示用户"详细内容请在桌面端查看"
 
-## 5. 取消
+## 7. 取消 / 开新话题
 
 \`\`\`bash
+# 中止正在跑的任务
 curl -sS -X POST -H "Authorization: Bearer $TOKEN" $BASE/api/tasks/<taskId>/cancel
+
+# 丢掉某项目的对话上下文,重新开始
+curl -sS -X POST $BASE/api/reset \\
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \\
+  -d '{"hostId":"<id>","cwd":"<项目path>"}'
 \`\`\`
+
+## 做不到的事(别硬编)
+
+以下能力**没有**接口,用户问起就如实说「这个得在桌面端做」:
+
+- 跑任意 shell 命令(只读查看仅限上面那几种 kind)
+- 上传/下载/写文件
+- 打开终端
+- 知识图谱、每日速览、技能管理
+
+这是刻意的限制:微信侧只要能跑任意命令,微信号被盗就等于服务器失守。
 
 ## 注意事项
 
@@ -259,6 +370,7 @@ function installBridgeSkill({ port, token }) {
 module.exports = {
   init, getConfig, setConfig, getToken, rotateToken, ensureToken,
   createTask, getTask, listTasks, clearTasks, tasks,
+  getMobileConvo, rememberResume, resetMobileConvo, listMobileConvos, sessionKey,
   detectOpenClaw, renderBridgeSkill, installBridgeSkill,
   SKILL_DIR, TOKEN_FILE, DEFAULTS
 };
