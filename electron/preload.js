@@ -62,6 +62,14 @@ contextBridge.exposeInMainWorld('api', {
     onProgress: on('autocapture:progress'),
     onDone: on('autocapture:done')
   },
+  mobile: {
+    getConfig: invoke('mobile:getConfig'),
+    setConfig: invoke('mobile:setConfig'),
+    rotateToken: invoke('mobile:rotateToken'),
+    installBridge: invoke('mobile:installBridge'),
+    previewBridge: invoke('mobile:previewBridge'),
+    listTasks: invoke('mobile:listTasks')
+  },
   skills: {
     listBuiltin: invoke('skills:listBuiltin'),
     engineDirs: invoke('skills:engineDirs'),

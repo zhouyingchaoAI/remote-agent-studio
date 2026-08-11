@@ -22,6 +22,8 @@ const cliSessions = require('./cliSessions');
 const skillsService = require('./skillsService');
 const skillsMarket = require('./skillsMarket');
 const { lintSkill, ENGINE_SKILL_DIRS } = require('./skills');
+const mobileService = require('./mobileService');
+const { createGateway } = require('./mobileGateway');
 const { interpretVoiceCommand } = require('./voice');
 const { captureRegion } = require('./screenshot');
 
@@ -151,6 +153,9 @@ app.whenReady().then(() => {
   prismflow.init(app, safeStorage);
   obsidian.init(app, safeStorage);
   autoCapture.init(app, { runDigest: runDailyDigest });
+  mobileService.init(app, safeStorage);
+  // 上次开着就自动拉起,否则每次重启都要手动开一遍,手机端就"时灵时不灵"
+  if (mobileService.getConfig().enabled) startMobileGateway().catch(() => {});
   autoCapture.start();
   createWindow();
   initAutoUpdater();
@@ -866,6 +871,134 @@ ipcMain.handle('obsidian:diagnose', () => {
   out.mdInFolder = out.folderExists ? obsidianGraph.collectMarkdown(folderPath, { max: 200 }).length : 0;
   return out;
 });
+
+/* ------------------------------------------------------------------ 移动端接入
+ * 链路:微信 → 腾讯官方 channel 插件 → OpenClaw → 本地 HTTP 接口 → AgentSession
+ * 只绑 127.0.0.1;OpenClaw 负责微信侧鉴权与穿透,这里负责跑任务。 */
+
+let mobileGatewayHandle = null;
+
+/** 手机端能看到的主机列表:带上实时连接状态,免得 OpenClaw 往没连的机器上发任务 */
+function mobileListHosts() {
+  return loadHosts().map((h) => ({
+    id: h.id,
+    name: h.name || h.host || h.id,
+    status: h.id === LOCAL_ID || sessions.has(h.id) ? 'connected' : 'disconnected',
+    local: !!h.local
+  }));
+}
+
+/**
+ * 跑一个来自手机的任务。
+ * 复用桌面端同一套 AgentSession,并把消息同时推给渲染层 ——
+ * 手机上发起的任务在桌面端也看得见全过程,不会变成黑盒。
+ */
+async function mobileStartTask({ hostId, prompt, engine, model }) {
+  const s = getSession(hostId); // 主机没连接会在这里抛错,直接变成 400
+  const cfg = mobileService.getConfig();
+  const task = mobileService.createTask({ hostId, prompt });
+  const convId = `mobile_${task.id}`;
+
+  const agent = new AgentSession(s.ssh, s.proxy, {
+    agent: engine || 'codex',
+    model: model || undefined,
+    // 手机端默认不放开系统权限:一句话就在服务器上全权执行风险太高
+    permissionMode: cfg.allowSystemMode ? 'system' : 'workspace'
+  });
+  s.agents.set(convId, agent);
+
+  agent.on('message', (msg) => {
+    if (msg.kind === 'assistant' || msg.kind === 'text') task.reply += msg.text || '';
+    if (msg.kind === 'tool') {
+      task.tools.push({ name: msg.name, detail: String(msg.detail || '').slice(0, 200) });
+      if (msg.dangerous) task.dangerous.push(String(msg.detail || '').slice(0, 200));
+    }
+    if (msg.kind === 'error' || msg.kind === 'stderr') task.error += `${msg.text || ''}\n`;
+    send('agent:message', { hostId, convId, msg }); // 桌面端同步可见
+  });
+
+  // 不 await:接口立刻返回 taskId,手机侧轮询进度
+  agent.send(prompt, { attachments: [] })
+    .then(() => { task.status = 'done'; })
+    .catch((e) => { task.status = 'error'; task.error = e.message; })
+    .finally(() => {
+      task.finishedAt = Date.now();
+      s.agents.delete(convId);
+    });
+
+  return { taskId: task.id, hostId, status: 'running' };
+}
+
+function mobileCancelTask(id) {
+  const task = mobileService.tasks.get(id);
+  if (!task) return { ok: false, error: '任务不存在' };
+  const agent = sessions.get(task.hostId)?.agents.get(`mobile_${id}`);
+  if (agent) agent.cancel();
+  task.status = 'error';
+  task.error = '已取消';
+  task.finishedAt = Date.now();
+  return { ok: true };
+}
+
+async function startMobileGateway() {
+  await stopMobileGateway();
+  const token = mobileService.ensureToken();
+  const { port } = mobileService.getConfig();
+  mobileGatewayHandle = await createGateway({
+    token, port,
+    deps: {
+      listHosts: mobileListHosts,
+      startTask: mobileStartTask,
+      getTask: (id) => mobileService.getTask(id),
+      listTasks: () => mobileService.listTasks(),
+      cancelTask: mobileCancelTask
+    }
+  });
+  return { port: mobileGatewayHandle.port };
+}
+
+function stopMobileGateway() {
+  if (!mobileGatewayHandle) return Promise.resolve();
+  const { server } = mobileGatewayHandle;
+  mobileGatewayHandle = null;
+  return new Promise((resolve) => server.close(() => resolve()));
+}
+
+ipcMain.handle('mobile:getConfig', () => ({
+  ...mobileService.getConfig(),
+  running: !!mobileGatewayHandle,
+  openclaw: mobileService.detectOpenClaw()
+}));
+
+ipcMain.handle('mobile:setConfig', async (_e, patch = {}) => {
+  const cfg = mobileService.setConfig(patch);
+  if (cfg.enabled) await startMobileGateway(); else await stopMobileGateway();
+  return { ...cfg, running: !!mobileGatewayHandle };
+});
+
+/** 重置 token:同时刷新已写入 OpenClaw 的凭据,否则手机端立刻失效 */
+ipcMain.handle('mobile:rotateToken', async () => {
+  const token = mobileService.rotateToken();
+  const { port } = mobileService.getConfig();
+  if (mobileService.detectOpenClaw().skillInstalled) {
+    mobileService.installBridgeSkill({ port, token });
+  }
+  if (mobileGatewayHandle) await startMobileGateway();
+  return { ok: true };
+});
+
+/** 把桥接技能 + token 写进 OpenClaw 工作区 */
+ipcMain.handle('mobile:installBridge', () => {
+  const { port } = mobileService.getConfig();
+  return mobileService.installBridgeSkill({ port, token: mobileService.ensureToken() });
+});
+
+ipcMain.handle('mobile:previewBridge', () => {
+  const { port } = mobileService.getConfig();
+  return mobileService.renderBridgeSkill({ port });
+});
+
+ipcMain.handle('mobile:listTasks', () => mobileService.listTasks());
 
 /* ------------------------------------------------------------------ 技能(Agent Skills)
  * SKILL.md 是跨引擎开放标准,同一份技能对 claude/codex/grok 都生效。

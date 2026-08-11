@@ -34,6 +34,7 @@ import SetupPanel from './components/SetupPanel.jsx';
 import BriefPanel from './components/BriefPanel.jsx';
 import GraphPanel from './components/GraphPanel.jsx';
 import SkillsPanel from './components/SkillsPanel.jsx';
+import MobilePanel from './components/MobilePanel.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 
 const TABS = [
@@ -43,6 +44,7 @@ const TABS = [
   { key: 'files', label: '文件', icon: '📁' },
   { key: 'terminal', label: '终端', icon: '⌨️' },
   { key: 'skills', label: '技能', icon: '🧩' },
+  { key: 'mobile', label: '移动接入', icon: '📱' },
   { key: 'setup', label: '环境配置', icon: '⚙️' }
 ];
 
@@ -213,7 +215,7 @@ export default function App() {
               </div>
               <div className="tabs">
                 {(activeHost.local
-                  ? TABS.filter((t) => ['chat', 'brief', 'graph', 'terminal', 'skills', 'setup'].includes(t.key))
+                  ? TABS.filter((t) => ['chat', 'brief', 'graph', 'terminal', 'skills', 'mobile', 'setup'].includes(t.key))
                   : TABS).map((t) => (
                   <button key={t.key}
                     className={`tab ${tab === t.key ? 'active' : ''}`}
@@ -227,7 +229,7 @@ export default function App() {
               <PersistentWorkspace
                 hosts={hosts}
                 activeHostId={activeHostId}
-                activeView={activeHost.local && !['setup', 'brief', 'graph', 'terminal', 'skills'].includes(tab) ? 'chat' : tab}
+                activeView={activeHost.local && !['setup', 'brief', 'graph', 'terminal', 'skills', 'mobile'].includes(tab) ? 'chat' : tab}
                 statuses={statuses}
               />
             </div>
@@ -291,7 +293,11 @@ function PersistentWorkspace({ hosts, activeHostId, activeView, statuses }) {
           <SkillsPanel hostId={activeHostId} connected={status === 'connected'} />
         </div>
       )}
-      {activeHost && status !== 'connected' && !['setup', 'skills'].includes(activeView) && (
+      {/* 移动接入是全局配置,与是否连上某台主机无关 */}
+      {activeHost && activeView === 'mobile' && (
+        <div className="workspace-layer active"><MobilePanel /></div>
+      )}
+      {activeHost && status !== 'connected' && !['setup', 'skills', 'mobile'].includes(activeView) && (
         <ConnectGate host={activeHost} status={status} />
       )}
     </>

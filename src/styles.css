@@ -557,3 +557,19 @@ progress { width: 140px; height: 6px; }
 .skill-modal { width: min(820px, 94vw); display: flex; flex-direction: column; max-height: 86vh; }
 .skill-source { flex: 1; overflow: auto; margin: 0; padding: 14px 16px; font-size: 12px;
   line-height: 1.7; white-space: pre-wrap; word-break: break-word; background: var(--bg); }
+
+/* ---------------- 移动接入(OpenClaw + 微信) ---------------- */
+.mobile-panel { height: 100%; overflow-y: auto; padding: 18px 22px; max-width: 760px; }
+.mobile-panel section { margin-bottom: 18px; }
+.mobile-panel h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 14px; }
+.mobile-step { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; background: var(--bg2); }
+.mobile-step.done { border-color: rgba(110,231,183,0.4); }
+.step-num { display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 50%; font-size: 11px; flex-shrink: 0;
+  background: var(--bg3); color: var(--muted); }
+.mobile-step.done .step-num { background: rgba(110,231,183,0.18); color: #6ee7b7; }
+.ok-text { color: #6ee7b7; }
+.cmd-row { display: flex; align-items: center; gap: 8px; margin: 8px 0;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+.cmd-row code { flex: 1; min-width: 0; font-size: 12px; overflow-x: auto; white-space: nowrap; }
+.mobile-examples { margin: 6px 0 0; padding-left: 20px; line-height: 1.9; }
