@@ -1,4 +1,5 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const { interpretVoiceCommand } = require('./voice');
 
 const invoke = (ch) => (...args) => ipcRenderer.invoke(ch, ...args);
 const on = (ch) => (cb) => {
@@ -15,6 +16,15 @@ contextBridge.exposeInMainWorld('api', {
   },
   shell: { openExternal: invoke('shell:openExternal') },
   settings: { get: invoke('settings:get'), save: invoke('settings:save') },
+  stt: {
+    getConfig: invoke('stt:getConfig'),
+    setConfig: invoke('stt:setConfig'),
+    transcribe: invoke('stt:transcribe'),
+    test: invoke('stt:test')
+  },
+  // 语音指令解释为纯函数,直接在 preload 侧同步执行(无需 IPC 往返)
+  voice: { interpret: (transcript, ctx) => interpretVoiceCommand(transcript, ctx) },
+  screenshot: { capture: invoke('screenshot:capture'), onCaptured: on('screenshot:captured') },
   hosts: { list: invoke('hosts:list'), save: invoke('hosts:save') },
   ssh: {
     connect: invoke('ssh:connect'),

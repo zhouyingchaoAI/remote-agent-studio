@@ -5,12 +5,15 @@ const globals = {
     atob: 'readonly', btoa: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly',
     requestAnimationFrame: 'readonly', cancelAnimationFrame: 'readonly',
     ResizeObserver: 'readonly', localStorage: 'readonly', Uint8Array: 'readonly',
-    prompt: 'readonly', confirm: 'readonly', alert: 'readonly'
+    prompt: 'readonly', confirm: 'readonly', alert: 'readonly',
+    navigator: 'readonly', MediaRecorder: 'readonly', Blob: 'readonly', FormData: 'readonly'
   },
   node: {
     require: 'readonly', module: 'writable', process: 'readonly', __dirname: 'readonly',
     Buffer: 'readonly', console: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly',
-    setInterval: 'readonly', clearInterval: 'readonly', global: 'readonly'
+    setInterval: 'readonly', clearInterval: 'readonly', global: 'readonly',
+    // Node 18+ 全局
+    fetch: 'readonly', FormData: 'readonly', Blob: 'readonly', AbortController: 'readonly'
   }
 };
 

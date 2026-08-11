@@ -127,7 +127,10 @@ function saveProxy(hostId, cfg) {
 
 /* -------- 应用设置持久化(userData/settings.json) -------- */
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-const DEFAULT_SETTINGS = { theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5, grokModels: [] };
+const DEFAULT_SETTINGS = {
+  theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5, grokModels: [],
+  screenshotShortcut: 'CommandOrControl+Shift+2', screenshotShortcutEnabled: true
+};
 
 function loadSettings() {
   try { return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) }; }

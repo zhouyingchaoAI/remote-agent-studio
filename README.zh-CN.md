@@ -1,10 +1,10 @@
 # Remote Agent Studio 🛰️
 
+### 🌐 **[English](README.md)** · **简体中文（当前）**
+
 **给 Codex / Claude Code / 国产大模型加上"远程模式":填一条 SSH,剩下全自动。**
 
 图形化 SSH 远程 AI 编程客户端:一键连上远程开发机(或本机),自动配置网络代理、安装 CLI、下发认证,然后在原生桌面界面里对话式使用 **Codex / Claude Code / DeepSeek / 国产模型(GLM · Kimi · 通义,经 grok CLI)**,流式输出、红绿 diff、文件与终端全都有。
-
-[English](README.md) · 简体中文
 
 <!-- 徽章:推送到 GitHub 后把 OWNER 替换为实际用户名 -->
 [![CI](https://github.com/zhouyingchaoAI/remote-agent-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/zhouyingchaoAI/remote-agent-studio/actions/workflows/ci.yml)
@@ -30,6 +30,9 @@
 - **全自动模式** — 模型请求确认时自动回复继续(连续 5 次熔断防失控)
 - **选项/确认按钮** — "1. xxx / 2. xxx"式选项和"请确认"类提问自动生成可点击按钮
 - **Markdown 渲染** — 聊天气泡与 .md 文件预览均为阅读模式;消息里的文件路径可点击直接预览
+- **语音输入** — 麦克风录音经云端 STT(OpenAI 兼容 `/audio/transcriptions`,Whisper / 通义 ASR / 中转站通用)转写进输入框;Key 加密存本机不回显
+- **语音确认** — 模型弹确认/选项卡片时,语音说「确认 / 取消」或选项号/名称即可命中对应按钮(取消优先,更安全)
+- **快捷键截图** — 全局快捷键(默认 ⌘/Ctrl+Shift+2)调系统区域截图,截完自动作为附件加入对话;也有界面按钮
 - **截图/附件** — ⌘V 直接粘贴截图(带缩略图预览),附件上传后 codex 以 `--image` 真正看图
 - **搜索与导出** — 会话全文搜索;一键导出对话为 Markdown
 - **用量统计** — 对话头部实时累计 token 与费用

@@ -295,6 +295,16 @@ progress { width: 140px; height: 6px; }
 .agent-select.deepseek { color: #93b4ff; }
 .agent-select.grok { color: #f2a8a8; }
 
+/* 语音输入 / 截图按钮 */
+.mic-button.recording { color: #fca5a5; border-color: var(--red); animation: mic-pulse 1s ease-in-out infinite; }
+.mic-button.transcribing { opacity: 0.7; }
+@keyframes mic-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+.voice-error { color: var(--yellow); font-size: 11px; align-self: center; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.voice-reply-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.settings-sep { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+.settings-input { flex: 1; min-width: 220px; }
+.stt-settings .settings-row { margin: 6px 0; }
+
 /* 国产模型端点管理 */
 .grok-presets { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .grok-preset-row, .grok-custom-row { display: flex; align-items: center; gap: 8px; }

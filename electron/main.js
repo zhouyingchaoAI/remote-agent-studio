@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, screen, clipboard, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, screen, clipboard, shell, nativeImage, globalShortcut, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -11,6 +11,10 @@ const { deepseekEnvPosix, DEEPSEEK_DEFAULT_MODEL } = require('./ssh/deepseek');
 const { GROK_DEFAULT_MODEL, parseGrokSpec } = require('./ssh/grokProviders');
 const { LocalExecutor } = require('./LocalExecutor');
 const { AttachmentService } = require('./chat/AttachmentService');
+const stt = require('./stt');
+const { captureRegion } = require('./screenshot');
+
+const DEFAULT_SCREENSHOT_SHORTCUT = 'CommandOrControl+Shift+2';
 const {
   loadHosts, saveHosts, loadConvos, saveConvos, loadProxies, saveProxy,
   loadKnownHosts, saveKnownHost, loadSettings, saveSettings
@@ -95,6 +99,9 @@ function createWindow() {
     revealWindow();
   });
   setTimeout(revealWindow, 1200).unref();
+  // 麦克风权限(语音输入):放行 media,其余保持默认允许(应用为本地可信环境)
+  win.webContents.session.setPermissionRequestHandler((_wc, _permission, cb) => cb(true));
+
   if (process.env.VITE_DEV) win.loadURL('http://localhost:5173');
   else win.loadFile(path.join(__dirname, '../dist/index.html'));
 }
@@ -125,10 +132,13 @@ function initAutoUpdater() {
 
 app.whenReady().then(() => {
   require('./logger').initLogger(app.getPath('userData'));
+  stt.init(app, safeStorage);
   createWindow();
   initAutoUpdater();
+  registerScreenshotShortcut();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
+app.on('will-quit', () => globalShortcut.unregisterAll());
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
 ipcMain.handle('shell:openExternal', (_e, url) => {
@@ -169,6 +179,37 @@ ipcMain.handle('fs:imageThumb', (_e, filePath) => {
   } catch (_) { return null; }
 });
 
+/* ---------------- 语音转写(STT) ---------------- */
+ipcMain.handle('stt:getConfig', () => stt.getConfig());
+ipcMain.handle('stt:setConfig', (_e, cfg) => stt.setConfig(cfg || {}));
+ipcMain.handle('stt:transcribe', (_e, payload) => stt.transcribe(payload || {}));
+// 简易连通性测试:发一段极短静音(足以触发鉴权/端点校验)
+ipcMain.handle('stt:test', async () => {
+  // 44 字节 WAV 头 + 极短静音
+  const silent = Buffer.from(
+    'UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=', 'base64'
+  );
+  await stt.transcribe({ audioBase64: silent.toString('base64'), mimeType: 'audio/wav', filename: 'test.wav' });
+  return { ok: true };
+});
+
+/* ---------------- 区域截图 ---------------- */
+async function doCaptureScreenshot() {
+  const shot = await captureRegion(app, clipboard).catch(() => null);
+  if (shot) send('screenshot:captured', shot);
+  return shot;
+}
+ipcMain.handle('screenshot:capture', () => doCaptureScreenshot());
+
+/** 按设置注册截图全局快捷键(设置变更时重注册) */
+function registerScreenshotShortcut() {
+  globalShortcut.unregisterAll();
+  const s = loadSettings();
+  if (s.screenshotShortcutEnabled === false) return;
+  const accel = s.screenshotShortcut || DEFAULT_SCREENSHOT_SHORTCUT;
+  try { globalShortcut.register(accel, () => doCaptureScreenshot()); } catch (_) {}
+}
+
 ipcMain.handle('clipboard:readText', () => clipboard.readText());
 ipcMain.handle('clipboard:writeText', (_event, text) => {
   clipboard.writeText(typeof text === 'string' ? text : '');
@@ -177,7 +218,12 @@ ipcMain.handle('clipboard:writeText', (_event, text) => {
 
 /* ---------------- 应用设置 ---------------- */
 ipcMain.handle('settings:get', () => loadSettings());
-ipcMain.handle('settings:save', (_e, s) => saveSettings(s));
+ipcMain.handle('settings:save', (_e, s) => {
+  const saved = saveSettings(s);
+  // 截图快捷键相关设置变更 → 重注册
+  if (s && ('screenshotShortcut' in s || 'screenshotShortcutEnabled' in s)) registerScreenshotShortcut();
+  return saved;
+});
 
 /* ---------------- 主机配置 ---------------- */
 ipcMain.handle('hosts:list', () => loadHosts());
@@ -780,8 +826,11 @@ ipcMain.handle('attachments:prepare', async (_e, payload) => {
 
 ipcMain.handle('attachments:resolveImage', async (_e, payload) => {
   const session = getSession(payload.hostId);
+  // 允许预览会话工作目录下的图片:优先用渲染层传来的 cwd,退回活跃 agent 会话的 cwd
+  const cwd = payload.cwd || session.agents?.get(payload.convId)?.opts?.cwd || '';
   return getAttachmentService(session).resolveImage({
     ...payload,
+    cwd,
     isLocal: payload.hostId === LOCAL_ID
   });
 });

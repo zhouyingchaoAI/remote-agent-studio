@@ -116,6 +116,23 @@ test('image resolution rejects paths outside the conversation cache', async () =
   }), /current conversation/);
 });
 
+test('image resolution allows images generated in the conversation working dir (cwd)', async () => {
+  // agent(尤其系统权限的 Claude Code)常把图片写进工作目录而非产物目录 —— 应可预览
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-cwd-'));
+  const img = path.join(cwd, 'zh-account-model.png');
+  fs.writeFileSync(img, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const service = new AttachmentService({}, { homeDir: path.join(cwd, 'home') });
+  const result = await service.resolveImage({
+    hostId: 'local', convId: 'c1', remotePath: img, isLocal: true, cwd
+  });
+  assert.match(result.src, /^data:image\/png;base64,/);
+  assert.equal(result.name, 'zh-account-model.png');
+  // 没有传 cwd 时仍应拒绝(不放大攻击面)
+  await assert.rejects(() => service.resolveImage({
+    hostId: 'local', convId: 'c1', remotePath: img, isLocal: true
+  }), /current conversation/);
+});
+
 test('remote image cache keys include the complete remote path', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-cache-key-'));
   let downloads = 0;

@@ -1,8 +1,10 @@
 # Remote Agent Studio 🛰️
 
-**Your AI coding agents, on any machine.** One-click SSH to a remote dev box, automatic environment setup, and a native desktop chat UI for **Codex, Claude Code, DeepSeek, and Chinese LLMs (GLM / Kimi / Qwen via grok CLI)** — with streaming output, diff review, and full file/terminal access.
+### 🌐 **[English](README.md)** · **[📖 中文说明 / Chinese Docs →](README.zh-CN.md)**
 
-[English](README.md) · [简体中文](README.zh-CN.md)
+> 🇨🇳 **中文用户看这里** → 完整中文文档见 **[README.zh-CN.md](README.zh-CN.md)**;国产模型(DeepSeek / GLM / Kimi / 通义)接入指南见 **[docs/国产模型接入指南.md](docs/国产模型接入指南.md)**,常见问题见 **[docs/FAQ.md](docs/FAQ.md)**。
+
+**Your AI coding agents, on any machine.** One-click SSH to a remote dev box, automatic environment setup, and a native desktop chat UI for **Codex, Claude Code, DeepSeek, and Chinese LLMs (GLM / Kimi / Qwen via grok CLI)** — with streaming output, diff review, and full file/terminal access.
 
 <!-- Badges: replace OWNER/REPO after pushing to GitHub -->
 [![CI](https://github.com/zhouyingchaoAI/remote-agent-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/zhouyingchaoAI/remote-agent-studio/actions/workflows/ci.yml)
@@ -28,6 +30,7 @@ Every other agent GUI assumes your agent runs on *this* machine. Real work often
 | Area | What you get |
 |---|---|
 | Chat | 4 engines with mid-conversation switching & context handoff, streaming output, thinking/tool/diff/cost bubbles, queued sends, auto-confirm (5-strike breaker), option buttons, attachments with image support, search & Markdown export |
+| Voice & capture | Voice input (mic → cloud STT via OpenAI-compatible `/audio/transcriptions`), voice confirmation (say "confirm / cancel" or an option to trigger the button), global-hotkey region screenshot auto-attached to the chat |
 | Engines | Codex CLI, Claude Code CLI, DeepSeek (Anthropic-compatible endpoint), grok CLI with GUI-managed custom endpoints for GLM / Kimi / Qwen / DeepSeek / relays |
 | Connection | Multi-host SSH (password/key, credentials in OS keychain), host fingerprint TOFU, auto-reconnect, reverse-tunnel or LAN proxy auto-config with connectivity tests, local mode (no SSH, shell-identical env) |
 | Setup | One-click install/upgrade of all CLIs (rootless Node via nvm; official standalone binaries with proxy fallback + SHA-256 verify), local auth sync to remote, API key management |

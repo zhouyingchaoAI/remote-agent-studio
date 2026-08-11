@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useStore, sendToAgent, isAwaitingConfirm } from '../store.js';
+import { useVoiceInput } from '../useVoiceInput.js';
 import FilePreview from './FilePreview.jsx';
 import Markdown from './Markdown.jsx';
 
@@ -250,6 +251,20 @@ function ChatView({ hostId, conv }) {
 
   const pickFiles = async () => addFiles(await window.api.dialog.pickFiles());
 
+  // 语音输入:转写结果追加到输入框
+  const voice = useVoiceInput((text) => setInput((cur) => (cur ? `${cur} ${text}` : text)));
+
+  // 区域截图:按钮触发 + 全局快捷键回填,统一作为附件加入
+  const captureScreenshot = async () => {
+    const shot = await window.api.screenshot.capture().catch(() => null);
+    if (shot) addFiles([shot]);
+  };
+  useEffect(() => {
+    const off = window.api.screenshot.onCaptured((shot) => { if (shot) addFiles([shot]); });
+    return off;
+    // eslint-disable-next-line
+  }, []);
+
   /** 粘贴/按钮:把剪贴板中的截图落盘为 PNG 并加入附件 */
   const attachClipboardImage = async () => {
     const img = await window.api.clipboard.saveImage().catch(() => null);
@@ -401,10 +416,18 @@ function ChatView({ hostId, conv }) {
         {attachmentError && <div className="attachment-error">{attachmentError}</div>}
         {dragActive && <div className="drop-hint">Drop files to attach</div>}
         <button className="btn attach-button" type="button" onClick={pickFiles} disabled={running} title="Add attachments">附件</button>
+        <button className="btn attach-button" type="button" onClick={captureScreenshot}
+          title="区域截图(默认快捷键 ⌘/Ctrl+Shift+2)">✂ 截图</button>
+        <button className={`btn attach-button mic-button ${voice.state}`} type="button"
+          onClick={voice.toggle} disabled={voice.state === 'transcribing'}
+          title={voice.state === 'recording' ? '点击停止并转写' : (voice.state === 'transcribing' ? '转写中…' : '语音输入(需在设置里配置转写端点)')}>
+          {voice.state === 'recording' ? '● 录音中' : voice.state === 'transcribing' ? '转写中…' : '🎤 语音'}
+        </button>
+        {voice.error && <span className="voice-error" title={voice.error}>{voice.error}</span>}
         <textarea
           autoFocus
           value={input}
-          placeholder={started ? '输入指令,Enter 发送,⌘V 可粘贴截图,Shift+Enter 换行' : '正在初始化会话...'}
+          placeholder={started ? '输入指令,Enter 发送,⌘V 粘贴截图,🎤 语音输入,Shift+Enter 换行' : '正在初始化会话...'}
           onChange={(e) => setInput(e.target.value)}
           onPaste={onPaste}
           onCompositionStart={() => { composingRef.current = true; }}
@@ -524,6 +547,26 @@ function ModelPicker({ agent, value, disabled, onChange }) {
   );
 }
 
+/* 语音确认/选择:录音转写后按关键词匹配「确认/取消/选项号」并触发对应按钮 */
+function VoiceReplyButton({ mode, options, onReply }) {
+  const [hint, setHint] = useState('');
+  const voice = useVoiceInput((text) => {
+    const value = window.api.voice.interpret(text, { mode, options });
+    if (value != null) { setHint(''); onReply(value); }
+    else setHint(`没听懂「${text.slice(0, 20)}」`);
+  });
+  return (
+    <span className="voice-reply-wrap">
+      <button className={`btn small quick-reply mic-button ${voice.state}`} type="button"
+        onClick={voice.toggle} disabled={voice.state === 'transcribing'}
+        title={mode === 'confirm' ? '语音说「确认 / 取消」' : '语音说选项号或名称'}>
+        {voice.state === 'recording' ? '● 说话中' : voice.state === 'transcribing' ? '识别中…' : '🎤 语音'}
+      </button>
+      {(hint || voice.error) && <span className="voice-error">{hint || voice.error}</span>}
+    </span>
+  );
+}
+
 function Message({ m, hostId, convId, onEnableSystemMode, isLast, running, onQuickReply, onFileLink }) {
   const [open, setOpen] = useState(false);
   if (m.role === 'user')
@@ -558,12 +601,14 @@ function Message({ m, hostId, convId, onEnableSystemMode, isLast, running, onQui
                 <button key={o.n} className="btn small quick-reply"
                   onClick={() => onQuickReply(o.n)}>{o.n}. {o.label}</button>
               ))}
+              <VoiceReplyButton mode="options" options={opts} onReply={onQuickReply} />
             </div>
           )}
           {asksConfirm && (
             <div className="quick-replies">
               <button className="btn small quick-reply" onClick={() => onQuickReply('确认')}>✅ 确认</button>
               <button className="btn small quick-reply" onClick={() => onQuickReply('取消')}>✕ 取消</button>
+              <VoiceReplyButton mode="confirm" onReply={onQuickReply} />
             </div>
           )}
         </div>

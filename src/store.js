@@ -27,7 +27,7 @@ export const useStore = create((set, get) => ({
   queued: {},           // convId -> [{id,text,files}] 排队待发送的消息
   setupLogs: {},        // hostId -> string
   envInfo: {},          // hostId -> {os,node,npm,codex,claude}
-  settings: { theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5, grokModels: [] },
+  settings: { theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5, grokModels: [], screenshotShortcut: 'CommandOrControl+Shift+2', screenshotShortcutEnabled: true },
   showSettings: false,
 
   setShowSettings: (v) => set({ showSettings: v }),

@@ -141,12 +141,14 @@ class AttachmentService {
       .map((remotePath) => ({ remotePath, name: path.basename(remotePath) }));
   }
 
-  async resolveImage({ hostId, convId, remotePath, isLocal }) {
+  async resolveImage({ hostId, convId, remotePath, isLocal, cwd }) {
     if (classifyFile(remotePath) !== 'image') throw new Error('Unsupported image type');
     const allowedRoots = await Promise.all([
       this.directory('attachments', convId, null, isLocal),
       this.directory('artifacts', convId, null, isLocal)
     ]);
+    // 也允许预览会话工作目录下的图片(agent 常把生成的图直接写进 cwd,尤其系统权限模式)
+    if (cwd && String(cwd).trim()) allowedRoots.push(String(cwd).trim());
     if (!allowedRoots.some((root) => this._isWithin(remotePath, root, isLocal))) {
       throw new Error('Image is not in the current conversation directory');
     }
