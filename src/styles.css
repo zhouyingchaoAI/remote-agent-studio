@@ -584,3 +584,21 @@ progress { width: 140px; height: 6px; }
 .term-host.zoom { height: 620px; }
 .setup-term { height: 100%; display: flex; flex-direction: column; }
 .setup-term-box { flex: 1; min-height: 0; padding: 6px; }
+
+/* ---------------- 代码块与图片:可复制 ---------------- */
+.btn.tiny { padding: 1px 7px; font-size: 11px; line-height: 1.7; }
+
+.md-code-wrap { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 8px 0; }
+.md-code-bar { display: flex; align-items: center; gap: 8px; padding: 3px 8px;
+  background: var(--bg3); border-bottom: 1px solid var(--border); }
+.md-code-lang { flex: 1; font-size: 11px; color: var(--muted); font-family: Menlo, Consolas, monospace; }
+.md-code-wrap .md-code { margin: 0; border: none; border-radius: 0; }
+/* 允许框选复制,气泡默认可能禁用了选中 */
+.md-code, .md-inline-code { user-select: text; cursor: text; }
+
+.image-block { position: relative; display: inline-block; }
+.image-tools { position: absolute; top: 6px; right: 6px; display: flex; align-items: center; gap: 4px;
+  opacity: 0; transition: opacity .15s; background: rgba(11,13,18,0.82);
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 5px; }
+.image-block:hover .image-tools { opacity: 1; }
+.lightbox-bar { display: flex; align-items: center; gap: 10px; margin-top: 10px; color: var(--text); }

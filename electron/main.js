@@ -279,6 +279,27 @@ function registerScreenshotShortcut() {
 /** 界面查询实际生效的快捷键(可能与设置里填的不同) */
 ipcMain.handle('screenshot:shortcutStatus', () => activeScreenshotShortcut);
 
+/** 把对话里的图片写进系统剪贴板,可直接粘进微信/文档 */
+ipcMain.handle('clipboard:writeImage', (_e, dataUrl) => {
+  const img = nativeImage.createFromDataURL(String(dataUrl || ''));
+  if (!img || img.isEmpty()) throw new Error('图片数据无效');
+  clipboard.writeImage(img);
+  return true;
+});
+
+/** 图片另存为:复制到剪贴板之外的另一条路,存盘更适合大图 */
+ipcMain.handle('image:saveAs', async (_e, { dataUrl, name } = {}) => {
+  const m = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/);
+  if (!m) throw new Error('图片数据无效');
+  const r = await dialog.showSaveDialog(win, {
+    defaultPath: name || 'image.png',
+    filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }]
+  });
+  if (r.canceled || !r.filePath) return { saved: false };
+  fs.writeFileSync(r.filePath, Buffer.from(m[2], 'base64'));
+  return { saved: true, path: r.filePath };
+});
+
 ipcMain.handle('clipboard:readText', () => clipboard.readText());
 ipcMain.handle('clipboard:writeText', (_event, text) => {
   clipboard.writeText(typeof text === 'string' ? text : '');

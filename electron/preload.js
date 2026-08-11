@@ -13,7 +13,9 @@ contextBridge.exposeInMainWorld('api', {
   clipboard: {
     readText: invoke('clipboard:readText'),
     writeText: invoke('clipboard:writeText'),
-    saveImage: invoke('clipboard:saveImage')
+    writeImage: invoke('clipboard:writeImage'),
+    saveImage: invoke('clipboard:saveImage'),
+    saveImageAs: invoke('image:saveAs')
   },
   shell: { openExternal: invoke('shell:openExternal') },
   settings: { get: invoke('settings:get'), save: invoke('settings:save') },

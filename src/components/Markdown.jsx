@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 /* ---------- 轻量 Markdown 渲染(标题/列表/代码块/行内代码/加粗/链接/引用/分割线) ---------- */
 export function inlineMd(text, onFileLink) {
@@ -34,12 +34,36 @@ export function inlineMd(text, onFileLink) {
   return nodes;
 }
 
+/**
+ * 代码块:带语言标签和复制按钮。
+ * 复制走主进程剪贴板 —— navigator.clipboard 在非安全上下文里会静默失败。
+ */
+export function CodeBlock({ code, lang }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await window.api.clipboard.writeText(code).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <div className="md-code-wrap">
+      <div className="md-code-bar">
+        <span className="md-code-lang">{lang || 'text'}</span>
+        <button className="btn tiny ghost" onClick={copy}>{copied ? '已复制' : '复制'}</button>
+      </div>
+      <pre className="md-code">{code}</pre>
+    </div>
+  );
+}
+
 export default function Markdown({ text = '', onFileLink }) {
   const parts = String(text).split('```');
   const out = [];
   parts.forEach((part, i) => {
     if (i % 2 === 1) {
-      out.push(<pre className="md-code" key={`c${i}`}>{part.replace(/^[\w+-]*\n/, '')}</pre>);
+      // ```lang\n... 首行是语言标记,展示时去掉但保留下来做标签
+      const lang = (part.match(/^([\w+-]*)\n/) || [, ''])[1];
+      out.push(<CodeBlock key={`c${i}`} lang={lang} code={part.replace(/^[\w+-]*\n/, '')} />);
       return;
     }
     part.split('\n').forEach((line, j) => {

@@ -937,19 +937,56 @@ function ImagePreview({ hostId, convId, remotePath, name, compact = false }) {
     </div>
   );
   if (!image) return <div className="image-loading">图片加载中...</div>;
+  const label = name || image.name;
   return (
     <>
-      <button className={`image-preview ${compact ? 'compact' : ''}`} onClick={() => setOpen(true)} title="查看大图">
-        <img src={image.src} alt={name || image.name} />
-        <span>{name || image.name}</span>
-      </button>
+      <div className="image-block">
+        <button className={`image-preview ${compact ? 'compact' : ''}`} onClick={() => setOpen(true)} title="查看大图">
+          <img src={image.src} alt={label} />
+          <span>{label}</span>
+        </button>
+        {/* 悬停才出现,免得挡住图 */}
+        <div className="image-tools">
+          <ImageActions image={image} name={label} />
+        </div>
+      </div>
       {open && (
         <div className="image-lightbox" role="dialog" aria-modal="true" onClick={() => setOpen(false)}>
           <button className="lightbox-close" title="关闭" onClick={() => setOpen(false)}>×</button>
-          <img src={image.src} alt={name || image.name} onClick={(e) => e.stopPropagation()} />
-          <div>{name || image.name}</div>
+          <img src={image.src} alt={label} onClick={(e) => e.stopPropagation()} />
+          <div className="lightbox-bar" onClick={(e) => e.stopPropagation()}>
+            <span>{label}</span>
+            <ImageActions image={image} name={label} />
+          </div>
         </div>
       )}
+    </>
+  );
+}
+
+/** 图片操作:复制到剪贴板 / 另存为。两处(缩略图与大图)共用 */
+function ImageActions({ image, name }) {
+  const [hint, setHint] = useState('');
+  const flash = (t) => { setHint(t); setTimeout(() => setHint(''), 1500); };
+
+  const copy = async (e) => {
+    e.stopPropagation();
+    try { await window.api.clipboard.writeImage(image.src); flash('已复制'); }
+    catch (err) { flash(`失败:${err.message}`); }
+  };
+  const saveAs = async (e) => {
+    e.stopPropagation();
+    try {
+      const r = await window.api.clipboard.saveImageAs({ dataUrl: image.src, name });
+      if (r?.saved) flash('已保存');
+    } catch (err) { flash(`失败:${err.message}`); }
+  };
+
+  return (
+    <>
+      <button className="btn tiny ghost" onClick={copy} title="复制图片,可直接粘贴到别处">复制</button>
+      <button className="btn tiny ghost" onClick={saveAs} title="另存为文件">保存</button>
+      {hint && <span className="muted small">{hint}</span>}
     </>
   );
 }
