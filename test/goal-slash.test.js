@@ -31,7 +31,9 @@ test('把"仍未通过/继续排查"判为未完成(截图里正是这种情形)
 
 test('只有明确宣告完成才算达成', () => {
   assert.equal(goal.classifyGoalProgress('目标已达成,可用模型列表已正常显示,截图已验证。'), 'done');
-  assert.equal(goal.classifyGoalProgress('所有测试通过'), 'done');
+  // "所有测试通过" 只是某一步的结果,不再当作目标达成 ——
+  // 旧判定就是被这类措辞误伤,导致目标 0 轮就结束
+  assert.equal(goal.classifyGoalProgress('所有测试通过'), 'continue');
   // "已修复"但同时说仍未通过 -> 不算完成(未完成信号优先)
   assert.equal(goal.classifyGoalProgress('已修复接口,但列表仍未显示'), 'continue');
 });
@@ -63,7 +65,9 @@ test('decideGoalStep:危险命令/触顶/打转/阻塞都会停,且给出原因'
   assert.equal(goal.decideGoalStep({ ...g, rounds: 25 }, { lastText: '继续' }).reason, 'maxRounds');
   assert.equal(goal.decideGoalStep(g, { lastText: 'x', recentTexts: ['同样的话', '同样的话', '同样的话'] }).reason, 'stalled');
   assert.equal(goal.decideGoalStep(g, { lastText: '需要你提供密码' }).reason, 'blocked');
-  assert.equal(goal.decideGoalStep(g, { lastText: '目标已达成' }).action, 'complete');
+  // 宣称达成先走核验轮,核验后再宣称才算 complete
+  assert.equal(goal.decideGoalStep(g, { lastText: '目标已达成' }).action, 'verify');
+  assert.equal(goal.decideGoalStep({ ...g, verifying: true }, { lastText: '目标已达成' }).action, 'complete');
 });
 
 test('非激活状态不推进(暂停/清除后不会偷偷继续烧钱)', () => {
@@ -152,4 +156,54 @@ test('/goal max 解析与边界', () => {
   // 封顶
   assert.equal(setGoalMaxRounds({ rounds: 0 }, 99999).maxRounds, GOAL_MAX_ROUNDS_CAP);
   assert.throws(() => setGoalMaxRounds({ rounds: 0 }, 0), /正整数/);
+});
+
+/* ---- 达成判定过松 + 达成后目标条不消失(用户 2026-08-11 反馈) ---- */
+
+test('某一步完成不等于目标达成(旧判定 0 轮就结束的根因)', () => {
+  const { classifyGoalProgress } = require('../src/goalMode.js');
+  // 截图里的真实措辞:都是阶段性成果,不该判为目标达成
+  for (const s of [
+    '11 个测试套件、13 项测试和编译全部通过;我现在在运行中的 PostgreSQL 上创建一条标记资源。',
+    '已完成资源标记的第一层强制访问控制。',
+    '容器健康检查通过: {"status":"ok"}',
+    '类型已修正;我重新执行项目目录测试和编译。'
+  ]) {
+    assert.notEqual(classifyGoalProgress(s), 'done', `不该判达成: ${s.slice(0, 24)}`);
+  }
+});
+
+test('只有显式宣告整体达成才算', () => {
+  const { classifyGoalProgress } = require('../src/goalMode.js');
+  for (const s of ['目标已达成,验收清单如下', '所有任务都已完成', 'goal achieved', 'task is complete']) {
+    assert.equal(classifyGoalProgress(s), 'done', `应判达成: ${s}`);
+  }
+});
+
+test('宣称达成先走核验轮,再说一次才算完成', () => {
+  const { decideGoalStep } = require('../src/goalMode.js');
+  const base = { text: '写平台说明书', status: 'active', rounds: 3, maxRounds: 25 };
+
+  // 第一次宣称 -> 不采信,追一轮核验
+  const first = decideGoalStep(base, { lastText: '目标已达成' });
+  assert.equal(first.action, 'verify');
+  assert.match(first.prompt, /可复现的证据/);
+  assert.match(first.prompt, /不算证据/);
+
+  // 核验轮后仍宣称达成 -> 才算完成
+  const second = decideGoalStep({ ...base, verifying: true }, { lastText: '目标已达成,清单如下' });
+  assert.equal(second.action, 'complete');
+
+  // 核验轮发现没做完 -> 回到正常推进,并撤销核验态
+  const back = decideGoalStep({ ...base, verifying: true }, { lastText: '还差接口鉴权未完成,下一步继续' });
+  assert.equal(back.action, 'continue');
+  assert.equal(back.clearVerifying, true);
+});
+
+test('达成消息带上目标原文,清掉目标后还能找回来重设', () => {
+  const { buildCompleteMessage } = require('../src/goalMode.js');
+  const msg = buildCompleteMessage({ text: '帮我写详细的平台使用说明书', rounds: 7 });
+  assert.match(msg, /帮我写详细的平台使用说明书/);
+  assert.match(msg, /共推进 7 轮/);
+  assert.match(msg, /重新设定/);
 });

@@ -168,11 +168,21 @@ export default function App() {
             dangerHit: danger ? (danger.detail || '危险命令') : null
           });
           if (step.action === 'continue') {
-            st.updateConversationGoal(convId, { rounds: (conv.goal.rounds || 0) + 1 });
+            st.updateConversationGoal(convId, {
+              rounds: (conv.goal.rounds || 0) + 1,
+              ...(step.clearVerifying ? { verifying: false } : {})
+            });
+            sendToAgent(conv.hostId, convId, step.prompt, [], { auto: true });
+          } else if (step.action === 'verify') {
+            // 宣称达成先不采信,追一轮逐条核验
+            st.updateConversationGoal(convId, { verifying: true, rounds: (conv.goal.rounds || 0) + 1 });
+            st.pushMessage(convId, { role: 'agent', kind: 'raw', text: step.message, ts: Date.now() });
             sendToAgent(conv.hostId, convId, step.prompt, [], { auto: true });
           } else if (step.action === 'complete') {
-            st.updateConversationGoal(convId, { status: 'done' });
+            // 达成后直接清掉目标:它已经不会再推进,留着只是占地方。
+            // 目标原文写进消息里,万一判断有误还能找回来重设。
             st.pushMessage(convId, { role: 'agent', kind: 'raw', text: step.message, ts: Date.now() });
+            st.setConversationGoal(convId, null);
           } else if (step.action === 'stop') {
             st.updateConversationGoal(convId, { status: 'paused' });
             st.pushMessage(convId, { role: 'agent', kind: 'raw', text: step.message, ts: Date.now() });

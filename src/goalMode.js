@@ -14,11 +14,21 @@ export const GOAL_EXTEND_ROUNDS = 25;
 /** 上限的上限:再怎么加也不能无限烧 */
 export const GOAL_MAX_ROUNDS_CAP = 500;
 
-/** 模型宣称完成的说法 */
+/**
+ * 模型宣称「整体目标达成」的说法。
+ *
+ * 刻意只收显式的整体宣告。曾经把「测试通过」「已完成」也算作达成,
+ * 结果模型说一句「已完成第一层强制访问控制」「测试全部通过」就被判达成,
+ * 目标 0 轮就结束了 —— 那些是某一步完成,不是目标完成。
+ */
 const DONE_PATTERNS = [
-  /目标(已)?(达成|完成)/, /问题(已)?(解决|修复)/, /已(全部)?(完成|解决|修复|通过)/,
-  /验收(通过|完成)/, /测试(全部)?通过/, /没有(其它|其他)(问题|待办)/,
-  /goal (achieved|completed)/i, /all (tests? )?(pass|passed|passing)/i, /task complete/i
+  /目标(已)?(达成|完成|实现)/,
+  /(全部|所有)(工作|任务|需求|内容|事项)?(都)?(已)?(完成|做完)/,
+  /任务(已)?(全部)?完成/,
+  /没有(其它|其他|剩余)(的)?(问题|待办|工作)/,
+  /goal (achieved|completed|is complete)/i,
+  /task (is )?complete/i,
+  /everything (is )?done/i
 ];
 /** 明确表示"还没完"的说法 —— 优先级高于完成判定,避免"已修复但仍未通过"被误判 */
 const NOT_DONE_PATTERNS = [
@@ -87,12 +97,55 @@ export function decideGoalStep(goal, ctx = {}) {
   }
   const progress = classifyGoalProgress(ctx.lastText);
   if (progress === 'done') {
-    return { action: 'complete', message: '🎯 目标看起来已达成,目标模式自动结束。若判断有误,可重新设定目标。' };
+    /* 达成要过一道核验关。模型宣称完成的成本极低,直接采信就会出现
+     * 「0 轮就达成」这种明显没做完的情况。先让它逐条对照目标给证据,
+     * 再说一次达成才算数。 */
+    if (!goal.verifying) {
+      return {
+        action: 'verify',
+        prompt: buildVerifyPrompt(goal),
+        message: '🎯 模型宣称目标已达成,先让它逐条核对验收项并给出证据,通过后才算完成。'
+      };
+    }
+    return { action: 'complete', message: buildCompleteMessage(goal) };
   }
   if (progress === 'blocked') {
     return { action: 'stop', reason: 'blocked', message: '🎯 模型表示需要你提供信息或授权,目标模式已暂停等待你处理。' };
   }
-  return { action: 'continue', prompt: buildContinuePrompt(goal) };
+  // 又说没完成了 -> 撤销核验态,回到正常推进
+  return { action: 'continue', prompt: buildContinuePrompt(goal), clearVerifying: !!goal.verifying };
+}
+
+/**
+ * 核验提示词:要证据,不要复述。
+ * 关键是逼它把目标拆成可勾验收项,并对每一项给出可复现的凭据 ——
+ * 光问「真的完成了吗」,模型基本都会说「是的」。
+ */
+export function buildVerifyPrompt(goal) {
+  return [
+    `【目标模式 · 达成核验】你刚才表示目标已达成。目标是:${goal?.text || ''}`,
+    '',
+    '现在做一次严格自检,不要复述之前说过的话:',
+    '1. 把目标拆成具体验收项,逐条列出',
+    '2. 每条给出**可复现的证据**:实际执行的命令与其真实输出、文件路径、接口返回、截图',
+    '   —— 「已实现」「应该没问题」不算证据',
+    '3. 任何一条拿不出证据,就说明没做完:直接继续做,不要写在"后续计划"里',
+    '4. 逐条都有证据后,明确回复「目标已达成」并附上上述清单',
+    '5. 若发现遗漏,如实说明还差什么并继续推进'
+  ].join('\n');
+}
+
+/**
+ * 达成时的收尾消息。
+ * 必须带上目标原文 —— 达成后目标条会被清掉,不写进消息的话,
+ * 万一判断有误,用户连原来设的是什么都找不回来了。
+ */
+export function buildCompleteMessage(goal) {
+  const rounds = goal?.rounds || 0;
+  return [
+    `🎯 目标已达成,目标模式结束(共推进 ${rounds} 轮):${goal?.text || ''}`,
+    '若判断有误,复制上面这句目标用 /goal 重新设定即可。'
+  ].join('\n');
 }
 
 /** 续推提示词:强调不要停、不要反问,并要求自检 */
@@ -135,5 +188,8 @@ export function setGoalMaxRounds(goal, n) {
 
 /** 新建目标对象 */
 export function createGoal(text, { maxRounds = GOAL_DEFAULT_MAX_ROUNDS } = {}) {
-  return { text: String(text || '').trim(), status: 'active', rounds: 0, maxRounds, createdAt: Date.now() };
+  return {
+    text: String(text || '').trim(), status: 'active',
+    rounds: 0, maxRounds, verifying: false, createdAt: Date.now()
+  };
 }

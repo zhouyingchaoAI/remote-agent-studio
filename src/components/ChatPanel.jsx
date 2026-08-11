@@ -766,8 +766,14 @@ function SlashMenu({ input, index, onPick }) {
 function GoalBar({ conv }) {
   const goal = conv.goal;
   if (!goal?.text) return null;
+  // 已达成的目标不再显示 —— 它不会推进了。
+  // 新流程会在达成时直接清空,这里兜住历史对话里已存的 done 目标。
+  if (goal.status === 'done') return null;
   const st = useStore.getState();
-  const label = { active: '推进中', paused: '已暂停', done: '已达成' }[goal.status] || goal.status;
+  // 核验中要单独标出来,否则用户看到「推进中」不知道它正在自查而不是在干活
+  const label = goal.verifying && goal.status === 'active'
+    ? '核验中'
+    : ({ active: '推进中', paused: '已暂停', done: '已达成' }[goal.status] || goal.status);
   return (
     <div className={`goal-bar ${goal.status}`}>
       <span className="goal-tag">🎯 目标</span>
