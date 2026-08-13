@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
+const { TransferCancelled } = require('./transfer');
 
 class SSHManager extends EventEmitter {
   constructor(hostConfig) {
@@ -326,25 +327,85 @@ class SSHManager extends EventEmitter {
     return { path: target, entries };
   }
 
-  async upload(localPath, remotePath, onProgress) {
+  /**
+   * 上传单个文件。
+   *
+   * 用流而不是 fastPut:fastPut 没有中止手段,一旦开始就只能等它跑完 ——
+   * 21 GB 的文件传错了也停不下来。流可以 destroy(),代价是没有并行分块,
+   * 高延迟链路上略慢,但可控性更重要。
+   * @param signal {aborted:boolean, onAbort:fn} 简易取消令牌
+   */
+  async upload(localPath, remotePath, onProgress, signal) {
     const sftp = await this.sftp();
     const total = fs.statSync(localPath).size;
     return new Promise((resolve, reject) => {
-      sftp.fastPut(localPath, remotePath, {
-        step: (transferred) => onProgress && onProgress({ transferred, total })
-      }, (err) => (err ? reject(err) : resolve({ total })));
+      let transferred = 0;
+      let settled = false;
+      const rs = fs.createReadStream(localPath);
+      const ws = sftp.createWriteStream(remotePath);
+
+      const finish = (err) => {
+        if (settled) return;
+        settled = true;
+        if (signal) signal.onAbort = null;
+        if (err) { try { rs.destroy(); ws.destroy(); } catch (_) {} return reject(err); }
+        resolve({ total });
+      };
+
+      if (signal) {
+        if (signal.aborted) return finish(new TransferCancelled());
+        signal.onAbort = () => finish(new TransferCancelled());
+      }
+
+      rs.on('data', (chunk) => {
+        transferred += chunk.length;
+        if (onProgress) onProgress({ transferred, total });
+      });
+      rs.on('error', finish);
+      ws.on('error', finish);
+      ws.on('close', () => finish(null));
+      rs.pipe(ws);
     });
   }
 
-  async download(remotePath, localPath, onProgress) {
+  /** 下载单个文件。同样用流,理由见 upload */
+  async download(remotePath, localPath, onProgress, signal) {
     const sftp = await this.sftp();
     const stat = await new Promise((res, rej) =>
       sftp.stat(remotePath, (e, s) => (e ? rej(e) : res(s))));
     const total = stat.size;
     return new Promise((resolve, reject) => {
-      sftp.fastGet(remotePath, localPath, {
-        step: (transferred) => onProgress && onProgress({ transferred, total })
-      }, (err) => (err ? reject(err) : resolve({ total })));
+      let transferred = 0;
+      let settled = false;
+      const rs = sftp.createReadStream(remotePath);
+      const ws = fs.createWriteStream(localPath);
+
+      const finish = (err) => {
+        if (settled) return;
+        settled = true;
+        if (signal) signal.onAbort = null;
+        if (err) {
+          try { rs.destroy(); ws.destroy(); } catch (_) {}
+          // 取消/失败留下的半截文件要删掉,否则用户以为下完了
+          try { fs.unlinkSync(localPath); } catch (_) {}
+          return reject(err);
+        }
+        resolve({ total });
+      };
+
+      if (signal) {
+        if (signal.aborted) return finish(new TransferCancelled());
+        signal.onAbort = () => finish(new TransferCancelled());
+      }
+
+      rs.on('data', (chunk) => {
+        transferred += chunk.length;
+        if (onProgress) onProgress({ transferred, total });
+      });
+      rs.on('error', finish);
+      ws.on('error', finish);
+      ws.on('close', () => finish(null));
+      rs.pipe(ws);
     });
   }
 

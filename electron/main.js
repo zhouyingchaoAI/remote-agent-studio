@@ -25,6 +25,7 @@ const { lintSkill, ENGINE_SKILL_DIRS } = require('./skills');
 const mobileService = require('./mobileService');
 const { createGateway } = require('./mobileGateway');
 const mobileOps = require('./mobileOps');
+const transferMod = require('./ssh/transfer');
 const { interpretVoiceCommand } = require('./voice');
 const { captureRegion } = require('./screenshot');
 
@@ -1776,18 +1777,108 @@ ipcMain.handle('fs:listRemote', async (_e, { hostId, dirPath }) => {
   return getSession(hostId).ssh.listRemoteDir(dirPath);
 });
 
-ipcMain.handle('fs:upload', async (_e, { hostId, localPath, remotePath, transferId }) => {
-  const s = getSession(hostId);
-  await s.ssh.upload(localPath, remotePath, (p) =>
-    send('transfer:progress', { hostId, transferId, ...p }));
-  return true;
+/* ---------------- 文件传输:支持目录、可取消 ----------------
+ * 每个传输登记一个取消令牌。没有这个的话,21 GB 传错了也只能干等。 */
+const transferSignals = new Map(); // transferId -> {aborted, onAbort}
+
+function newSignal(transferId) {
+  const signal = { aborted: false, onAbort: null };
+  transferSignals.set(transferId, signal);
+  return signal;
+}
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw new transferMod.TransferCancelled();
+}
+
+ipcMain.handle('fs:cancelTransfer', (_e, { transferId } = {}) => {
+  const signal = transferSignals.get(transferId);
+  if (!signal) return { ok: false, error: '传输不存在或已结束' };
+  signal.aborted = true;
+  if (signal.onAbort) signal.onAbort();   // 正在传的那个文件立刻断掉
+  return { ok: true };
 });
 
-ipcMain.handle('fs:download', async (_e, { hostId, remotePath, localPath, transferId }) => {
+/** 上传:文件或整个目录 */
+ipcMain.handle('fs:upload', async (_e, { hostId, localPath, remotePath, transferId, isDir }) => {
   const s = getSession(hostId);
-  await s.ssh.download(remotePath, localPath, (p) =>
-    send('transfer:progress', { hostId, transferId, ...p }));
-  return true;
+  const signal = newSignal(transferId);
+  const report = (p) => send('transfer:progress', { hostId, transferId, ...p });
+  try {
+    if (!isDir) {
+      await s.ssh.upload(localPath, remotePath, report, signal);
+      return { files: 1 };
+    }
+
+    const plan = transferMod.walkLocalDir(localPath);
+    report({ transferred: 0, total: plan.totalBytes, totalFiles: plan.files.length, doneFiles: 0, scanning: false });
+    // 先把目录结构建好,免得逐个文件 mkdir 反复往返
+    await s.ssh.mkdirRemote(remotePath);
+    for (const dir of plan.dirs) {
+      throwIfAborted(signal);
+      await s.ssh.mkdirRemote(transferMod.joinPosix(remotePath, dir));
+    }
+
+    let doneBytes = 0;
+    let doneFiles = 0;
+    for (const file of plan.files) {
+      throwIfAborted(signal);
+      await s.ssh.upload(file.abs, transferMod.joinPosix(remotePath, file.rel), ({ transferred }) => {
+        report(transferMod.aggregateProgress({
+          doneBytes, currentTransferred: transferred,
+          totalBytes: plan.totalBytes, doneFiles, totalFiles: plan.files.length
+        }));
+      }, signal);
+      doneBytes += file.size;
+      doneFiles += 1;
+    }
+    return { files: plan.files.length, skipped: plan.skipped.length };
+  } finally {
+    transferSignals.delete(transferId);
+  }
+});
+
+/** 下载:文件或整个目录 */
+ipcMain.handle('fs:download', async (_e, { hostId, remotePath, localPath, transferId, isDir }) => {
+  const s = getSession(hostId);
+  const signal = newSignal(transferId);
+  const report = (p) => send('transfer:progress', { hostId, transferId, ...p });
+  try {
+    if (!isDir) {
+      await s.ssh.download(remotePath, localPath, report, signal);
+      return { files: 1 };
+    }
+
+    // 扫描大目录可能要几秒,先告诉界面在扫描,不然看着像卡死
+    report({ transferred: 0, total: 0, scanning: true });
+    const listed = await s.ssh.exec(transferMod.buildRemoteWalkCommand(remotePath));
+    const plan = transferMod.parseRemoteWalk(listed.stdout);
+    report({ transferred: 0, total: plan.totalBytes, totalFiles: plan.files.length, doneFiles: 0, scanning: false });
+
+    fs.mkdirSync(localPath, { recursive: true });
+    for (const dir of plan.dirs) {
+      throwIfAborted(signal);
+      fs.mkdirSync(path.join(localPath, dir), { recursive: true });
+    }
+
+    let doneBytes = 0;
+    let doneFiles = 0;
+    for (const file of plan.files) {
+      throwIfAborted(signal);
+      const target = path.join(localPath, file.rel);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      await s.ssh.download(transferMod.joinPosix(remotePath, file.rel), target, ({ transferred }) => {
+        report(transferMod.aggregateProgress({
+          doneBytes, currentTransferred: transferred,
+          totalBytes: plan.totalBytes, doneFiles, totalFiles: plan.files.length
+        }));
+      }, signal);
+      doneBytes += file.size;
+      doneFiles += 1;
+    }
+    return { files: plan.files.length };
+  } finally {
+    transferSignals.delete(transferId);
+  }
 });
 
 /* 文件内容预览:文本截断到 512KB,图片最大 10MB,二进制给出提示 */

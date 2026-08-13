@@ -125,6 +125,7 @@ contextBridge.exposeInMainWorld('api', {
     onMessage: on('agent:message')
   },
   files: {
+    cancelTransfer: invoke('fs:cancelTransfer'),
     listLocal: invoke('fs:listLocal'),
     listRemote: invoke('fs:listRemote'),
     upload: invoke('fs:upload'),

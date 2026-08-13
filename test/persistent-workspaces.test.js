@@ -31,9 +31,11 @@ test('terminal refits when its persistent layer becomes active', () => {
 test('file transfer progress is isolated by host while panels stay mounted', () => {
   const source = read('src/components/FilePanel.jsx');
 
-  assert.match(source, /hostId: progressHostId/);
-  assert.match(source, /if \(progressHostId !== hostId\) return/);
-  assert.match(source, /\}, \[hostId\]\)/);
+  // 断言行为而不是某一种写法:进度回调必须先比对 hostId 再更新,
+  // 且订阅要随 hostId 重建 —— 否则多主机面板同时挂载时进度会串台
+  assert.match(source, /onProgress\([\s\S]{0,200}?hostId[\s\S]{0,80}?return/,
+    '进度回调应先过滤非本主机的事件');
+  assert.match(source, /\}, \[hostId\]\)/, '订阅应随 hostId 重建');
 });
 
 test('inactive workspace layers are hidden without removing their contents', () => {
