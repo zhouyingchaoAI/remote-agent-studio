@@ -9,6 +9,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const { TransferCancelled } = require('./transfer');
+const { ChannelPool, parseMaxSessions, MAX_SESSIONS_PROBE } = require('./channelPool');
 
 class SSHManager extends EventEmitter {
   constructor(hostConfig) {
@@ -22,6 +23,9 @@ class SSHManager extends EventEmitter {
     this.manualClose = false;        // 用户主动断开时不做自动重连
     this.reconnectTimer = null;
     this.reconnectAttempt = 0;
+    // 通道闸门:主动排队,而不是等 sshd 拒绝再报「Channel open failure」
+    this.channels = new ChannelPool();
+    this.sftpRelease = null;
   }
 
   _setStatus(status, detail) {
@@ -73,12 +77,22 @@ class SSHManager extends EventEmitter {
         .on('keyboard-interactive', (name, instr, lang, prompts, finish) => {
           finish(prompts.map(() => this.config.password || ''));
         })
-        .on('ready', () => { this.reconnectAttempt = 0; this._setStatus('connected'); resolve(); })
+        .on('ready', () => {
+          this.reconnectAttempt = 0;
+          this.channels.reset();               // 新连接,旧名额一并作废
+          this._setStatus('connected');
+          resolve();
+          // 探到真实 MaxSessions 才能把闸门开到刚好,不阻塞连接完成
+          this.detectMaxSessions().catch(() => {});
+        })
         .on('error', (err) => { this._setStatus('error', err.message); reject(err); })
         .on('close', () => {
           const wasConnected = this.status === 'connected';
           this.sftpSession = null;
+          this.sftpRelease = null;
           this.shells.clear();
+          // 通道随连接一起没了:清空占用并让排队者立刻失败,不要挂到超时
+          this.channels.reset(new Error('SSH 连接已断开'));
           if (this.status !== 'error') this._setStatus('disconnected');
           // 意外掉线 -> 指数退避自动重连(用户主动断开除外)
           if (wasConnected && !this.manualClose) this._scheduleReconnect();
@@ -142,7 +156,22 @@ class SSHManager extends EventEmitter {
     if (!this.sftpSession) return false;
     try { this.sftpSession.end(); } catch (_) {}
     this.sftpSession = null;
+    // end() 的 close 事件不一定同步到达,这里显式归还名额(release 幂等)
+    if (this.sftpRelease) { this.sftpRelease(); this.sftpRelease = null; }
     return true;
+  }
+
+  /**
+   * 探测远程 sshd 的 MaxSessions,据此调整闸门上限。
+   * 探测不到就保持默认(按 10 算),多探一次总比让用户自己猜好。
+   */
+  async detectMaxSessions() {
+    try {
+      const r = await this.exec(MAX_SESSIONS_PROBE);
+      const n = parseMaxSessions(r.stdout);
+      if (n) return { maxSessions: n, limit: this.channels.setMaxSessions(n) };
+    } catch (_) { /* 探测失败不影响使用 */ }
+    return { maxSessions: null, limit: this.channels.limit };
   }
 
   /**
@@ -150,6 +179,22 @@ class SSHManager extends EventEmitter {
    * 仍失败则抛出可操作的中文提示(而不是 ssh2 的 "open failed")。
    */
   async _openExec(command, channelOpts = {}) {
+    // 先排队拿名额,拿不到就等 —— 这一步把绝大多数「通道用尽」挡在发生之前
+    const release = await this.channels.acquire({ label: 'exec' });
+    let stream;
+    try {
+      stream = await this._openExecRaw(command, channelOpts);
+    } catch (e) {
+      release();
+      throw e;
+    }
+    // close 与 error 都可能触发,release 本身幂等
+    stream.on('close', release);
+    stream.on('error', release);
+    return stream;
+  }
+
+  async _openExecRaw(command, channelOpts = {}) {
     const MAX_ATTEMPTS = 3;
     let lastErr;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
@@ -167,9 +212,11 @@ class SSHManager extends EventEmitter {
         await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
       }
     }
+    const s = this.channels.stats();
     throw new Error(
       'SSH 通道已用尽,无法执行新命令。\n' +
-      '常见原因:远程 sshd 的 MaxSessions(默认 10)被终端标签、后台任务占满。\n' +
+      `当前占用 ${s.inUse}/${s.limit},排队 ${s.pending}。\n` +
+      '常见原因:远程 sshd 的 MaxSessions(默认 10)被终端标签、文件传输、后台任务占满。\n' +
       '处理:关闭多余的「终端」标签后重试;或在远程 /etc/ssh/sshd_config 调大 MaxSessions 后 reload sshd。\n' +
       `原始错误:${lastErr?.message || lastErr}`
     );
@@ -203,14 +250,17 @@ class SSHManager extends EventEmitter {
     const existing = this.shells.get(termId);
     if (existing) return existing;
     if (!this.client) throw new Error('未连接');
+    // 终端是长期占用通道的大户,同样要走闸门,否则开几个标签就把名额吃光
+    const release = await this.channels.acquire({ label: `shell:${termId}` });
     const stream = await new Promise((resolve, reject) => {
       this.client.shell(
         { term: 'xterm-256color', cols, rows },
         // 设置 UTF-8 locale 修复中文乱码;传递代理相关环境变量
         { env: { LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', TERM: 'xterm-256color' } },
         (err, s) => {
-          if (err) return reject(err);
-          s.on('close', () => { this.shells.delete(termId); });
+          if (err) { release(); return reject(err); }
+          s.on('close', () => { this.shells.delete(termId); release(); });
+          s.on('error', release);
           // shell 启动后自动加载代理配置与 agent PATH,并确保 UTF-8
           const init =
             'export LANG=C.UTF-8 LC_ALL=C.UTF-8 2>/dev/null; ' +
@@ -237,15 +287,17 @@ class SSHManager extends EventEmitter {
     if (s) { try { s.end(); } catch (_) {} this.shells.delete(termId); }
   }
 
-  /** SFTP 会话(懒加载) */
-  sftp() {
+  /** SFTP 会话(懒加载,同样占一个通道名额) */
+  async sftp() {
+    if (this.sftpSession) return this.sftpSession;
+    const release = await this.channels.acquire({ label: 'sftp' });
     return new Promise((resolve, reject) => {
-      if (this.sftpSession) return resolve(this.sftpSession);
-      if (!this.client) return reject(new Error('未连接'));
+      if (!this.client) { release(); return reject(new Error('未连接')); }
       this.client.sftp((err, sftp) => {
-        if (err) return reject(err);
+        if (err) { release(); return reject(err); }
         this.sftpSession = sftp;
-        sftp.on('close', () => { this.sftpSession = null; });
+        this.sftpRelease = release;
+        sftp.on('close', () => { this.sftpSession = null; this.sftpRelease = null; release(); });
         resolve(sftp);
       });
     });
