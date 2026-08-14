@@ -8,7 +8,7 @@ const {
 
 test('deepseek posix env points claude CLI at DeepSeek Anthropic endpoint', () => {
   const env = deepseekEnvPosix();
-  assert.match(env, new RegExp(`ANTHROPIC_BASE_URL=${DEEPSEEK_BASE_URL}`));
+  assert.match(env, new RegExp(`ANTHROPIC_BASE_URL="${DEEPSEEK_BASE_URL}"`));
   assert.match(env, /unset ANTHROPIC_API_KEY/);
   assert.match(env, /ANTHROPIC_AUTH_TOKEN="\$\{DEEPSEEK_API_KEY:-\}"/);
   assert.match(env, /CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"/);
@@ -26,7 +26,7 @@ test('deepseek buildCommand (posix) reuses claude pipeline with injected env and
   });
   const cmd = session.buildCommand('hello');
   assert.match(cmd, /claude -p --output-format stream-json/);
-  assert.match(cmd, new RegExp(`ANTHROPIC_BASE_URL=${DEEPSEEK_BASE_URL}`));
+  assert.match(cmd, new RegExp(`ANTHROPIC_BASE_URL="${DEEPSEEK_BASE_URL}"`));
   // env 注入必须在 ~/.remote-agent-env.sh 之后(DEEPSEEK_API_KEY 来源)
   assert.ok(cmd.indexOf('.remote-agent-env.sh') < cmd.indexOf('ANTHROPIC_BASE_URL'));
   assert.match(cmd, /--model 'deepseek-v4-pro\[1m\]'/);

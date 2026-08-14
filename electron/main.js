@@ -980,6 +980,7 @@ async function mobileStartTask({ hostId, prompt, convId, cwd = '', engine, model
 
   const agent = new AgentSession(s.ssh, s.proxy, {
     agent: agentName,
+    deepseekEndpoint: loadSettings().deepseekEndpoint,
     cwd: workDir || undefined,
     model: model || existing?.model || undefined,
     // 手机端默认不放开系统权限:一句话就在服务器上全权执行风险太高
@@ -1645,7 +1646,10 @@ ipcMain.handle('agent:start', async (_e, { hostId, convId, opts, resume }) => {
       });
     });
   }
-  const agent = new AgentSession(s.ssh, s.proxy, opts);
+  // deepseek 引擎的端点由设置决定(官方 DeepSeek 或自建 new-api 中转)
+  const agent = new AgentSession(s.ssh, s.proxy, {
+    ...opts, deepseekEndpoint: loadSettings().deepseekEndpoint
+  });
   // 恢复上次会话的 resume 状态,实现跨重启续聊
   if (resume) {
     agent.claudeSessionId = resume.claudeSessionId || null;

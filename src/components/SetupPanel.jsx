@@ -205,6 +205,7 @@ export default function SetupPanel({ hostId, host }) {
           </div>
         </Fold>}
 
+        <DeepseekEndpointManager hostId={hostId} isLocal={isLocal} busy={busy} setBusy={setBusy} />
         {!isLocal && <GrokModelsManager hostId={hostId} busy={busy} setBusy={setBusy} />}
       </div>
 
@@ -340,6 +341,111 @@ function GrokModelsManager({ hostId, busy, setBusy }) {
       <button className="btn small ghost" disabled={busy} onClick={syncNow} style={{ marginTop: 8 }}>
         重新同步到远程 config.toml
       </button>
+    </Fold>
+  );
+}
+
+/**
+ * Claude Code 走 Anthropic 兼容端点(DeepSeek 官方 / 自建 new-api 中转)。
+ *
+ * 两类端点路径规则不同:官方在 /anthropic 子路径,中转站直接在根路径提供
+ * /v1/messages,所以地址必须让用户填,不能写死。
+ * API Key 只写到远程 ~/.remote-agent-env.sh(600 权限),不进任何配置文件。
+ */
+function DeepseekEndpointManager({ hostId, isLocal, busy, setBusy }) {
+  const saved = useStore((s) => s.settings.deepseekEndpoint);
+  const [form, setForm] = useState(() => saved || {
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    model: 'deepseek-v4-pro[1m]', flashModel: 'deepseek-v4-flash', envKey: 'DEEPSEEK_API_KEY'
+  });
+  const [apiKey, setApiKey] = useState('');
+  const [note, setNote] = useState('');
+
+  useEffect(() => { if (saved) setForm(saved); }, [saved]);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const usePreset = (id) => {
+    if (id === 'official') {
+      setForm({
+        baseUrl: 'https://api.deepseek.com/anthropic', model: 'deepseek-v4-pro[1m]',
+        flashModel: 'deepseek-v4-flash', envKey: 'DEEPSEEK_API_KEY'
+      });
+    } else {
+      setForm((f) => ({
+        ...f, baseUrl: '', model: 'deepseek-chat', flashModel: 'deepseek-chat',
+        envKey: 'DEEPSEEK_API_KEY'
+      }));
+    }
+    setNote('');
+  };
+
+  const save = () => {
+    setNote('');
+    const url = String(form.baseUrl || '').trim();
+    // 这个值会被拼进远程 shell 的 export,先在界面挡一道明显非法的输入
+    if (!/^https?:\/\/[A-Za-z0-9._-]+(:\d{1,5})?(\/[A-Za-z0-9._\-/]*)?$/.test(url.replace(/\/+$/, ''))) {
+      setNote('端点地址不合法:只允许 http(s)://主机[:端口][/路径]');
+      return;
+    }
+    useStore.getState().applySettings({ deepseekEndpoint: { ...form, baseUrl: url.replace(/\/+$/, '') } });
+    setNote('端点已保存,新开的对话立即生效');
+  };
+
+  const writeKey = async () => {
+    if (!apiKey.trim()) { setNote('请先填写 API Key'); return; }
+    setBusy(true); setNote('');
+    try {
+      await window.api.setup.setEnvKey({ hostId, envKey: form.envKey || 'DEEPSEEK_API_KEY', key: apiKey.trim() });
+      setApiKey('');
+      setNote(`已写入远程 ~/.remote-agent-env.sh(600 权限),变量名 ${form.envKey}`);
+    } catch (e) { setNote(`写入失败:${e.message}`); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Fold title="Claude Code 接 DeepSeek / 自建中转"
+      hint="用 claude CLI 驱动 Anthropic 兼容端点">
+      <div className="row gap" style={{ marginBottom: 10 }}>
+        <button className="btn small" onClick={() => usePreset('official')}>用 DeepSeek 官方</button>
+        <button className="btn small" onClick={() => usePreset('newapi')}>用自建中转(new-api)</button>
+      </div>
+
+      <div className="form-grid">
+        <label>端点地址
+          <input value={form.baseUrl} onChange={set('baseUrl')}
+            placeholder="http://1.2.3.4:3000 或 https://api.deepseek.com/anthropic" />
+        </label>
+        <label>主模型
+          <input value={form.model} onChange={set('model')} placeholder="deepseek-chat" />
+        </label>
+        <label>轻量模型(子代理/摘要用,留空则同主模型)
+          <input value={form.flashModel} onChange={set('flashModel')} placeholder="deepseek-chat" />
+        </label>
+        <label>API Key 环境变量名
+          <input value={form.envKey} onChange={set('envKey')} placeholder="DEEPSEEK_API_KEY" />
+        </label>
+      </div>
+      <p className="muted small">
+        自建中转(new-api / one-api)填<b>根地址即可</b>,它在根路径提供 /v1/messages;
+        DeepSeek 官方则需要带 /anthropic 子路径。模型名要和中转站里配置的一致。
+      </p>
+      <button className="btn primary" disabled={busy} onClick={save}>保存端点配置</button>
+
+      {!isLocal && (
+        <>
+          <h4 style={{ margin: '14px 0 6px' }}>API Key 下发</h4>
+          <div className="row gap">
+            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+              placeholder="sk-..." style={{ flex: 1 }} />
+            <button className="btn" disabled={busy} onClick={writeKey}>写入远程</button>
+          </div>
+          <p className="muted small">
+            只写到远程 <code>~/.remote-agent-env.sh</code>(600 权限),不会存进本应用的配置文件,
+            也不会出现在日志里。换 key 时重新写入即可覆盖。
+          </p>
+        </>
+      )}
+      {note && <p className="muted small">{note}</p>}
     </Fold>
   );
 }

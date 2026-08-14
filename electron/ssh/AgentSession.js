@@ -150,8 +150,8 @@ class AgentSession extends EventEmitter {
         ? '--dangerously-skip-permissions'
         : '--permission-mode acceptEdits';
       // deepseek: 同一 claude.cmd,前置注入 DeepSeek 端点变量,模型默认 v4-pro
-      const dsEnv = agent === 'deepseek' ? `${deepseekEnvPowershell()} ` : '';
-      const effectiveModel = agent === 'deepseek' ? resolveDeepseekModel(model) : model;
+      const dsEnv = agent === 'deepseek' ? `${deepseekEnvPowershell(this.opts.deepseekEndpoint)} ` : '';
+      const effectiveModel = agent === 'deepseek' ? resolveDeepseekModel(model, this.opts.deepseekEndpoint) : model;
       const modelArg = effectiveModel ? `--model ${powershellQuote(effectiveModel)}` : '';
       const resume = this.claudeSessionId ? `--resume ${powershellQuote(this.claudeSessionId)}` : '';
       return `${cd}${dsEnv}& claude.cmd -p --output-format stream-json --include-partial-messages --verbose ${permission} ${modelArg} ${resume} ${powershellQuote(fullPrompt)}`;
@@ -159,7 +159,7 @@ class AgentSession extends EventEmitter {
 
     // deepseek env 必须放在 AGENT_PATH 之后:它引用 ~/.remote-agent-env.sh 里的 DEEPSEEK_API_KEY
     const env = (this.proxy ? this.proxy.envPrefix() : '') + ' ' + AGENT_PATH +
-      (agent === 'deepseek' ? ' ' + deepseekEnvPosix() : '');
+      (agent === 'deepseek' ? ' ' + deepseekEnvPosix(this.opts.deepseekEndpoint) : '');
     const cd = cwd ? `cd ${shellQuote(cwd)} && ` : '';
     const q = shellQuote(fullPrompt);
     // 先回报 shell PID,再用 exec 让 agent 继承该 PID —— 「停止」时可以精确 kill 远端进程
@@ -194,7 +194,7 @@ class AgentSession extends EventEmitter {
     }
     // claude / deepseek(共用 claude CLI)
     const perm = permissionMode === 'system' ? '--dangerously-skip-permissions' : '--permission-mode acceptEdits';
-    const effectiveModel = agent === 'deepseek' ? resolveDeepseekModel(model) : model;
+    const effectiveModel = agent === 'deepseek' ? resolveDeepseekModel(model, this.opts.deepseekEndpoint) : model;
     const m = effectiveModel ? `--model ${shellQuote(effectiveModel)}` : '';
     const resume = this.claudeSessionId ? `--resume ${shellQuote(this.claudeSessionId)}` : '';
     return wrap(`claude -p --output-format stream-json --include-partial-messages --verbose ${perm} ${m} ${resume} ${q}`);
