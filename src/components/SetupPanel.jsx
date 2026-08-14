@@ -359,9 +359,22 @@ function DeepseekEndpointManager({ hostId, isLocal, busy, setBusy }) {
     model: 'deepseek-v4-pro[1m]', flashModel: 'deepseek-v4-flash', envKey: 'DEEPSEEK_API_KEY'
   });
   const [apiKey, setApiKey] = useState('');
+  const [relayText, setRelayText] = useState('');
   const [note, setNote] = useState('');
 
   useEffect(() => { if (saved) setForm(saved); }, [saved]);
+
+  const importRelay = async () => {
+    setNote('');
+    try {
+      const r = await window.api.deepseek.parseRelay({ text: relayText });
+      setForm((f) => ({ ...f, baseUrl: r.baseUrl }));
+      if (r.key) setApiKey(r.key);
+      setRelayText('');  // 别把含密钥的原文留在界面上
+      // 只回显脱敏后的形式,完整密钥不出现在提示里
+      setNote(`已解析:${r.baseUrl}${r.keyMasked ? ` · 密钥 ${r.keyMasked}` : ''};确认模型名后点「保存端点配置」,再「写入远程」`);
+    } catch (e) { setNote(`解析失败:${e.message}`); }
+  };
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const usePreset = (id) => {
@@ -397,7 +410,7 @@ function DeepseekEndpointManager({ hostId, isLocal, busy, setBusy }) {
     try {
       await window.api.setup.setEnvKey({ hostId, envKey: form.envKey || 'DEEPSEEK_API_KEY', key: apiKey.trim() });
       setApiKey('');
-      setNote(`已写入远程 ~/.remote-agent-env.sh(600 权限),变量名 ${form.envKey}`);
+      setNote(`已写入 ~/.remote-agent-env.sh(600 权限),变量名 ${form.envKey}`);
     } catch (e) { setNote(`写入失败:${e.message}`); }
     finally { setBusy(false); }
   };
@@ -409,6 +422,18 @@ function DeepseekEndpointManager({ hostId, isLocal, busy, setBusy }) {
         <button className="btn small" onClick={() => usePreset('official')}>用 DeepSeek 官方</button>
         <button className="btn small" onClick={() => usePreset('newapi')}>用自建中转(new-api)</button>
       </div>
+
+      {/* 中转站后台给的是一段 JSON,一次粘贴就配好,不用在几个框之间手抄 */}
+      <label>粘贴中转站配置串(可选)
+        <textarea rows={2} value={relayText} onChange={(e) => setRelayText(e.target.value)}
+          placeholder={'{"key":"sk-...","url":"http://203.0.113.10:3000"}'} />
+      </label>
+      <button className="btn small" disabled={busy || !relayText.trim()} onClick={importRelay}>
+        解析并填入
+      </button>
+      <p className="muted small">
+        解析出的密钥只会填进下方输入框、随「写入远程」下发,<b>不会存进本应用的配置文件</b>。
+      </p>
 
       <div className="form-grid">
         <label>端点地址
@@ -431,20 +456,20 @@ function DeepseekEndpointManager({ hostId, isLocal, busy, setBusy }) {
       </p>
       <button className="btn primary" disabled={busy} onClick={save}>保存端点配置</button>
 
-      {!isLocal && (
-        <>
-          <h4 style={{ margin: '14px 0 6px' }}>API Key 下发</h4>
-          <div className="row gap">
-            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-..." style={{ flex: 1 }} />
-            <button className="btn" disabled={busy} onClick={writeKey}>写入远程</button>
-          </div>
-          <p className="muted small">
-            只写到远程 <code>~/.remote-agent-env.sh</code>(600 权限),不会存进本应用的配置文件,
-            也不会出现在日志里。换 key 时重新写入即可覆盖。
-          </p>
-        </>
-      )}
+      {/* 本机同样需要写 key —— 本地项目也会用 DeepSeek 引擎,
+          原先这里只对远程开放,本机等于完全没有入口 */}
+      <h4 style={{ margin: '14px 0 6px' }}>API Key {isLocal ? '写入本机' : '下发远程'}</h4>
+      <div className="row gap">
+        <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+          placeholder="sk-..." style={{ flex: 1 }} />
+        <button className="btn" disabled={busy} onClick={writeKey}>
+          {isLocal ? '写入本机' : '写入远程'}
+        </button>
+      </div>
+      <p className="muted small">
+        只写到 <code>~/.remote-agent-env.sh</code>(600 权限),不会存进本应用的配置文件,
+        也不会出现在日志里。换 key 时重新写入即可覆盖。
+      </p>
       {note && <p className="muted small">{note}</p>}
     </Fold>
   );

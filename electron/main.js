@@ -8,6 +8,7 @@ const { ProxyService } = require('./ssh/ProxyService');
 const { Installer } = require('./ssh/Installer');
 const { AgentSession } = require('./ssh/AgentSession');
 const { deepseekEnvPosix, DEEPSEEK_DEFAULT_MODEL } = require('./ssh/deepseek');
+const deepseekMod = require('./ssh/deepseek');
 const { GROK_DEFAULT_MODEL, parseGrokSpec } = require('./ssh/grokProviders');
 const { LocalExecutor } = require('./LocalExecutor');
 const { AttachmentService } = require('./chat/AttachmentService');
@@ -1094,6 +1095,16 @@ function stopMobileGateway() {
   mobileGatewayHandle = null;
   return new Promise((resolve) => server.close(() => resolve()));
 }
+
+/**
+ * 解析中转站配置串(new-api 等)。
+ * 只做解析并回传脱敏预览,key 的落地仍走 setup:setEnvKey ——
+ * 这样密钥不会进设置文件,也不会出现在任何日志里。
+ */
+ipcMain.handle('deepseek:parseRelay', (_e, { text } = {}) => {
+  const { baseUrl, key } = deepseekMod.parseRelayConfig(text);
+  return { baseUrl, key, keyMasked: deepseekMod.maskKey(key) };
+});
 
 ipcMain.handle('mobile:getConfig', () => ({
   ...mobileService.getConfig(),

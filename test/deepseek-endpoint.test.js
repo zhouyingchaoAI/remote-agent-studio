@@ -19,8 +19,8 @@ test('不配时保持官方端点(不破坏既有行为)', () => {
 });
 
 test('自建中转:填根地址即可,末尾斜杠被去掉', () => {
-  const e = resolveEndpoint({ baseUrl: 'http://122.51.25.98:3000/', model: 'deepseek-chat' });
-  assert.equal(e.baseUrl, 'http://122.51.25.98:3000');
+  const e = resolveEndpoint({ baseUrl: 'http://203.0.113.10:3000/', model: 'deepseek-chat' });
+  assert.equal(e.baseUrl, 'http://203.0.113.10:3000');
   assert.equal(e.model, 'deepseek-chat');
   // 没单独配轻量模型时跟随主模型 —— 中转站常常只挂一个
   assert.equal(e.flashModel, 'deepseek-chat');
@@ -57,8 +57,8 @@ test('环境变量名与模型名同样校验', () => {
 /* ---------------- 生成的 shell 片段 ---------------- */
 
 test('posix env 片段指向配置的端点,且 key 走环境变量而不是内联', () => {
-  const env = deepseekEnvPosix({ baseUrl: 'http://122.51.25.98:3000', model: 'deepseek-chat' });
-  assert.ok(env.includes('http://122.51.25.98:3000'));
+  const env = deepseekEnvPosix({ baseUrl: 'http://203.0.113.10:3000', model: 'deepseek-chat' });
+  assert.ok(env.includes('http://203.0.113.10:3000'));
   assert.ok(env.includes('ANTHROPIC_AUTH_TOKEN="${DEEPSEEK_API_KEY:-}"'), 'key 必须由环境变量提供');
   assert.ok(env.includes('unset ANTHROPIC_API_KEY'), '要清掉可能存在的官方 key,否则鉴权会串');
   // 绝不能出现任何 sk- 开头的真实密钥
@@ -72,12 +72,12 @@ test('自定义环境变量名会被正确引用', () => {
 
 test('生成的片段在真实 shell 里可执行且变量正确', () => {
   const env = deepseekEnvPosix({
-    baseUrl: 'http://122.51.25.98:3000', model: 'deepseek-chat', flashModel: 'deepseek-chat'
+    baseUrl: 'http://203.0.113.10:3000', model: 'deepseek-chat', flashModel: 'deepseek-chat'
   });
   const out = execFileSync('sh', ['-c',
     `DEEPSEEK_API_KEY=dummy-token; ${env} echo "$ANTHROPIC_BASE_URL|$ANTHROPIC_AUTH_TOKEN|$ANTHROPIC_DEFAULT_HAIKU_MODEL"`
   ], { encoding: 'utf8' }).trim();
-  assert.equal(out, 'http://122.51.25.98:3000|dummy-token|deepseek-chat');
+  assert.equal(out, 'http://203.0.113.10:3000|dummy-token|deepseek-chat');
 });
 
 test('powershell 片段同样跟随配置', () => {
@@ -115,3 +115,53 @@ test('仓库里没有任何真实密钥(用户曾在对话里贴过)', () => {
   assert.equal(out, '', `这些文件里疑似有密钥:\n${out}`);
 });
 
+
+/* ---------------- 中转站配置串导入 ---------------- */
+
+const { parseRelayConfig, maskKey } = require('../electron/ssh/deepseek');
+
+test('解析 new-api 配置串:取出地址与密钥', () => {
+  const r = parseRelayConfig(
+    '{"_type":"newapi_channel_conn","key":"sk-AAAABBBBCCCCDDDDEEEEFFFF","url":"http://1.2.3.4:3000"}'
+  );
+  assert.equal(r.baseUrl, 'http://1.2.3.4:3000');
+  assert.equal(r.key, 'sk-AAAABBBBCCCCDDDDEEEEFFFF');
+});
+
+test('兼容常见字段别名与末尾斜杠', () => {
+  assert.equal(parseRelayConfig('{"base_url":"http://a.b:1/","api_key":"k1"}').baseUrl, 'http://a.b:1');
+  assert.equal(parseRelayConfig('{"baseUrl":"http://a.b:1","token":"k2"}').key, 'k2');
+});
+
+test('不是合法 JSON 时宽松提取(用户常只粘一部分)', () => {
+  const r = parseRelayConfig('渠道地址 http://5.6.7.8:3000 密钥 sk-1234567890ABCDEFGH 请妥善保管');
+  assert.equal(r.baseUrl, 'http://5.6.7.8:3000');
+  assert.equal(r.key, 'sk-1234567890ABCDEFGH');
+});
+
+test('缺地址或完全认不出时给出明确错误', () => {
+  assert.throws(() => parseRelayConfig(''), /请粘贴/);
+  assert.throws(() => parseRelayConfig('{"key":"sk-xxxxxxxxxxxxxxxxxx"}'), /没有 url/);
+  assert.throws(() => parseRelayConfig('一段无关文字'), /没认出/);
+});
+
+test('配置串里的非法地址同样被挡下', () => {
+  assert.throws(() => parseRelayConfig('{"url":"http://a.b; rm -rf /","key":"k"}'), /不合法/);
+});
+
+test('脱敏只留头尾,足够辨认又不泄漏', () => {
+  const masked = maskKey('sk-AAAABBBBCCCCDDDDEEEEFFFF');
+  assert.equal(masked, 'sk-AA…FFFF');
+  assert.ok(!masked.includes('BBBBCCCC'));
+  assert.equal(maskKey(''), '');
+  assert.equal(maskKey('short'), '****');
+});
+
+test('本机也能写 API Key(此前只对远程开放,本地项目等于没入口)', () => {
+  const fs = require('fs');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src/components/SetupPanel.jsx'), 'utf8');
+  const seg = src.slice(src.indexOf('function DeepseekEndpointManager'));
+  const keySection = seg.slice(seg.indexOf('API Key'), seg.indexOf('API Key') + 400);
+  assert.ok(!/\{!isLocal && \(/.test(keySection), 'API Key 区块不该再被 !isLocal 挡住');
+  assert.match(seg, /写入本机/);
+});

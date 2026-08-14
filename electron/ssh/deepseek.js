@@ -94,6 +94,43 @@ function resolveEndpoint(cfg = {}) {
   };
 }
 
+/**
+ * 解析中转站给的配置串,例如:
+ *   {"_type":"newapi_channel_conn","key":"sk-xxx","url":"http://1.2.3.4:3000"}
+ *
+ * 目的是让用户一次粘贴就配好,不用在几个框之间手抄。
+ * 注意:解析出的 key 只用于当场下发到远程环境文件,
+ * 调用方绝不能把它写进设置、日志或任何持久化文件。
+ */
+function parseRelayConfig(text) {
+  const raw = String(text || '').trim();
+  if (!raw) throw new Error('请粘贴中转站配置串');
+
+  let obj = null;
+  try { obj = JSON.parse(raw); } catch (_) { /* 不是 JSON 就走宽松提取 */ }
+
+  if (!obj || typeof obj !== 'object') {
+    // 用户可能只粘了一部分,或者带了多余的前后缀
+    const url = (raw.match(/https?:\/\/[^\s"',}]+/) || [])[0];
+    const key = (raw.match(/\bsk-[A-Za-z0-9_-]{16,}/) || [])[0];
+    if (!url && !key) throw new Error('没认出地址或密钥,请检查粘贴内容');
+    obj = { url, key };
+  }
+
+  const url = String(obj.url || obj.base_url || obj.baseUrl || '').trim();
+  const key = String(obj.key || obj.api_key || obj.apiKey || obj.token || '').trim();
+  if (!url) throw new Error('配置串里没有 url 字段');
+
+  return { baseUrl: normalizeBaseUrl(url), key };
+}
+
+/** 脱敏:任何要展示或记录的地方都必须先过这一层 */
+function maskKey(key) {
+  const k = String(key || '');
+  if (k.length <= 10) return k ? '****' : '';
+  return `${k.slice(0, 5)}…${k.slice(-4)}`;
+}
+
 /** POSIX shell(远程 Linux / 本机 mac)env 前缀 */
 function deepseekEnvPosix(cfg) {
   const { baseUrl, flashModel, envKey } = resolveEndpoint(cfg);
@@ -130,5 +167,6 @@ module.exports = {
   DEEPSEEK_BASE_URL, DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_FLASH_MODEL,
   DEEPSEEK_MODEL_PRESETS, DEFAULT_ENDPOINT, ENDPOINT_PRESETS, DEFAULT_ENV_KEY,
   normalizeBaseUrl, normalizeEnvKey, normalizeModel, resolveEndpoint,
+  parseRelayConfig, maskKey,
   deepseekEnvPosix, deepseekEnvPowershell, resolveDeepseekModel
 };
