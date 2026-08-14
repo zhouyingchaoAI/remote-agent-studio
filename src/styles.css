@@ -602,3 +602,35 @@ progress { width: 140px; height: 6px; }
   border: 1px solid var(--border); border-radius: 6px; padding: 3px 5px; }
 .image-block:hover .image-tools { opacity: 1; }
 .lightbox-bar { display: flex; align-items: center; gap: 10px; margin-top: 10px; color: var(--text); }
+
+/* ---------------- 引擎就绪徽标(对话框顶栏) ---------------- */
+.engine-status { position: relative; }
+.engine-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+  padding: 3px 9px; border-radius: 6px; cursor: pointer;
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text); }
+.engine-badge:hover { border-color: var(--accent); }
+.engine-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+.engine-badge.ready .dot { background: #6ee7b7; }
+.engine-badge.missing .dot { background: var(--red); }
+.engine-badge.unknown .dot { background: var(--yellow); }
+
+.engine-pop-backdrop { position: fixed; inset: 0; z-index: 40; }
+.engine-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 41; width: 300px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; box-shadow: 0 8px 28px rgba(0,0,0,0.45); }
+.engine-pop-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.engine-facts { display: grid; grid-template-columns: 56px 1fr; gap: 4px 10px;
+  margin: 0 0 10px; font-size: 12px; }
+.engine-facts dt { color: var(--muted); }
+.engine-facts dd { margin: 0; word-break: break-all; }
+.engine-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.block-btn { width: 100%; margin-top: 10px; }
+
+/* ---------------- 环境配置:折叠分区 ---------------- */
+.fold { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
+.fold-head { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 9px 12px; background: var(--bg2); border: none; color: var(--text); cursor: pointer; font-size: 13px; }
+.fold-head:hover { background: var(--bg3); }
+.fold-caret { color: var(--muted); width: 12px; }
+.fold.open .fold-head { border-bottom: 1px solid var(--border); }
+.fold-body { padding: 12px; }

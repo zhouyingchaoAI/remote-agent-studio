@@ -9,6 +9,7 @@ import {
   GOAL_DEFAULT_MAX_ROUNDS, GOAL_EXTEND_ROUNDS
 } from '../goalMode.js';
 import FilePreview from './FilePreview.jsx';
+import EngineStatus from './EngineStatus.jsx';
 import Markdown from './Markdown.jsx';
 
 /* 统一 diff(unified diff)红绿渲染 */
@@ -460,6 +461,8 @@ function ChatView({ hostId, conv }) {
           <option value="deepseek">◈ DeepSeek</option>
           <option value="grok">▣ 国产模型(Grok)</option>
         </select>
+        {/* 就在干活的地方看到引擎是否可用,并原地安装/下发认证,不用切页 */}
+        <EngineStatus hostId={hostId} engine={conv.agent} />
         <b className="conv-title">{conv.title}</b>
         <span className="muted small">{conv.cwd || '~'}</span>
         <ModelPicker

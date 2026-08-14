@@ -105,8 +105,8 @@ export default function SetupPanel({ hostId, host }) {
           </p>
         </section>
 
-        {!isLocal && <section>
-          <h3>网络代理</h3>
+        {!isLocal && <Fold title="网络代理" hint="远程如何访问外网">
+
           <label className="radio">
             <input type="radio" checked={proxyMode === 'direct'} onChange={() => setProxyMode('direct')} />
             <b>局域网代理直连(默认)</b> — 远程直接访问本机/局域网代理
@@ -151,10 +151,9 @@ export default function SetupPanel({ hostId, host }) {
             不使用代理 / 清除配置
           </label>
           <button className="btn primary" disabled={busy} onClick={configureProxy}>应用代理配置并测试</button>
-        </section>}
+        </Fold>}
 
-        <section>
-          <h3>本机 Codex 认证</h3>
+        <Fold title="认证与下发" hint="本机登录状态,以及把凭据下发到远程" defaultOpen>
           <LocalCodexCard />
           {!isLocal && <div className="row gap" style={{ marginTop: 10 }}>
             <button className="btn primary" disabled={busy}
@@ -187,10 +186,9 @@ export default function SetupPanel({ hostId, host }) {
               测试国产模型(Grok)
             </button>
           </div>}
-        </section>
+        </Fold>
 
-        {!isLocal && <section>
-          <h3>API Key(可选)</h3>
+        {!isLocal && <Fold title="API Key(可选)" hint="也可在「终端」页交互登录">
           <p className="muted small">也可以在「终端」页运行 codex login / claude 交互登录。</p>
           <div className="row gap">
             <select value={apiAgent} onChange={(e) => setApiAgent(e.target.value)}>
@@ -205,7 +203,7 @@ export default function SetupPanel({ hostId, host }) {
             <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-..." style={{ flex: 1 }} />
             <button className="btn" disabled={busy} onClick={saveKey}>写入远程</button>
           </div>
-        </section>}
+        </Fold>}
 
         {!isLocal && <GrokModelsManager hostId={hostId} busy={busy} setBusy={setBusy} />}
       </div>
@@ -290,8 +288,7 @@ function GrokModelsManager({ hostId, busy, setBusy }) {
   });
 
   return (
-    <section>
-      <h3>国产模型(Grok)端点配置</h3>
+    <Fold title="国产模型(Grok)端点配置" hint="DeepSeek / GLM / Kimi 等自定义端点">
       <p className="muted small">
         全部在此配置,自动写入远程 <code>~/.grok/config.toml</code>,无需手改文件。API Key 存 600 权限 env 文件,不落配置明文。
       </p>
@@ -343,6 +340,25 @@ function GrokModelsManager({ hostId, busy, setBusy }) {
       <button className="btn small ghost" disabled={busy} onClick={syncNow} style={{ marginTop: 8 }}>
         重新同步到远程 config.toml
       </button>
+    </Fold>
+  );
+}
+
+/**
+ * 可折叠分区。
+ * 这一页原本七八块内容全部平铺,一屏看不完也找不到东西 ——
+ * 只有「环境概览」和「认证」是常用的,其余默认收起。
+ */
+function Fold({ title, hint, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className={`fold ${open ? 'open' : ''}`}>
+      <button className="fold-head" onClick={() => setOpen((v) => !v)}>
+        <span className="fold-caret">{open ? '▾' : '▸'}</span>
+        <b>{title}</b>
+        {hint && <span className="muted small">{hint}</span>}
+      </button>
+      {open && <div className="fold-body">{children}</div>}
     </section>
   );
 }
