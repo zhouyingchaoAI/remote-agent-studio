@@ -11,11 +11,10 @@ const path = require('path');
 const { shellQuote } = require('./SSHManager');
 const { extractImagePaths, isDangerousCommand } = require('../chat/attachments');
 const { deepseekEnvPosix, deepseekEnvPowershell, resolveDeepseekModel } = require('./deepseek');
-const { parseGrokSpec } = require('./grokProviders');
+const { dshEnvPosix, dshEnvPowershell, dshArgs, withHistory, describeExit } = require('./dsh');
 const { isTransientAgentError, describeTransient } = require('../transientErrors');
-const { randomUUID } = require('crypto');
 
-const AGENT_PATH = 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$HOME/.grok/bin:$PATH"; ' +
+const AGENT_PATH = 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"; ' +
   'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1; ' +
   '[ -s "$HOME/.remote-agent-node-env.sh" ] && . "$HOME/.remote-agent-node-env.sh"; ' +
   '[ -s "$HOME/.remote-agent-env.sh" ] && . "$HOME/.remote-agent-env.sh";';
@@ -53,9 +52,9 @@ class AgentSession extends EventEmitter {
   /**
    * @param ssh SSHManager
    * @param proxy ProxyService|null
-   * @param opts {agent:'codex'|'claude'|'deepseek'|'grok', cwd, permissionMode?:'workspace'|'system', autoApprove?:boolean, model?}
+   * @param opts {agent:'codex'|'claude'|'deepseek'|'dsh', cwd, permissionMode?:'workspace'|'system', autoApprove?:boolean, model?}
    *   deepseek: 复用 claude CLI 管线,注入 DeepSeek Anthropic 兼容端点(api.deepseek.com/anthropic)
-   *   grok    : xAI grok CLI headless 模式,国产模型经 config.toml 自定义端点接入
+   *   dsh     : DeepSeek Harness 无头模式。只输出最终文本,无流式/无工具事件/无 resume
    */
   constructor(ssh, proxy, opts) {
     super();
@@ -65,8 +64,7 @@ class AgentSession extends EventEmitter {
     this.claudeSessionId = null;
     this.codexSessionId = null; // codex 会话/线程 ID,优先用它精确 resume
     this.codexStarted = false;
-    this.grokSessionId = null;      // grok 已确认可 resume 的会话 ID
-    this.pendingGrokSessionId = null; // 本轮用 -s 新建的会话 ID,成功后转正
+    this.dshBuffer = '';            // dsh 无流式,先攒 stdout,收尾时整段发出
     this.running = false;
     this.stream = null;
     this.permissionHintEmitted = false;
@@ -81,24 +79,6 @@ class AgentSession extends EventEmitter {
     this.emit('message', msg);
   }
 
-  /**
-   * grok headless 参数(平台无关部分)。
-   * 权限:headless 必须 --yolo 免交互;workspace 模式叠加 OS 级沙箱(仅写工作目录)。
-   * 续聊:优先 --resume;首轮用 -s 预生成 UUID,成功后转正为可 resume 的会话 ID。
-   */
-  _grokArgs(quote) {
-    const { model, permissionMode } = this.opts;
-    const { alias } = parseGrokSpec(model);
-    const perm = permissionMode === 'system' ? '--yolo' : '--yolo --sandbox workspace';
-    let session;
-    if (this.grokSessionId) {
-      session = `--resume ${quote(this.grokSessionId)}`;
-    } else {
-      this.pendingGrokSessionId = randomUUID();
-      session = `-s ${quote(this.pendingGrokSessionId)}`;
-    }
-    return `--output-format streaming-json -m ${quote(alias)} ${session} ${perm}`;
-  }
 
   buildCommand(prompt, turn = {}) {
     const { agent, cwd, model, permissionMode } = this.opts;
@@ -121,8 +101,9 @@ class AgentSession extends EventEmitter {
 
     if (this.ssh?.isWindowsNative) {
       const cd = cwd ? `Set-Location -LiteralPath ${powershellQuote(cwd)}; ` : '';
-      if (agent === 'grok') {
-        return `${cd}& grok ${this._grokArgs(powershellQuote)} -p ${powershellQuote(fullPrompt)}`;
+      if (agent === 'dsh') {
+        // dsh 没有 --model:模型由 profile 配置决定,对话里的模型选择对它无效
+        return `${cd}${dshEnvPowershell(this.opts.dshConfig)} & dsh ${dshArgs()} ${powershellQuote(withHistory(fullPrompt, this.opts.history))}`;
       }
       if (agent === 'codex') {
         const approval = permissionMode === 'system'
@@ -165,8 +146,10 @@ class AgentSession extends EventEmitter {
     // 先回报 shell PID,再用 exec 让 agent 继承该 PID —— 「停止」时可以精确 kill 远端进程
     const wrap = (invocation) => `${env} ${cd}{ echo "__RAS_PID_$$__"; exec ${invocation}; } </dev/null`;
 
-    if (agent === 'grok') {
-      return wrap(`grok ${this._grokArgs(shellQuote)} -p ${q}`);
+    if (agent === 'dsh') {
+      // 每轮都是全新会话,多轮上下文只能靠把历史摘要拼进任务文本
+      const task = shellQuote(withHistory(fullPrompt, this.opts.history));
+      return wrap(`${dshEnvPosix(this.opts.dshConfig)} dsh ${dshArgs()} ${task}`);
     }
     if (agent === 'codex') {
       const approval = permissionMode === 'system'
@@ -241,22 +224,27 @@ class AgentSession extends EventEmitter {
         if (code !== 0 && code != null) {
           const detail = [this.lastStderr.trim(), ...(this.lastLines || [])]
             .filter(Boolean).join('\n').slice(-800);
-          this._emitMsg({
-            kind: 'error',
-            text: `进程退出码 ${code}(若提示未登录/无 API key,请到"环境配置"页设置)` +
-              (detail ? `\n—— 最近输出 ——\n${detail}` : '')
-          });
+          if (this.opts.agent === 'dsh') {
+            // dsh 以 0=完成、1=未完成,退 1 不一定是崩溃,措辞别误导
+            const r = describeExit(code, this.dshBuffer, this.lastStderr);
+            this._emitMsg({ kind: 'error', text: r.message });
+          } else {
+            this._emitMsg({
+              kind: 'error',
+              text: `进程退出码 ${code}(若提示未登录/无 API key,请到"环境配置"页设置)` +
+                (detail ? `\n—— 最近输出 ——\n${detail}` : '')
+            });
+          }
         }
         resolve(code);
       }));
       // 仅在成功后标记,避免失败的首轮把下一轮误设为 resume
       if (this.opts.agent === 'codex' && (exitCode === 0 || exitCode == null)) this.codexStarted = true;
-      if (this.opts.agent === 'grok') {
-        // 首轮 -s 新建的会话:成功才转正,失败则下一轮换新 UUID 重建
-        if ((exitCode === 0 || exitCode == null) && this.pendingGrokSessionId && !this.grokSessionId) {
-          this.grokSessionId = this.pendingGrokSessionId;
-        }
-        this.pendingGrokSessionId = null;
+      if (this.opts.agent === 'dsh') {
+        // dsh 只在 stdout 打最终文本,收尾时整段发出(没有流式增量可用)
+        const text = this.dshBuffer.trim();
+        this.dshBuffer = '';
+        if (text) this._emitMsg({ kind: 'text', text });
       }
       return { imagePaths: [...this.imagePaths] };
     } finally {
@@ -282,6 +270,16 @@ class AgentSession extends EventEmitter {
     // PID 标记行:记录远端进程号,不进入消息流
     const pidMatch = line.match(/^__RAS_PID_(\d+)__$/);
     if (pidMatch) { this.remotePid = Number(pidMatch[1]); return; }
+    /* dsh 的 stdout 是纯文本(官方 headless 只打最终 assistant 文本),
+     * 不是 NDJSON。硬走 JSON 解析会把每行都当成 raw 冒泡,刷一屏碎片。 */
+    if (this.opts.agent === 'dsh') {
+      if (this.lastLines) {
+        this.lastLines.push(line.slice(0, 400));
+        if (this.lastLines.length > 5) this.lastLines.shift();
+      }
+      this.dshBuffer += (this.dshBuffer ? '\n' : '') + line;
+      return;
+    }
     if (this.lastLines) {
       this.lastLines.push(line.slice(0, 400));
       if (this.lastLines.length > 5) this.lastLines.shift();
@@ -295,7 +293,7 @@ class AgentSession extends EventEmitter {
       if (!this.imagePaths.includes(imagePath)) this.imagePaths.push(imagePath);
     }
     if (this.opts.agent === 'codex') this._parseCodex(ev);
-    else if (this.opts.agent === 'grok') this._parseGrok(ev);
+
     else this._parseClaude(ev);
   }
 
@@ -389,83 +387,6 @@ class AgentSession extends EventEmitter {
         return this._emitMsg({ kind: 'error', text: msg.message || JSON.stringify(msg) });
       default: return;
     }
-  }
-
-  /**
-   * grok -p --output-format streaming-json 的 NDJSON 事件。
-   * 事件 schema 未随文档发布,这里按字段形态防御式解析:
-   * 认字段不认类型名,未知事件不冒泡(保留在 lastLines 诊断缓冲里)。
-   */
-  _parseGrok(ev) {
-    if (!ev || typeof ev !== 'object') return;
-    const t = String(ev.type || ev.event || ev.kind || '').toLowerCase();
-    const sid = ev.session_id || ev.sessionId || (ev.session && ev.session.id);
-    if (sid && typeof sid === 'string') this.grokSessionId = sid;
-
-    const firstString = (...vals) => vals.find((v) => typeof v === 'string' && v);
-
-    // 错误
-    if (t.includes('error') || ev.error) {
-      const err = ev.error || {};
-      return this._emitMsg({
-        kind: 'error',
-        text: firstString(err.message, ev.message, ev.text, JSON.stringify(ev.error || ev))
-      });
-    }
-    // 工具调用 / 工具输出
-    if (t.includes('tool') || ev.tool || ev.tool_name || ev.toolName) {
-      const tool = ev.tool || {};
-      const input = ev.input || ev.args || tool.input || {};
-      const output = firstString(ev.output, ev.result, tool.output,
-        typeof ev.content === 'string' ? ev.content : undefined);
-      if (output && (t.includes('result') || t.includes('output') || t.includes('end') || t.includes('complete'))) {
-        this._maybeEmitPermissionHint(output);
-        return this._emitMsg({ kind: 'tool_output', output: output.slice(0, 4000) });
-      }
-      const detail = firstString(input.command, ev.command, input.file_path, input.path,
-        input.pattern, JSON.stringify(input).slice(0, 500));
-      const cmd = firstString(input.command, ev.command);
-      return this._emitMsg({
-        kind: 'tool',
-        name: firstString(ev.tool_name, ev.toolName, tool.name, ev.name, '工具'),
-        detail,
-        dangerous: isDangerousCommand(cmd)
-      });
-    }
-    // 增量(文本 / 思考)
-    const delta = firstString(ev.delta, ev.chunk, t.includes('delta') ? ev.text : undefined,
-      t.includes('delta') && typeof ev.content === 'string' ? ev.content : undefined);
-    if (delta != null && (t.includes('delta') || typeof ev.delta === 'string' || typeof ev.chunk === 'string')) {
-      const reasoning = t.includes('think') || t.includes('reason');
-      return this._emitMsg({ kind: reasoning ? 'reasoning_delta' : 'text_delta', text: delta });
-    }
-    // 完整思考块
-    if ((t.includes('think') || t.includes('reason')) && firstString(ev.text, ev.content)) {
-      return this._emitMsg({ kind: 'reasoning', text: firstString(ev.text, ev.content) });
-    }
-    // 回合结束 / 用量(headless json 字段:text/stopReason/sessionId/usage/cost)
-    if (ev.usage || ev.stopReason != null || ev.stop_reason != null ||
-        t.includes('result') || t.includes('finish') || t.includes('turn.complete')) {
-      const u = ev.usage || {};
-      if (ev.usage) {
-        this._emitMsg({
-          kind: 'usage',
-          inputTokens: u.input_tokens ?? u.inputTokens ?? u.prompt_tokens ?? 0,
-          outputTokens: u.output_tokens ?? u.outputTokens ?? u.completion_tokens ?? 0,
-          costUsd: ev.cost ?? ev.costUsd ?? 0
-        });
-      }
-      const text = firstString(ev.text, ev.result);
-      if (text) return this._emitMsg({ kind: 'result', text });
-      return;
-    }
-    // 完整文本消息
-    const text = firstString(ev.text, typeof ev.content === 'string' ? ev.content : undefined,
-      typeof ev.message === 'string' ? ev.message : undefined);
-    if (text && (t === '' || t.includes('message') || t.includes('text') || t.includes('assistant'))) {
-      return this._emitMsg({ kind: 'text', text });
-    }
-    // 其余未知事件:不冒泡,lastLines 已留诊断
   }
 
   /** claude -p --output-format stream-json 的事件 */

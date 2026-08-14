@@ -3,14 +3,14 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 /**
  * 技能(Agent Skills)管理。
  *
- * SKILL.md 是跨引擎开放标准,一份技能对 claude / codex / grok 同时生效。
+ * SKILL.md 是跨引擎开放标准,一份技能对 claude / codex / dsh 同时生效。
  * 远程主机默认是裸环境,一条技能都没有 —— 这个面板就是把技能装过去的地方。
  */
 
 const ENGINES = [
   { key: 'claude', label: 'Claude Code', dir: '~/.claude/skills' },
   { key: 'codex', label: 'Codex', dir: '~/.codex/skills' },
-  { key: 'grok', label: 'Grok / 国产模型', dir: '~/.grok/skills' }
+  { key: 'dsh', label: 'DeepSeek Harness', dir: '~/.dsh/skills' }
 ];
 
 export default function SkillsPanel({ hostId, connected }) {

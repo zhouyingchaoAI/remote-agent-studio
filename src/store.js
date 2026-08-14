@@ -6,8 +6,15 @@ function normalizePermissionMode(value) {
   return value?.autoApprove === true ? 'system' : 'workspace';
 }
 
+/** grok 引擎已移除:历史对话平滑迁移到 dsh,否则打开时引擎为空、发不出消息 */
+const LEGACY_AGENTS = { grok: 'dsh' };
+
 function normalizeConversation(conv) {
-  return { ...conv, permissionMode: normalizePermissionMode(conv) };
+  return {
+    ...conv,
+    agent: LEGACY_AGENTS[conv.agent] || conv.agent,
+    permissionMode: normalizePermissionMode(conv)
+  };
 }
 
 export const useStore = create((set, get) => ({
@@ -27,7 +34,7 @@ export const useStore = create((set, get) => ({
   queued: {},           // convId -> [{id,text,files}] 排队待发送的消息
   setupLogs: {},        // hostId -> string
   envInfo: {},          // hostId -> {os,node,npm,codex,claude}
-  settings: { theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5, grokModels: [], screenshotShortcut: 'CommandOrControl+Shift+2', screenshotShortcutEnabled: true },
+  settings: { theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5, screenshotShortcut: 'CommandOrControl+Shift+2', screenshotShortcutEnabled: true },
   showSettings: false,
 
   setShowSettings: (v) => set({ showSettings: v }),
@@ -69,7 +76,7 @@ export const useStore = create((set, get) => ({
     if (s.conversations[conv.id]) return conv.id;
     const full = {
       messages: [], claudeSessionId: null, codexSessionId: null,
-      codexStarted: false, grokSessionId: null,
+      codexStarted: false,
       permissionMode: 'workspace', autoApprove: false, model: '',
       createdAt: Date.now(), ...conv, updatedAt: Date.now()
     };
@@ -86,7 +93,7 @@ export const useStore = create((set, get) => ({
       agent: opts.agent, cwd: opts.cwd || '', model: opts.model || '',
       permissionMode: normalizePermissionMode(opts),
       autoApprove: !!opts.autoApprove,
-      messages: [], claudeSessionId: null, codexSessionId: null, codexStarted: false, grokSessionId: null,
+      messages: [], claudeSessionId: null, codexSessionId: null, codexStarted: false,
       createdAt: Date.now(), updatedAt: Date.now()
     };
     set((s) => ({
@@ -171,7 +178,7 @@ export const useStore = create((set, get) => ({
     persist();
   },
 
-  updateConvResume: (convId, { claudeSessionId, codexSessionId, codexStarted, grokSessionId, lastTurnAgent }) => {
+  updateConvResume: (convId, { claudeSessionId, codexSessionId, codexStarted, lastTurnAgent }) => {
     set((s) => {
       const c = s.conversations[convId];
       if (!c) return {};
@@ -179,7 +186,7 @@ export const useStore = create((set, get) => ({
         conversations: {
           ...s.conversations,
           [convId]: {
-            ...c, claudeSessionId, codexSessionId, codexStarted, grokSessionId,
+            ...c, claudeSessionId, codexSessionId, codexStarted,
             ...(lastTurnAgent ? { lastTurnAgent } : {})
           }
         }
@@ -229,8 +236,8 @@ export const useStore = create((set, get) => ({
       // claude 与 deepseek 共用 claude CLI 的会话机制(claudeSessionId)
       const cleared = agent === 'codex'
         ? { codexSessionId: null, codexStarted: false }
-        : agent === 'grok'
-          ? { grokSessionId: null }
+        : agent === 'dsh'
+          ? {}   // dsh 每轮都是新会话,没有 resume 状态需要清
           : { claudeSessionId: null };
       return {
         conversations: {

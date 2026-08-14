@@ -226,7 +226,7 @@ function AutoCaptureSettings() {
           <option value="">自动选择(推荐,实测哪个能用就用哪个)</option>
           <option value="codex">Codex</option>
           <option value="claude">Claude Code</option>
-          <option value="grok">国产模型(Grok)</option>
+          <option value="dsh">DeepSeek Harness</option>
           <option value="deepseek">DeepSeek</option>
         </select>
       </label>

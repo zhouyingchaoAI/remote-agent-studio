@@ -1,5 +1,5 @@
 /**
- * 斜杠命令(/ 开头)—— 对标 codex/grok 的命令面板。
+ * 斜杠命令(/ 开头)—— 对标 codex 的命令面板。
  * 纯解析层:只负责"这句话是什么命令、参数是什么、有哪些候选",
  * 具体动作由调用方执行,便于单测与复用。
  */
@@ -7,7 +7,7 @@
 export const COMMANDS = [
   { name: 'goal', args: '<目标描述> | status | pause | resume | max <轮数> | clear',
     desc: '目标模式:设定目标后跨轮自动推进,直到达成或触发上限' },
-  { name: 'engine', args: 'codex | claude | deepseek | grok',
+  { name: 'engine', args: 'codex | claude | deepseek | dsh',
     desc: '切换引擎(同对话内上下文自动接力)' },
   { name: 'model', args: '<模型名>', desc: '切换模型,留空恢复默认' },
   { name: 'mode', args: 'workspace | system', desc: '切换权限模式' },

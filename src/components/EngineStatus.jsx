@@ -8,9 +8,9 @@ import { useStore } from '../store.js';
  * 修一下还得再切回来。状态和操作都应该出现在干活的地方。
  */
 
-const ENGINE_LABEL = { codex: 'Codex', claude: 'Claude Code', deepseek: 'DeepSeek', grok: 'Grok' };
-/** deepseek 复用 claude CLI,grok 及国产模型走 grok CLI */
-const ENGINE_BIN = { codex: 'codex', claude: 'claude', deepseek: 'claude', grok: 'grok' };
+const ENGINE_LABEL = { codex: 'Codex', claude: 'Claude Code', deepseek: 'DeepSeek', dsh: 'DeepSeek Harness' };
+/** deepseek 复用 claude CLI;dsh 是 DeepSeek 官方 harness,自带二进制 */
+const ENGINE_BIN = { codex: 'codex', claude: 'claude', deepseek: 'claude', dsh: 'dsh' };
 
 /** 由检测结果算出状态,纯函数便于单测 */
 export function engineReadiness(engine, env) {

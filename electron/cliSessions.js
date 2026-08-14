@@ -217,7 +217,7 @@ function buildRemoteDiagnoseCommand() {
     '  echo "SAMPLE|$f|$(wc -c < "$f" 2>/dev/null)";',
     'done;',
     // 也看看有没有装 CLI(没装过自然没有会话)
-    'for c in claude codex grok; do',
+    'for c in claude codex dsh; do',
     '  p=$(command -v $c 2>/dev/null); echo "CLI|$c|${p:-未安装}";',
     'done'
   ].join('\n');

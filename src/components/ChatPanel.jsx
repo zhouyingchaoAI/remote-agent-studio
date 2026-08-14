@@ -201,7 +201,7 @@ function ChatView({ hostId, conv }) {
     window.api.agent.start({
       hostId, convId: conv.id,
       opts: { agent: conv.agent, cwd: conv.cwd, model: conv.model, permissionMode },
-      resume: { claudeSessionId: conv.claudeSessionId, codexSessionId: conv.codexSessionId, codexStarted: conv.codexStarted, grokSessionId: conv.grokSessionId }
+      resume: { claudeSessionId: conv.claudeSessionId, codexSessionId: conv.codexSessionId, codexStarted: conv.codexStarted }
     }).then(() => setStarted(true)).catch(() => setStarted(true));
     // eslint-disable-next-line
   }, [conv.id, permissionMode, conv.model, conv.agent]);
@@ -234,8 +234,8 @@ function ChatView({ hostId, conv }) {
       }
       case 'engine': {
         const target = args.trim().toLowerCase();
-        if (!['codex', 'claude', 'deepseek', 'grok'].includes(target)) {
-          localNote('用法:/engine codex | claude | deepseek | grok'); return true;
+        if (!['codex', 'claude', 'deepseek', 'dsh'].includes(target)) {
+          localNote('用法:/engine codex | claude | deepseek | dsh'); return true;
         }
         setStarted(false); updateConversationAgent(conv.id, target);
         localNote(`已切换引擎:${target}(上下文自动接力)`); return true;
@@ -459,7 +459,7 @@ function ChatView({ hostId, conv }) {
           <option value="codex">⬡ Codex</option>
           <option value="claude">✳ Claude Code</option>
           <option value="deepseek">◈ DeepSeek</option>
-          <option value="grok">▣ 国产模型(Grok)</option>
+          <option value="dsh">▣ DeepSeek Harness</option>
         </select>
         {/* 就在干活的地方看到引擎是否可用,并原地安装/下发认证,不用切页 */}
         <EngineStatus hostId={hostId} engine={conv.agent} />
@@ -659,40 +659,25 @@ const MODEL_PRESETS = {
   codex: ['gpt-5.6-terra', 'gpt-5-codex', 'gpt-5'],
   claude: ['sonnet', 'opus', 'haiku'],
   deepseek: ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'],
-  // grok 引擎:国产模型统一走 grok CLI + 各家 OpenAI 兼容端点,格式 provider/模型ID
-  grok: [
-    'deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash',
-    'glm/glm-5', 'kimi/kimi-k2.5', 'qwen/qwen3.5-coder', 'minimax/minimax-m2.5'
-  ]
+  // dsh 没有 --model 开关:模型由它自己的 profile 配置决定,这里给不出可选项
+  dsh: []
 };
 const AGENT_NAMES = {
   codex: '⬡ Codex', claude: '✳ Claude Code',
-  deepseek: '◈ DeepSeek', grok: '▣ 国产模型(Grok)'
+  deepseek: '◈ DeepSeek', dsh: '▣ DeepSeek Harness'
 };
-const AGENT_BADGES = { codex: 'Codex', claude: 'Claude', deepseek: 'DeepSeek', grok: '国产模型' };
-/* deepseek 基于 claude CLI 运行;grok 引擎依赖 grok CLI */
+const AGENT_BADGES = { codex: 'Codex', claude: 'Claude', deepseek: 'DeepSeek', dsh: 'dsh' };
+/* deepseek 基于 claude CLI 运行;dsh 是 DeepSeek 官方 harness,自带 dsh 二进制 */
 const agentCliInstalled = (env, agent) => {
   if (agent === 'codex') return env?.codex;
-  if (agent === 'grok') return env?.grok;
+  if (agent === 'dsh') return env?.dsh;
   return env?.claude;
 };
 const CUSTOM_MODEL = '__custom__';
 const EMPTY_QUEUE = []; // 稳定引用:避免 selector 每次返回新数组导致无限重渲染
 
-/* 自定义模型别名(与后端 customModelAlias / grokModelAlias 保持一致) */
-const customGrokAlias = (m) =>
-  `custom-${String(m.label || m.model || 'model').replace(/[^\p{L}\p{N}._-]+/gu, '-').replace(/^-+|-+$/g, '')}`;
-
 function ModelPicker({ agent, value, disabled, onChange }) {
-  const grokModels = useStore((s) => s.settings.grokModels || []);
-  // grok 引擎:预设 + 界面里配的自定义模型(值用别名,与 config.toml [model.<别名>] 对齐)
-  const customOptions = agent === 'grok'
-    ? grokModels.map((m) => ({ value: customGrokAlias(m), label: `${m.label}（自定义）` }))
-    : [];
-  const presets = [
-    ...(MODEL_PRESETS[agent] || []).map((m) => ({ value: m, label: m })),
-    ...customOptions
-  ];
+  const presets = (MODEL_PRESETS[agent] || []).map((m) => ({ value: m, label: m }));
   const presetValues = presets.map((p) => p.value);
   const isPreset = value === '' || presetValues.includes(value);
   const [editing, setEditing] = useState(false);
@@ -739,7 +724,7 @@ function ModelPicker({ agent, value, disabled, onChange }) {
       }}>
       <option value="">{
         agent === 'deepseek' ? '默认(deepseek-v4-pro[1m])' :
-        agent === 'grok' ? '默认(DeepSeek v4-pro)' : '默认模型(跟随 CLI 配置)'}</option>
+        agent === 'dsh' ? '由 dsh profile 决定(此处选择无效)' : '默认模型(跟随 CLI 配置)'}</option>
       {presets.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
       <option value={CUSTOM_MODEL}>自定义…</option>
     </select>
@@ -1084,7 +1069,7 @@ function SessionSetup({ hostId, onCancel }) {
         {onCancel && <button className="btn ghost" onClick={onCancel}>取消</button>}
       </div>
       <div className="agent-cards">
-        {['codex', 'claude', 'deepseek', 'grok'].map((a) => (
+        {['codex', 'claude', 'deepseek', 'dsh'].map((a) => (
           <div key={a} className={`agent-card ${agent === a ? 'selected' : ''}`} onClick={() => setAgent(a)}>
             <div className="agent-name">{AGENT_NAMES[a]}</div>
             <div className="muted small">
@@ -1092,7 +1077,7 @@ function SessionSetup({ hostId, onCancel }) {
                 agentCliInstalled(env, a) ? `已安装 ${agentCliInstalled(env, a)}` : '未安装'}
             </div>
             {a === 'deepseek' && <div className="muted small">deepseek-v4 · 基于 Claude Code CLI</div>}
-            {a === 'grok' && <div className="muted small">DeepSeek/GLM/Kimi/Qwen · 基于 grok CLI</div>}
+            {a === 'dsh' && <div className="muted small">DeepSeek 官方 harness · 无流式/无多轮 resume</div>}
           </div>
         ))}
       </div>
@@ -1100,7 +1085,7 @@ function SessionSetup({ hostId, onCancel }) {
         <p className="error-text">
           {hostId === 'local' ? '本机' : '远程'}未检测到 {
             agent === 'deepseek' ? 'claude(DeepSeek 基于 Claude Code CLI 运行)' :
-            agent === 'grok' ? 'grok CLI(国产模型引擎依赖它运行)' : agent
+            agent === 'dsh' ? 'dsh(DeepSeek Harness)' : agent
           },请先到「环境配置」页{hostId === 'local' ? '检查(本机请直接在终端安装)' : '一键安装'}。
           <button className="btn small" onClick={() => useStore.getState().setTab('setup')}>去检查</button>
         </p>
@@ -1113,7 +1098,7 @@ function SessionSetup({ hostId, onCancel }) {
         <label>模型(可选)<input value={model} onChange={(e) => setModel(e.target.value)} placeholder={
           agent === 'codex' ? '如 gpt-5-codex' :
           agent === 'deepseek' ? '默认 deepseek-v4-pro[1m]' :
-          agent === 'grok' ? '默认 deepseek/deepseek-v4-pro' : '如 sonnet / opus'} /></label>
+          agent === 'dsh' ? '(dsh 不支持指定模型)' : '如 sonnet / opus'} /></label>
         <div className="system-mode-setting">
           <label className="row checkbox">
             <input

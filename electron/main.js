@@ -9,7 +9,7 @@ const { Installer } = require('./ssh/Installer');
 const { AgentSession } = require('./ssh/AgentSession');
 const { deepseekEnvPosix, DEEPSEEK_DEFAULT_MODEL } = require('./ssh/deepseek');
 const deepseekMod = require('./ssh/deepseek');
-const { GROK_DEFAULT_MODEL, parseGrokSpec } = require('./ssh/grokProviders');
+const dshMod = require('./ssh/dsh');
 const { LocalExecutor } = require('./LocalExecutor');
 const { AttachmentService } = require('./chat/AttachmentService');
 const stt = require('./stt');
@@ -414,15 +414,6 @@ ipcMain.handle('setup:setEnvKey', async (_e, { hostId, envKey, key }) => {
   return true;
 });
 
-/** 图形界面:把当前国产模型配置(预设 + 自定义)同步写入远程 ~/.grok/config.toml */
-ipcMain.handle('setup:syncGrokConfig', async (_e, { hostId }) => {
-  const s = getSession(hostId);
-  const log = (t) => send('setup:log', { hostId, text: t });
-  await s.installer.ensureGrokConfig(loadSettings().grokModels || []);
-  log('已同步国产模型配置到远程 ~/.grok/config.toml ✓\n');
-  return true;
-});
-
 /** 本机认证文件下发到远程(codex: ~/.codex/auth.json 等) */
 const AUTH_SYNC = {
   codex: [
@@ -433,7 +424,7 @@ const AUTH_SYNC = {
     { rel: '.claude/.credentials.json', required: false, mode: '600' }
   ],
   deepseek: [], // 无认证文件,走 DEEPSEEK_API_KEY(~/.remote-agent-env.sh)
-  grok: []      // 国产模型走各家 env_key,无 xAI 认证文件可下发
+  dsh: []       // dsh 靠 DEEPSEEK_API_KEY 环境变量,无认证文件可下发
 };
 
 /** 检测本机 Codex 是否已配置(CLI 版本 + auth.json 有效性) */
@@ -641,12 +632,9 @@ async function testRemoteAgent(s, agent, log) {
     // claude CLI + DeepSeek Anthropic 兼容端点
     cmd = `${env} ${deepseekEnvPosix()} cd "$HOME" && ` +
       `claude -p --permission-mode plan --model '${DEEPSEEK_DEFAULT_MODEL}' '仅回复两个字:可用' 2>&1 </dev/null`;
-  } else if (agent === 'grok') {
-    // grok CLI + 国产模型自定义端点;先确保 config 受管块存在
-    await s.installer.ensureGrokConfig(loadSettings().grokModels || []).catch(() => {});
-    const alias = parseGrokSpec(GROK_DEFAULT_MODEL).alias;
-    cmd = `${env} export PATH="$HOME/.grok/bin:$PATH"; cd "$HOME" && ` +
-      `grok --output-format json -m '${alias}' --sandbox read-only -p '仅回复两个字:可用' 2>&1 </dev/null`;
+  } else if (agent === 'dsh') {
+    // dsh 无头模式:一次性任务,成功退 0
+    cmd = `${env} ${dshMod.dshEnvPosix()} cd "$HOME" && dsh ${dshMod.dshArgs()} '仅回复两个字:可用' 2>&1 </dev/null`;
   } else {
     // 默认用 opus 测试:CLI 的默认模型可能是账号已无额度的那个,
     // 会把「额度耗尽」误报成「认证/环境有问题」
@@ -776,10 +764,6 @@ ipcMain.handle('brief:run', async (_e, { hostId, agent = 'codex', cwd = '', mode
     const s = getSession(hostId);
     // 只读沙箱即可:速览只需要联网检索,不该改任何文件
     const session = new AgentSession(s.ssh, s.proxy, { agent, cwd, model, permissionMode: 'workspace' });
-    if (agent === 'grok') {
-      await s.installer.ensureGrokConfig(loadSettings().grokModels || []).catch(() => {});
-    }
-
     let collected = '';
     session.on('message', (msg) => {
       if (msg.kind === 'text' || msg.kind === 'result') collected += `\n${msg.text || ''}`;
@@ -982,6 +966,7 @@ async function mobileStartTask({ hostId, prompt, convId, cwd = '', engine, model
   const agent = new AgentSession(s.ssh, s.proxy, {
     agent: agentName,
     deepseekEndpoint: loadSettings().deepseekEndpoint,
+    dshConfig: loadSettings().dshConfig,
     cwd: workDir || undefined,
     model: model || existing?.model || undefined,
     // 手机端默认不放开系统权限:一句话就在服务器上全权执行风险太高
@@ -990,7 +975,6 @@ async function mobileStartTask({ hostId, prompt, convId, cwd = '', engine, model
   agent.claudeSessionId = resume.claudeSessionId;
   agent.codexSessionId = resume.codexSessionId;
   agent.codexStarted = resume.codexStarted;
-  agent.grokSessionId = resume.grokSessionId;
   s.agents.set(targetConvId, agent);
 
   agent.on('message', (msg) => {
@@ -1018,7 +1002,7 @@ async function mobileStartTask({ hostId, prompt, convId, cwd = '', engine, model
         msg: {
           kind: 'done', agent: agentName,
           claudeSessionId: agent.claudeSessionId, codexSessionId: agent.codexSessionId,
-          codexStarted: agent.codexStarted, grokSessionId: agent.grokSessionId
+          codexStarted: agent.codexStarted
         }
       });
     });
@@ -1143,7 +1127,7 @@ ipcMain.handle('mobile:previewBridge', () => {
 ipcMain.handle('mobile:listTasks', () => mobileService.listTasks());
 
 /* ------------------------------------------------------------------ 技能(Agent Skills)
- * SKILL.md 是跨引擎开放标准,同一份技能对 claude/codex/grok 都生效。
+ * SKILL.md 是跨引擎开放标准,同一份技能对 claude/codex/dsh 都生效。
  * 远程主机默认是裸环境,一条技能都没有 —— 这里负责把它们装过去。 */
 
 ipcMain.handle('skills:listBuiltin', () => skillsService.listBuiltin());
@@ -1206,7 +1190,6 @@ ipcMain.handle('obsidian:saveFromConversation', async (_e, { hostId, agent = 'co
   if (!String(content || '').trim()) throw new Error('没有可提炼的内容');
   const s = getSession(hostId);
   const session = new AgentSession(s.ssh, s.proxy, { agent, cwd, model, permissionMode: 'workspace' });
-  if (agent === 'grok') await s.installer.ensureGrokConfig(loadSettings().grokModels || []).catch(() => {});
 
   let collected = '';
   session.on('message', (msg) => {
@@ -1322,7 +1305,6 @@ async function runDailyDigest({ date, cfg }) {
   }
 
   const s = getSession(cfg.hostId || 'local');
-  await s.installer.ensureGrokConfig(loadSettings().grokModels || []).catch(() => {});
   // 定时任务同样自动挑可用引擎:半夜跑失败没人看得到,不能因为配置过期就白跑
   const picked = await pickWorkingExtractor(s, { preferred: cfg.agent, model: cfg.model });
   if (!picked.agent) {
@@ -1368,11 +1350,11 @@ ipcMain.handle('autocapture:check', async () => {
   try {
     const s = getSession(out.host);
     const env = await s.installer.detect();
-    const need = { codex: env.codex, claude: env.claude, deepseek: env.claude, grok: env.grok }[out.agent];
+    const need = { codex: env.codex, claude: env.claude, deepseek: env.claude, dsh: env.dsh }[out.agent];
     out.cli = !!need;
     out.cliVersion = need || '';
     if (!need) {
-      out.notes.push(`主机「${out.host}」上没有 ${out.agent === 'grok' ? 'grok' : out.agent} CLI——去环境配置页安装,或换一个已装好的引擎`);
+      out.notes.push(`主机「${out.host}」上没有 ${out.agent === 'dsh' ? 'dsh' : out.agent} CLI——去环境配置页安装,或换一个已装好的引擎`);
     }
   } catch (e) {
     out.notes.push(`连不上主机「${out.host}」:${String(e?.message || e).slice(0, 120)}`);
@@ -1485,7 +1467,6 @@ ipcMain.handle('autocapture:backfill', async (_e, { maxBatches = 40, includeCliS
   const todo = [...batches, ...remotePages.map((page) => ({ __remotePage: page }))].slice(0, maxBatches);
 
   const s = getSession(cfg.hostId || 'local');
-  await s.installer.ensureGrokConfig(loadSettings().grokModels || []).catch(() => {});
 
   // 自动挑一个真的能用的引擎:配置里那个不行就换,而不是直接失败
   send('autocapture:progress', { text: '正在挑选可用的抽取引擎…' });
@@ -1562,9 +1543,9 @@ ipcMain.handle('autocapture:backfill', async (_e, { maxBatches = 40, includeCliS
  */
 async function pickWorkingExtractor(s, { preferred, model } = {}) {
   const env = await s.installer.detect().catch(() => ({}));
-  const installed = { codex: env.codex, claude: env.claude, deepseek: env.claude, grok: env.grok };
+  const installed = { codex: env.codex, claude: env.claude, deepseek: env.claude, dsh: env.dsh };
   // 优先用用户指定的;其余按「配置成本低 → 高」排序
-  const order = [...new Set([preferred, 'codex', 'claude', 'grok', 'deepseek'].filter(Boolean))];
+  const order = [...new Set([preferred, 'codex', 'claude', 'deepseek', 'dsh'].filter(Boolean))];
   const tried = [];
   for (const agent of order) {
     if (!installed[agent]) { tried.push(`${agent}:未安装`); continue; }
@@ -1581,7 +1562,7 @@ async function pickWorkingExtractor(s, { preferred, model } = {}) {
 async function preflightExtractor(s, agent, model) {
   try {
     const env = await s.installer.detect();
-    const cli = { codex: env.codex, claude: env.claude, deepseek: env.claude, grok: env.grok }[agent];
+    const cli = { codex: env.codex, claude: env.claude, deepseek: env.claude, dsh: env.dsh }[agent];
     if (!cli) {
       return { ok: false, reason: `目标主机上没有 ${agent === 'deepseek' ? 'claude' : agent} CLI,请到「环境配置」页安装,或在设置里换一个已装好的引擎` };
     }
@@ -1597,8 +1578,8 @@ async function preflightExtractor(s, agent, model) {
     if (/error|not found|unauthorized|credit|quota|api key|not signed in/i.test(out)) {
       let hint = '';
       // 常见且可一键解决的情况,直接给出处置建议,别让用户自己翻文档
-      if (/not signed in|XAI_API_KEY|grok login/i.test(out)) {
-        hint = '\n→ grok CLI 未登录。最快的办法:到「设置 → Obsidian 知识库 → 每日自动沉淀」把「抽取引擎」改成已经能用的引擎(如 codex);'
+      if (/DEEPSEEK_API_KEY|credential|unauthorized/i.test(out)) {
+        hint = '\n→ dsh 缺少 DEEPSEEK_API_KEY。最快的办法:到「设置 → Obsidian 知识库 → 每日自动沉淀」把「抽取引擎」改成已经能用的引擎(如 codex);'
           + '或在「环境配置 → 国产模型端点配置」添加你的中转站端点并写入对应 API Key。';
       } else if (/credit|quota|额度/i.test(out)) {
         hint = '\n→ 该模型额度不足,换一个仍有额度的模型或引擎。';
@@ -1647,26 +1628,15 @@ ipcMain.handle('agent:start', async (_e, { hostId, convId, opts, resume }) => {
   const s = getSession(hostId);
   const existing = s.agents.get(convId);
   if (existing) existing.cancel();
-  // grok 引擎:启动前确保 ~/.grok/config.toml 含国产模型受管块(预设 + 界面里配的自定义模型)
-  if (opts?.agent === 'grok') {
-    const custom = loadSettings().grokModels || [];
-    await s.installer.ensureGrokConfig(custom).catch((e) => {
-      send('agent:message', {
-        hostId, convId,
-        msg: { kind: 'stderr', text: `写入 ~/.grok/config.toml 失败: ${e.message}` }
-      });
-    });
-  }
   // deepseek 引擎的端点由设置决定(官方 DeepSeek 或自建 new-api 中转)
   const agent = new AgentSession(s.ssh, s.proxy, {
-    ...opts, deepseekEndpoint: loadSettings().deepseekEndpoint
+    ...opts, deepseekEndpoint: loadSettings().deepseekEndpoint, dshConfig: loadSettings().dshConfig
   });
   // 恢复上次会话的 resume 状态,实现跨重启续聊
   if (resume) {
     agent.claudeSessionId = resume.claudeSessionId || null;
     agent.codexSessionId = resume.codexSessionId || null;
     agent.codexStarted = !!resume.codexStarted;
-    agent.grokSessionId = resume.grokSessionId || null;
   }
   agent.on('message', (msg) => {
     // 在每轮结束时附带最新 resume 状态,供渲染层持久化
@@ -1674,7 +1644,6 @@ ipcMain.handle('agent:start', async (_e, { hostId, convId, opts, resume }) => {
       msg.claudeSessionId = agent.claudeSessionId;
       msg.codexSessionId = agent.codexSessionId;
       msg.codexStarted = agent.codexStarted;
-      msg.grokSessionId = agent.grokSessionId;
       msg.agent = agent.opts.agent; // 本轮实际执行的引擎
       msg.transient = agent.transient || null; // 本轮是否被网络/代理掐断(可自动续跑)
     }
@@ -1715,7 +1684,6 @@ ipcMain.handle('agent:send', async (_e, { hostId, convId, messageId, prompt, att
       claudeSessionId: agent.claudeSessionId,
       codexSessionId: agent.codexSessionId,
       codexStarted: agent.codexStarted,
-      grokSessionId: agent.grokSessionId,
       agent: agent.opts.agent,
       transient: agent.transient || null
     }

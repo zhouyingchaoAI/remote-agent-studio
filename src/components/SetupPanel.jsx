@@ -84,7 +84,7 @@ export default function SetupPanel({ hostId, host }) {
             <tr><td>Node.js</td><td>{env?.node || <Miss />}</td></tr>
             <tr><td>Codex</td><td>{env?.codex || <Miss />}</td></tr>
             <tr><td>Claude Code</td><td>{env?.claude || <Miss />}</td></tr>
-            <tr><td>Grok CLI</td><td>{env?.grok || <Miss />}</td></tr>
+            <tr><td>DeepSeek Harness</td><td>{env?.dsh || <Miss />}</td></tr>
           </tbody></table>
           <div className="row gap">
             <button className="btn primary" disabled={busy} onClick={install('codex')}>
@@ -93,9 +93,9 @@ export default function SetupPanel({ hostId, host }) {
             <button className="btn primary" disabled={busy} onClick={install('claude')}>
               {env?.claude ? '升级 Claude Code 到最新' : '一键安装 Claude Code'}
             </button>
-            <button className="btn primary" disabled={busy} onClick={install('grok')}
-              title="国产模型引擎依赖 grok CLI(xai-org/grok-build 官方独立二进制)">
-              {env?.grok ? '升级 Grok CLI 到最新' : '一键安装 Grok CLI'}
+            <button className="btn primary" disabled={busy} onClick={install('dsh')}
+              title="DeepSeek 官方 agent harness(npm 包 @deepseek-ai/dsh,需 Node ≥ 22.19)">
+              {env?.dsh ? '升级 dsh 到最新' : '一键安装 dsh'}
             </button>
           </div>
           <p className="muted small">
@@ -181,9 +181,9 @@ export default function SetupPanel({ hostId, host }) {
               测试远程 DeepSeek
             </button>
             <button className="btn" disabled={busy}
-              title="国产模型引擎:grok CLI + 各家 OpenAI 兼容端点,默认用 DeepSeek(需 DEEPSEEK_API_KEY)"
-              onClick={run(() => window.api.setup.testRemoteAgent({ hostId, agent: 'grok' }))}>
-              测试国产模型(Grok)
+              title="DeepSeek Harness 无头模式实测一次(需 DEEPSEEK_API_KEY)"
+              onClick={run(() => window.api.setup.testRemoteAgent({ hostId, agent: 'dsh' }))}>
+              测试 dsh
             </button>
           </div>}
         </Fold>
@@ -206,7 +206,6 @@ export default function SetupPanel({ hostId, host }) {
         </Fold>}
 
         <DeepseekEndpointManager hostId={hostId} isLocal={isLocal} busy={busy} setBusy={setBusy} />
-        {!isLocal && <GrokModelsManager hostId={hostId} busy={busy} setBusy={setBusy} />}
       </div>
 
       <div className="setup-right">
@@ -226,124 +225,6 @@ export default function SetupPanel({ hostId, host }) {
 }
 
 const Miss = () => <span className="error-text">未安装</span>;
-
-/* 预设国产 provider(仅用于界面展示/一键填充,真正配置由后端受管块生成) */
-const GROK_PRESETS = [
-  { label: 'DeepSeek', model: 'deepseek-v4-pro', baseUrl: 'https://api.deepseek.com/v1', envKey: 'DEEPSEEK_API_KEY' },
-  { label: '智谱 GLM', model: 'glm-5', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', envKey: 'ZHIPU_API_KEY' },
-  { label: '月之暗面 Kimi', model: 'kimi-k2.5', baseUrl: 'https://api.moonshot.cn/v1', envKey: 'MOONSHOT_API_KEY' },
-  { label: '通义 Qwen', model: 'qwen3.5-coder', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', envKey: 'DASHSCOPE_API_KEY' },
-  { label: 'MiniMax', model: 'minimax-m2.5', baseUrl: 'https://api.minimax.chat/v1', envKey: 'MINIMAX_API_KEY' }
-];
-const BLANK_MODEL = { label: '', model: '', baseUrl: '', apiBackend: 'chat_completions', envKey: '', apiKey: '' };
-
-/**
- * 国产模型(Grok)端点可视化管理:全部在界面完成,不需手改 config.toml。
- * - 预设 provider 一键写 Key
- * - 自定义端点(中转站/其它兼容服务)增删:显示名/模型ID/base_url/协议/env 变量/Key
- * - 一键同步到远程 ~/.grok/config.toml
- */
-function GrokModelsManager({ hostId, busy, setBusy }) {
-  const grokModels = useStore((s) => s.settings.grokModels || []);
-  const apply = useStore((s) => s.applySettings);
-  const [form, setForm] = useState(BLANK_MODEL);
-  const [presetKeys, setPresetKeys] = useState({}); // envKey -> 输入中的 key
-
-  const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-
-  const wrap = (fn) => async () => {
-    setBusy(true);
-    try { await fn(); }
-    catch (e) { useStore.getState().appendSetupLog(hostId, `❌ ${e.message}\n`); }
-    setBusy(false);
-  };
-
-  const savePresetKey = (envKey) => wrap(async () => {
-    const key = (presetKeys[envKey] || '').trim();
-    if (!key) throw new Error('请输入 API Key');
-    await window.api.setup.setEnvKey({ hostId, envKey, key });
-    setPresetKeys((m) => ({ ...m, [envKey]: '' }));
-    await window.api.setup.syncGrokConfig({ hostId });
-  })();
-
-  const addModel = wrap(async () => {
-    const label = form.label.trim(), model = form.model.trim(), baseUrl = form.baseUrl.trim();
-    const envKey = form.envKey.trim();
-    if (!label || !model || !baseUrl) throw new Error('显示名 / 模型 ID / base_url 必填');
-    if (envKey && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(envKey)) throw new Error('env 变量名不合法');
-    const next = [...grokModels, { id: `gm_${Date.now()}`, label, model, baseUrl, apiBackend: form.apiBackend, envKey }];
-    apply({ grokModels: next });
-    if (envKey && form.apiKey.trim()) await window.api.setup.setEnvKey({ hostId, envKey, key: form.apiKey.trim() });
-    await window.api.setup.syncGrokConfig({ hostId });
-    setForm(BLANK_MODEL);
-    useStore.getState().appendSetupLog(hostId, `✓ 已添加自定义模型「${label}」并同步到远程\n`);
-  });
-
-  const removeModel = (id) => wrap(async () => {
-    apply({ grokModels: grokModels.filter((m) => m.id !== id) });
-    await window.api.setup.syncGrokConfig({ hostId });
-  })();
-
-  const syncNow = wrap(async () => {
-    await window.api.setup.syncGrokConfig({ hostId });
-  });
-
-  return (
-    <Fold title="国产模型(Grok)端点配置" hint="DeepSeek / GLM / Kimi 等自定义端点">
-      <p className="muted small">
-        全部在此配置,自动写入远程 <code>~/.grok/config.toml</code>,无需手改文件。API Key 存 600 权限 env 文件,不落配置明文。
-      </p>
-
-      <div className="grok-presets">
-        {GROK_PRESETS.map((p) => (
-          <div key={p.envKey} className="grok-preset-row">
-            <span className="grok-preset-name">{p.label}</span>
-            <code className="muted small">{p.model}</code>
-            <input type="password" placeholder={`${p.envKey} = sk-...`} value={presetKeys[p.envKey] || ''}
-              onChange={(e) => setPresetKeys((m) => ({ ...m, [p.envKey]: e.target.value }))} />
-            <button className="btn small" disabled={busy} onClick={() => savePresetKey(p.envKey)}>写入 Key</button>
-          </div>
-        ))}
-      </div>
-
-      <details className="grok-add">
-        <summary>+ 添加自定义端点(中转站 / 其它 OpenAI 兼容服务)</summary>
-        <div className="grok-add-grid">
-          <label>显示名<input value={form.label} onChange={(e) => setField('label', e.target.value)} placeholder="如 我的中转站" /></label>
-          <label>模型 ID<input value={form.model} onChange={(e) => setField('model', e.target.value)} placeholder="如 deepseek-v4-pro" /></label>
-          <label>base_url<input value={form.baseUrl} onChange={(e) => setField('baseUrl', e.target.value)} placeholder="https://.../v1" /></label>
-          <label>协议
-            <select value={form.apiBackend} onChange={(e) => setField('apiBackend', e.target.value)}>
-              <option value="chat_completions">chat_completions(OpenAI 兼容,推荐)</option>
-              <option value="responses">responses(OpenAI Responses)</option>
-              <option value="messages">messages(Anthropic)</option>
-            </select>
-          </label>
-          <label>env 变量名<input value={form.envKey} onChange={(e) => setField('envKey', e.target.value)} placeholder="如 MY_RELAY_API_KEY" /></label>
-          <label>API Key(可选,写入远程)<input type="password" value={form.apiKey} onChange={(e) => setField('apiKey', e.target.value)} placeholder="sk-..." /></label>
-        </div>
-        <button className="btn primary" disabled={busy} onClick={addModel}>添加并同步</button>
-      </details>
-
-      {grokModels.length > 0 && (
-        <div className="grok-custom-list">
-          {grokModels.map((m) => (
-            <div key={m.id} className="grok-custom-row">
-              <span className="grok-preset-name">{m.label}</span>
-              <code className="muted small">{m.model}</code>
-              <span className="muted small flex1">{m.baseUrl}</span>
-              <button className="icon-btn danger" title="删除" disabled={busy} onClick={() => removeModel(m.id)}>✕</button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <button className="btn small ghost" disabled={busy} onClick={syncNow} style={{ marginTop: 8 }}>
-        重新同步到远程 config.toml
-      </button>
-    </Fold>
-  );
-}
 
 /**
  * Claude Code 走 Anthropic 兼容端点(DeepSeek 官方 / 自建 new-api 中转)。

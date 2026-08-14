@@ -130,7 +130,7 @@ function truncateOutput(text = '', max = 6000) {
 
 /* ---------------------------------------------------------------- 引擎校验 */
 
-const ENGINES = ['codex', 'claude', 'deepseek', 'grok'];
+const ENGINES = ['codex', 'claude', 'deepseek', 'dsh'];
 
 function normalizeEngine(engine) {
   if (!engine) return 'codex';

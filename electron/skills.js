@@ -13,7 +13,7 @@
 const ENGINE_SKILL_DIRS = {
   claude: '.claude/skills',
   codex: '.codex/skills',
-  grok: '.grok/skills',
+  dsh: '.dsh/skills',
   // deepseek 引擎复用 claude CLI,所以共用 claude 的目录
   deepseek: '.claude/skills'
 };

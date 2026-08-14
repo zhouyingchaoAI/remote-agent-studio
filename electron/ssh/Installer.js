@@ -1,7 +1,7 @@
 /**
- * Installer - 远程环境检测与 codex / claude code / grok 自动安装
+ * Installer - 远程环境检测与 codex / claude code / dsh 自动安装
  */
-const { buildGrokConfigBlock, BLOCK_BEGIN, BLOCK_END } = require('./grokProviders');
+const { dshInstallCommand } = require('./dsh');
 
 class Installer {
   constructor(ssh, proxyService) {
@@ -13,7 +13,7 @@ class Installer {
 
   /** PATH 前缀:各安装位置的统一顺序(校验与清理都要用同一套,否则查的不是实际执行的那个) */
   static get BIN_PATH() {
-    return 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$HOME/.grok/bin:$PATH";';
+    return 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH";';
   }
 
   /** 探测远程架构,用于选包与给出准确的错误提示 */
@@ -52,7 +52,7 @@ class Installer {
    * 表现成「显示安装成功,一运行就报错」这种最难排查的情况。
    */
   async cleanupBrokenBinary(name, log = () => {}) {
-    const dirs = ['$HOME/.local/bin', '$HOME/.grok/bin', '$HOME/.npm-global/bin'];
+    const dirs = ['$HOME/.local/bin', '$HOME/.npm-global/bin'];
     const script = dirs.map((d) =>
       `if [ -e "${d}/${name}" ] && ! "${d}/${name}" --version >/dev/null 2>&1; then `
       + `rm -f "${d}/${name}"; echo "已清理无法执行的 ${d}/${name}"; fi`
@@ -71,10 +71,10 @@ class Installer {
       [ -s "$HOME/.remote-agent-node-env.sh" ] && . "$HOME/.remote-agent-node-env.sh";
       command -v node >/dev/null 2>&1 && echo "NODE=$(node -v)" || echo "NODE=";
       command -v npm  >/dev/null 2>&1 && echo "NPM=$(npm -v)"  || echo "NPM=";
-      export PATH="$PATH:$HOME/.npm-global/bin:$HOME/.local/bin:$HOME/.grok/bin";
+      export PATH="$PATH:$HOME/.npm-global/bin:$HOME/.local/bin";
       command -v codex  >/dev/null 2>&1 && echo "CODEX=$(codex --version 2>/dev/null | head -1)"  || echo "CODEX=";
       command -v claude >/dev/null 2>&1 && echo "CLAUDE=$(claude --version 2>/dev/null | head -1)" || echo "CLAUDE=";
-      command -v grok   >/dev/null 2>&1 && echo "GROK=$(grok --version 2>/dev/null | head -1)"   || echo "GROK=";
+      command -v dsh    >/dev/null 2>&1 && echo "DSH=$(dsh --version 2>/dev/null | head -1)"     || echo "DSH=";
     `;
     const { stdout } = await this.ssh.exec(script);
     const get = (k) => (stdout.match(new RegExp(`^${k}=(.*)$`, 'm')) || [])[1]?.trim() || '';
@@ -84,7 +84,7 @@ class Installer {
       npm: get('NPM'),
       codex: get('CODEX'),
       claude: get('CLAUDE'),
-      grok: get('GROK')
+      dsh: get('DSH')
     };
   }
 
@@ -167,27 +167,20 @@ class Installer {
    * 全程带代理环境;由 nvm 管理 Node 与 npm 的全局安装目录
    */
   async installAgent(agent, log) {
-    // grok:官方独立安装脚本(二进制,无需 Node.js)
-    if (agent === 'grok') {
+    /* dsh:DeepSeek Harness,npm 全局包(bin 名 dsh)。
+     * 官方要求 Node ≥ 22.19 / ≥ 24,低版本会在启动时报模块解析错误,
+     * 所以先确保 Node 再装。 */
+    if (agent === 'dsh') {
       if (this.ssh.isWindowsNative) {
-        throw new Error('Windows 本机请在 PowerShell 手动执行: irm https://x.ai/cli/install.ps1 | iex');
+        throw new Error(`Windows 本机请在 PowerShell 手动执行: ${dshInstallCommand()}`);
       }
-      const arch = await this.remoteArch();
-      log(`安装/升级 grok CLI(官方脚本,独立二进制)· 主机架构 ${arch.machine}...\n`);
-      await this.cleanupBrokenBinary('grok', log);   // 先清掉可能残留的错架构二进制
-      const r = await this.ssh.exec(
-        `${this._env()} curl -fsSL https://x.ai/cli/install.sh | bash`,
-        { onStdout: log, onStderr: log }
-      );
-      // 装完统一校验能不能真的执行,而不是只看安装脚本的退出码
-      const v = await this.verifyBinary('grok');
-      if (!v.ok) {
-        await this.cleanupBrokenBinary('grok', log);
-        throw new Error(v.archMismatch
-          ? `${v.message}。官方可能尚未提供 ${arch.machine} 版本的 grok CLI,可改用其它引擎(claude / codex)。`
-          : `grok 安装失败 (exit ${r.code}):${v.message}`);
-      }
-      log(`grok 安装完成 ✓(${v.version})\n`);
+      await this.ensureNode(log);
+      log('安装/升级 DeepSeek Harness(dsh)...\n');
+      const r = await this.ssh.exec(`${this._env()} ${Installer.BIN_PATH} ${dshInstallCommand()}`,
+        { onStdout: log, onStderr: log });
+      const v = await this.verifyBinary('dsh');
+      if (!v.ok) throw new Error(`dsh 安装失败 (exit ${r.code}):${v.message}`);
+      log(`dsh 安装完成 ✓(${v.version})\n`);
       return this.detect();
     }
     const pkg = agent === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-code';
@@ -370,23 +363,6 @@ class Installer {
     log(`${varName} 已写入 ${envFile}(600 权限,不落 bashrc 明文)\n`);
   }
 
-  /**
-   * 确保 ~/.grok/config.toml 含国产模型受管块(预设 + 本次会话的自定义规格)。
-   * 整块按标记重写,块外的用户自有配置不动。API Key 走 env_key,不落 config 明文。
-   */
-  async ensureGrokConfig(extraDefs = []) {
-    if (this.ssh.isWindowsNative) return; // Windows 本机暂不自动写 config
-    const block = buildGrokConfigBlock(extraDefs);
-    // base64 传输,避免 TOML 引号/特殊字符经手 shell 转义
-    const b64 = Buffer.from(block + '\n', 'utf8').toString('base64');
-    await this.ssh.exec(
-      'mkdir -p ~/.grok && touch ~/.grok/config.toml && ' +
-      `awk 'index($0,"${BLOCK_BEGIN}"){skip=1;next} index($0,"${BLOCK_END}"){skip=0;next} !skip' ` +
-      '~/.grok/config.toml > ~/.grok/config.toml.ras-tmp && ' +
-      'mv ~/.grok/config.toml.ras-tmp ~/.grok/config.toml && ' +
-      `printf '%s' '${b64}' | base64 -d >> ~/.grok/config.toml`
-    );
-  }
 }
 
 module.exports = { Installer };

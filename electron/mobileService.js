@@ -138,7 +138,7 @@ function clearTasks() { tasks.clear(); }
 const resumes = new Map(); // convId -> {claudeSessionId, ..., turns}
 
 const BLANK = () => ({
-  claudeSessionId: null, codexSessionId: null, codexStarted: false, grokSessionId: null, turns: 0
+  claudeSessionId: null, codexSessionId: null, codexStarted: false, turns: 0
 });
 
 /**
@@ -152,7 +152,6 @@ function getResume(convId, persisted = null) {
       claudeSessionId: persisted.claudeSessionId || null,
       codexSessionId: persisted.codexSessionId || null,
       codexStarted: !!persisted.codexStarted,
-      grokSessionId: persisted.grokSessionId || null,
       turns: 0
     } : BLANK());
   }
@@ -165,7 +164,6 @@ function rememberResume(convId, agent) {
   c.claudeSessionId = agent.claudeSessionId || c.claudeSessionId;
   c.codexSessionId = agent.codexSessionId || c.codexSessionId;
   c.codexStarted = agent.codexStarted || c.codexStarted;
-  c.grokSessionId = agent.grokSessionId || c.grokSessionId;
   c.turns += 1;
   return c;
 }
@@ -279,7 +277,7 @@ curl -sS -X POST $BASE/api/tasks \\
 |---|---|
 | \`convId\` | 接续某个已有对话(电脑上的或手机之前开的),带了就不用再带 cwd |
 | \`cwd\` | 项目目录。新开对话时**强烈建议带上** |
-| \`engine\` | \`codex\`(默认)/ \`claude\` / \`deepseek\` / \`grok\`,用户明确要求才改 |
+| \`engine\` | \`codex\`(默认)/ \`claude\` / \`deepseek\` / \`dsh\`,用户明确要求才改 |
 | \`model\` | 具体模型名,用户明确要求才带 |
 | \`newSession\` | \`true\` 表示开新话题,丢掉之前的上下文 |
 

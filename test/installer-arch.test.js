@@ -69,7 +69,7 @@ test('cleanupBrokenBinary 覆盖所有安装目录(错架构残留会挡住正�
   const ssh = fakeSsh(() => ({ code: 0, stdout: '' }));
   await new Installer(ssh, null).cleanupBrokenBinary('codex');
   const cmd = ssh.calls[0];
-  for (const dir of ['.local/bin', '.grok/bin', '.npm-global/bin']) {
+  for (const dir of ['.local/bin', '.npm-global/bin']) {
     assert.ok(cmd.includes(`${dir}/codex`), `应检查 ${dir}`);
   }
   assert.match(cmd, /rm -f/);
@@ -77,5 +77,5 @@ test('cleanupBrokenBinary 覆盖所有安装目录(错架构残留会挡住正�
 });
 
 test('BIN_PATH 顺序与运行时一致(否则查的不是实际执行的那个)', () => {
-  assert.match(Installer.BIN_PATH, /\.npm-global\/bin.*\.local\/bin.*\.grok\/bin/);
+  assert.match(Installer.BIN_PATH, /\.npm-global\/bin.*\.local\/bin/);
 });

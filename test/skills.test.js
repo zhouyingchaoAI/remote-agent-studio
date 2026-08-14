@@ -97,8 +97,8 @@ test('renderSkill 生成的内容能被 parseSkill 读回来', () => {
 test('deepseek 复用 claude 目录,下发时不重复写两遍', () => {
   assert.equal(ENGINE_SKILL_DIRS.deepseek, ENGINE_SKILL_DIRS.claude);
   assert.deepEqual(uniqueDirsFor(['claude', 'deepseek']), ['.claude/skills']);
-  assert.deepEqual(uniqueDirsFor(['claude', 'codex', 'grok']),
-    ['.claude/skills', '.codex/skills', '.grok/skills']);
+  assert.deepEqual(uniqueDirsFor(['claude', 'codex', 'dsh']),
+    ['.claude/skills', '.codex/skills', '.dsh/skills']);
   assert.deepEqual(uniqueDirsFor(['不存在的引擎']), []);
 });
 

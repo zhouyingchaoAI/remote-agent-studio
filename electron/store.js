@@ -128,13 +128,15 @@ function saveProxy(hostId, cfg) {
 /* -------- 应用设置持久化(userData/settings.json) -------- */
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 const DEFAULT_SETTINGS = {
-  theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5, grokModels: [],
+  theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5,
   screenshotShortcut: 'CommandOrControl+Shift+2', screenshotShortcutEnabled: true,
   // 远程 claude 可用性测试用的模型:CLI 默认模型可能已无额度,固定用 opus 更能反映真实状态
   claudeTestModel: 'opus',
   // Claude Code 走 Anthropic 兼容端点(DeepSeek 官方 / 自建 new-api 中转)。
   // 只存地址与模型名,API Key 走远程 ~/.remote-agent-env.sh(600),绝不落这里。
-  deepseekEndpoint: null
+  deepseekEndpoint: null,
+  // dsh(DeepSeek Harness):权限模式取值官方未公开完整列表,留空则用它自己的 workspace-write
+  dshConfig: null
 };
 
 function loadSettings() {

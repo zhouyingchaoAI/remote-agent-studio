@@ -43,7 +43,6 @@ contextBridge.exposeInMainWorld('api', {
     installAgent: invoke('setup:installAgent'),
     setApiKey: invoke('setup:setApiKey'),
     setEnvKey: invoke('setup:setEnvKey'),
-    syncGrokConfig: invoke('setup:syncGrokConfig'),
     syncAuth: invoke('setup:syncAuth'),
     detectLocalCodex: invoke('setup:detectLocalCodex'),
     detectLocalClaude: invoke('setup:detectLocalClaude'),
