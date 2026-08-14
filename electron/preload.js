@@ -37,7 +37,10 @@ contextBridge.exposeInMainWorld('api', {
     disconnect: invoke('ssh:disconnect'),
     onStatus: on('ssh:status')
   },
-  deepseek: { parseRelay: invoke('deepseek:parseRelay') },
+  deepseek: {
+    parseRelay: invoke('deepseek:parseRelay'),
+    testEndpoint: invoke('deepseek:testEndpoint')
+  },
   setup: {
     detect: invoke('setup:detect'),
     installAgent: invoke('setup:installAgent'),

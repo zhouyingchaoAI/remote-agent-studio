@@ -634,3 +634,10 @@ progress { width: 140px; height: 6px; }
 .fold-caret { color: var(--muted); width: 12px; }
 .fold.open .fold-head { border-bottom: 1px solid var(--border); }
 .fold-body { padding: 12px; }
+
+/* 端点实测结果:成功一行绿,失败要能读完整诊断 */
+.endpoint-result { margin: 8px 0 0; padding: 8px 10px; font-size: 12px; line-height: 1.7;
+  white-space: pre-wrap; word-break: break-word; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg); max-height: 240px; overflow: auto; }
+.endpoint-result.ok { border-color: rgba(110,231,183,0.45); color: #6ee7b7; }
+.endpoint-result.bad { border-color: rgba(229,83,75,0.45); }

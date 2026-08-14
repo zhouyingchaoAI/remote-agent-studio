@@ -165,3 +165,60 @@ test('本机也能写 API Key(此前只对远程开放,本地项目等于没入�
   assert.ok(!/\{!isLocal && \(/.test(keySection), 'API Key 区块不该再被 !isLocal 挡住');
   assert.match(seg, /写入本机/);
 });
+
+/* ---------------- 端点实测 ---------------- */
+
+const { buildEndpointProbeCommand, parseEndpointProbe } = require('../electron/ssh/deepseek');
+
+test('探测命令打的是 /v1/messages,key 走环境变量不进命令行', () => {
+  const cmd = buildEndpointProbeCommand({ baseUrl: 'http://203.0.113.10:3000', model: 'deepseek-chat' });
+  assert.match(cmd, /v1\/messages/);
+  assert.match(cmd, /anthropic-version: 2023-06-01/);
+  // key 出现在命令行会被 ps 看到,必须用变量引用
+  assert.match(cmd, /\$\{DEEPSEEK_API_KEY:-\}/);
+  assert.ok(!/sk-[A-Za-z0-9]{16,}/.test(cmd));
+  // 官方端点要保留 /anthropic 子路径
+  assert.match(buildEndpointProbeCommand({}), /api\.deepseek\.com\/anthropic\/v1\/messages/);
+});
+
+test('探测命令在真实 shell 里语法正确(不真发请求)', () => {
+  const cmd = buildEndpointProbeCommand({ baseUrl: 'http://127.0.0.1:9', model: 'm' });
+  // -n 只做语法检查,不执行
+  execFileSync('sh', ['-n', '-c', cmd], { encoding: 'utf8' });
+});
+
+test('200 判为可用', () => {
+  const r = parseEndpointProbe('RAS_HTTP=200\nRAS_BODY_BEGIN\n{"content":[{"text":"pong"}]}',
+    { baseUrl: 'http://a.b:1', model: 'deepseek-chat' });
+  assert.equal(r.ok, true);
+  assert.match(r.message, /deepseek-chat/);
+});
+
+test('404 要说清是路径问题还是中转站不支持 Anthropic 协议', () => {
+  const r = parseEndpointProbe('RAS_HTTP=404\nRAS_BODY_BEGIN\n{"error":"path not found"}', {});
+  assert.equal(r.ok, false);
+  assert.match(r.message, /根地址/);
+  assert.match(r.message, /Anthropic 协议/);
+});
+
+test('401/403 指向 API Key,而不是笼统说失败', () => {
+  for (const code of [401, 403]) {
+    const r = parseEndpointProbe(`RAS_HTTP=${code}\nRAS_BODY_BEGIN\nunauthorized`, {});
+    assert.equal(r.ok, false);
+    assert.match(r.message, /API Key/);
+  }
+});
+
+test('连不上(code 0)提示查地址与代理', () => {
+  const r = parseEndpointProbe('RAS_HTTP=000\nRAS_BODY_BEGIN\n', {});
+  assert.equal(r.ok, false);
+  assert.match(r.message, /代理/);
+});
+
+test('模型名错单独识别出来', () => {
+  const r = parseEndpointProbe('RAS_HTTP=400\nRAS_BODY_BEGIN\n{"error":{"message":"model not found"}}',
+    { baseUrl: 'http://a.b:1', model: 'wrong-name' });
+  assert.equal(r.ok, false);
+  assert.match(r.message, /模型名可能不对/);
+  assert.match(r.message, /wrong-name/);
+});

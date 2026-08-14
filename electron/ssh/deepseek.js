@@ -131,6 +131,78 @@ function maskKey(key) {
   return `${k.slice(0, 5)}…${k.slice(-4)}`;
 }
 
+/**
+ * 端点连通性探测命令。
+ *
+ * 直接打 Anthropic 协议的 /v1/messages,而不是等对话时才失败 ——
+ * 那时报错是「未知模型」或一堆 CLI 噪音,根本看不出是路径不对、key 无效
+ * 还是模型名写错。这里一次请求就能把三种情况分开。
+ *
+ * key 从环境变量取,不进命令行(命令行会出现在 ps 输出里)。
+ */
+function buildEndpointProbeCommand(cfg = {}) {
+  const { baseUrl, model, envKey } = resolveEndpoint(cfg);
+  const body = JSON.stringify({
+    model, max_tokens: 16, messages: [{ role: 'user', content: 'ping' }]
+  });
+  // 用 --data @- 从 stdin 读,body 里的引号不必再过一层 shell 转义
+  return [
+    `printf '%s' ${JSON.stringify(body)} | `,
+    'curl -sS -m 30 -o /tmp/.ras-probe-body -w "RAS_HTTP=%{http_code}" ',
+    `-X POST ${JSON.stringify(`${baseUrl}/v1/messages`)} `,
+    `-H "x-api-key: \${${envKey}:-}" `,
+    `-H "authorization: Bearer \${${envKey}:-}" `,
+    '-H "anthropic-version: 2023-06-01" -H "content-type: application/json" ',
+    '--data @- 2>&1; ',
+    'echo; echo "RAS_BODY_BEGIN"; head -c 600 /tmp/.ras-probe-body 2>/dev/null; ',
+    'rm -f /tmp/.ras-probe-body'
+  ].join('');
+}
+
+/**
+ * 解读探测结果 —— 把三类失败分开,每类给出该动哪里。
+ * 这是这个功能的价值所在:光说「失败了」等于没测。
+ */
+function parseEndpointProbe(stdout = '', cfg = {}) {
+  const out = String(stdout || '');
+  const code = Number((out.match(/RAS_HTTP=(\d+)/) || [])[1] || 0);
+  const body = (out.split('RAS_BODY_BEGIN')[1] || '').trim();
+  const model = (() => { try { return resolveEndpoint(cfg).model; } catch (_) { return ''; } })();
+
+  if (code === 200) {
+    return { ok: true, code, message: `✓ 端点可用,模型 ${model} 有响应` };
+  }
+  if (code === 0) {
+    return {
+      ok: false, code,
+      message: `连不上端点。检查地址是否正确、这台主机能否访问它(需要走代理的话先配好代理)。\n${body || out.slice(-300)}`
+    };
+  }
+  if (code === 404) {
+    return {
+      ok: false, code,
+      message: '404:这个地址上没有 /v1/messages。\n'
+        + '→ 自建中转要填**根地址**(不带 /v1);DeepSeek 官方要带 /anthropic 子路径。\n'
+        + '→ 也可能是中转站没开 Anthropic 协议兼容,那这条路走不通,得换用 Codex 或让中转站开启该能力。\n'
+        + body
+    };
+  }
+  if (code === 401 || code === 403) {
+    return {
+      ok: false, code,
+      message: `${code}:鉴权失败。API Key 没写、写错,或没有这个模型的权限。\n`
+        + '→ 在下方「API Key」栏重新写入一次。\n' + body
+    };
+  }
+  if (/model|not found|不存在/i.test(body)) {
+    return {
+      ok: false, code,
+      message: `模型名可能不对(当前填的是 ${model})。\n→ 去中转站/服务商后台确认实际可用的模型名。\n${body}`
+    };
+  }
+  return { ok: false, code, message: `HTTP ${code}\n${body || out.slice(-300)}` };
+}
+
 /** POSIX shell(远程 Linux / 本机 mac)env 前缀 */
 function deepseekEnvPosix(cfg) {
   const { baseUrl, flashModel, envKey } = resolveEndpoint(cfg);
@@ -167,6 +239,6 @@ module.exports = {
   DEEPSEEK_BASE_URL, DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_FLASH_MODEL,
   DEEPSEEK_MODEL_PRESETS, DEFAULT_ENDPOINT, ENDPOINT_PRESETS, DEFAULT_ENV_KEY,
   normalizeBaseUrl, normalizeEnvKey, normalizeModel, resolveEndpoint,
-  parseRelayConfig, maskKey,
+  parseRelayConfig, maskKey, buildEndpointProbeCommand, parseEndpointProbe,
   deepseekEnvPosix, deepseekEnvPowershell, resolveDeepseekModel
 };

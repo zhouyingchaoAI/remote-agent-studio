@@ -242,6 +242,21 @@ function DeepseekEndpointManager({ hostId, isLocal, busy, setBusy }) {
   const [apiKey, setApiKey] = useState('');
   const [relayText, setRelayText] = useState('');
   const [note, setNote] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState(null);
+
+  /**
+   * 实测端点。用当前表单的值而不是已保存的值 ——
+   * 用户常常是改完想先测一下再决定要不要保存。
+   */
+  const testEndpoint = async () => {
+    setTesting(true); setResult(null); setNote('');
+    try {
+      setResult(await window.api.deepseek.testEndpoint({ hostId, cfg: form }));
+    } catch (e) {
+      setResult({ ok: false, message: `测试失败:${e.message}` });
+    } finally { setTesting(false); }
+  };
 
   useEffect(() => { if (saved) setForm(saved); }, [saved]);
 
@@ -335,7 +350,16 @@ function DeepseekEndpointManager({ hostId, isLocal, busy, setBusy }) {
         自建中转(new-api / one-api)填<b>根地址即可</b>,它在根路径提供 /v1/messages;
         DeepSeek 官方则需要带 /anthropic 子路径。模型名要和中转站里配置的一致。
       </p>
-      <button className="btn primary" disabled={busy} onClick={save}>保存端点配置</button>
+      <div className="row gap">
+        <button className="btn primary" disabled={busy} onClick={save}>保存端点配置</button>
+        <button className="btn" disabled={busy || testing} onClick={testEndpoint}
+          title="在这台主机上真打一次 /v1/messages,把「路径不对 / key 无效 / 模型名错」分开">
+          {testing ? '测试中…' : '测试端点'}
+        </button>
+      </div>
+      {result && (
+        <pre className={`endpoint-result ${result.ok ? 'ok' : 'bad'}`}>{result.message}</pre>
+      )}
 
       {/* 本机同样需要写 key —— 本地项目也会用 DeepSeek 引擎,
           原先这里只对远程开放,本机等于完全没有入口 */}

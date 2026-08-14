@@ -1085,6 +1085,20 @@ function stopMobileGateway() {
  * 只做解析并回传脱敏预览,key 的落地仍走 setup:setEnvKey ——
  * 这样密钥不会进设置文件,也不会出现在任何日志里。
  */
+/**
+ * 端点实测:在目标主机上真打一次 /v1/messages。
+ * 用主机侧执行而不是应用本机 —— 真正跑 agent 的是那台主机,
+ * 它能不能连通、key 在不在,只有在它上面测才算数。
+ */
+ipcMain.handle('deepseek:testEndpoint', async (_e, { hostId, cfg } = {}) => {
+  const { ssh, proxy } = getSession(hostId);
+  const cmd = deepseekMod.buildEndpointProbeCommand(cfg || loadSettings().deepseekEndpoint);
+  const env = (proxy ? proxy.envPrefix() : '')
+    + ' [ -f ~/.remote-agent-env.sh ] && . ~/.remote-agent-env.sh;';
+  const r = await ssh.exec(`${env} ${cmd}`);
+  return deepseekMod.parseEndpointProbe(`${r.stdout || ''}${r.stderr || ''}`, cfg);
+});
+
 ipcMain.handle('deepseek:parseRelay', (_e, { text } = {}) => {
   const { baseUrl, key } = deepseekMod.parseRelayConfig(text);
   return { baseUrl, key, keyMasked: deepseekMod.maskKey(key) };
