@@ -244,6 +244,26 @@ function DeepseekEndpointManager({ hostId, isLocal, busy, setBusy }) {
   const [note, setNote] = useState('');
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState(null);
+  const [models, setModels] = useState([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+
+  /** 向端点询问它实际挂了哪些模型 —— 模型名靠猜必错 */
+  const fetchModels = async () => {
+    setLoadingModels(true); setNote(''); setResult(null);
+    try {
+      const r = await window.api.deepseek.listModels({ hostId, cfg: form });
+      setModels(r.models || []);
+      if (!r.models?.length) {
+        setNote(`没拉到模型列表(可能这个端点不提供 /v1/models,手动填即可)。原始响应:${r.raw || '空'}`);
+      } else {
+        setNote(`拉到 ${r.models.length} 个模型`);
+        // 当前填的不在列表里就自动选第一个,省得用户再挑
+        if (!r.models.includes(form.model)) setForm((f) => ({ ...f, model: r.models[0] }));
+      }
+    } catch (e) {
+      setNote(`拉取失败:${e.message}`);
+    } finally { setLoadingModels(false); }
+  };
 
   /**
    * 实测端点。用当前表单的值而不是已保存的值 ——
@@ -337,7 +357,22 @@ function DeepseekEndpointManager({ hostId, isLocal, busy, setBusy }) {
             placeholder="http://1.2.3.4:3000 或 https://api.deepseek.com/anthropic" />
         </label>
         <label>主模型
-          <input value={form.model} onChange={set('model')} placeholder="deepseek-chat" />
+          <div className="row gap">
+            {models.length ? (
+              // 拉到了就给下拉:模型名必须与中转站一字不差,手打极易出错
+              <select value={form.model} onChange={set('model')} style={{ flex: 1 }}>
+                {!models.includes(form.model) && form.model &&
+                  <option value={form.model}>{form.model}(当前)</option>}
+                {models.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            ) : (
+              <input value={form.model} onChange={set('model')} placeholder="deepseek-chat" style={{ flex: 1 }} />
+            )}
+            <button className="btn small" type="button" disabled={busy || loadingModels}
+              onClick={fetchModels} title="向端点询问它实际挂了哪些模型">
+              {loadingModels ? '拉取中…' : '拉取列表'}
+            </button>
+          </div>
         </label>
         <label>轻量模型(子代理/摘要用,留空则同主模型)
           <input value={form.flashModel} onChange={set('flashModel')} placeholder="deepseek-chat" />

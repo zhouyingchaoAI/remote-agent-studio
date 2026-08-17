@@ -1099,6 +1099,22 @@ ipcMain.handle('deepseek:testEndpoint', async (_e, { hostId, cfg } = {}) => {
   return deepseekMod.parseEndpointProbe(`${r.stdout || ''}${r.stderr || ''}`, cfg);
 });
 
+/** 拉取端点可用模型 —— 模型名靠猜必错,直接问服务端 */
+ipcMain.handle('deepseek:listModels', async (_e, { hostId, cfg } = {}) => {
+  const { ssh, proxy } = getSession(hostId);
+  const cmd = deepseekMod.buildModelListCommand(cfg || loadSettings().deepseekEndpoint);
+  const env = (proxy ? proxy.envPrefix() : '')
+    + ' [ -f ~/.remote-agent-env.sh ] && . ~/.remote-agent-env.sh;';
+  const r = await ssh.exec(`${env} ${cmd}`);
+  const raw = `${r.stdout || ''}${r.stderr || ''}`;
+  const models = deepseekMod.parseModelList(raw);
+  return {
+    models,
+    // 拿不到时把原始响应给出去,否则用户只看到「没有模型」无从下手
+    raw: models.length ? '' : raw.slice(0, 600)
+  };
+});
+
 ipcMain.handle('deepseek:parseRelay', (_e, { text } = {}) => {
   const { baseUrl, key } = deepseekMod.parseRelayConfig(text);
   return { baseUrl, key, keyMasked: deepseekMod.maskKey(key) };

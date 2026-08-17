@@ -39,7 +39,8 @@ contextBridge.exposeInMainWorld('api', {
   },
   deepseek: {
     parseRelay: invoke('deepseek:parseRelay'),
-    testEndpoint: invoke('deepseek:testEndpoint')
+    testEndpoint: invoke('deepseek:testEndpoint'),
+    listModels: invoke('deepseek:listModels')
   },
   setup: {
     detect: invoke('setup:detect'),

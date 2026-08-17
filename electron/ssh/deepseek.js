@@ -132,6 +132,37 @@ function maskKey(key) {
 }
 
 /**
+ * 拉取端点可用模型列表(OpenAI 兼容的 /v1/models)。
+ *
+ * 模型名必须与中转站里配的一字不差,靠猜必错。new-api / one-api /
+ * DeepSeek 官方都提供这个接口,直接问它比让用户去后台翻靠谱。
+ */
+function buildModelListCommand(cfg = {}) {
+  const { baseUrl, envKey } = resolveEndpoint(cfg);
+  /* 注意:模型列表在 OpenAI 风格的 /v1/models 上,而对话走 Anthropic 的
+   * /v1/messages。官方 DeepSeek 的 base 带 /anthropic 后缀,那下面没有
+   * /v1/models,要退回到根域名去问。 */
+  const roots = [...new Set([baseUrl, baseUrl.replace(/\/anthropic$/, '')])];
+  return roots.map((root) =>
+    `echo "RAS_ROOT=${root}"; curl -sS -m 20 ${JSON.stringify(`${root}/v1/models`)} `
+    + `-H "Authorization: Bearer \${${envKey}:-}" 2>&1 | head -c 4000; echo`
+  ).join('; ');
+}
+
+/** 从 /v1/models 响应里抽出模型 id,去重后按 deepseek 优先排序 */
+function parseModelList(stdout = '') {
+  const ids = new Set();
+  for (const m of String(stdout || '').matchAll(/"id"\s*:\s*"([^"]{1,120})"/g)) {
+    const id = m[1].trim();
+    // 过滤掉明显不是模型名的(如 object/owned_by 里的值)
+    if (id && !/^(list|model|organization|owner)$/i.test(id)) ids.add(id);
+  }
+  const all = [...ids];
+  const score = (id) => (/deepseek/i.test(id) ? 0 : 1);
+  return all.sort((a, b) => score(a) - score(b) || a.localeCompare(b));
+}
+
+/**
  * 端点连通性探测命令。
  *
  * 直接打 Anthropic 协议的 /v1/messages,而不是等对话时才失败 ——
@@ -240,5 +271,6 @@ module.exports = {
   DEEPSEEK_MODEL_PRESETS, DEFAULT_ENDPOINT, ENDPOINT_PRESETS, DEFAULT_ENV_KEY,
   normalizeBaseUrl, normalizeEnvKey, normalizeModel, resolveEndpoint,
   parseRelayConfig, maskKey, buildEndpointProbeCommand, parseEndpointProbe,
+  buildModelListCommand, parseModelList,
   deepseekEnvPosix, deepseekEnvPowershell, resolveDeepseekModel
 };

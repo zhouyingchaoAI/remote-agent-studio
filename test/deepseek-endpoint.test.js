@@ -222,3 +222,49 @@ test('模型名错单独识别出来', () => {
   assert.match(r.message, /模型名可能不对/);
   assert.match(r.message, /wrong-name/);
 });
+
+/* ---------------- 拉取模型列表 ---------------- */
+
+const { buildModelListCommand, parseModelList } = require('../electron/ssh/deepseek');
+
+test('官方端点要退回根域名问 /v1/models(anthropic 子路径下没有这个接口)', () => {
+  const cmd = buildModelListCommand({});   // 默认 https://api.deepseek.com/anthropic
+  assert.match(cmd, /api\.deepseek\.com\/anthropic\/v1\/models/);
+  assert.match(cmd, /api\.deepseek\.com\/v1\/models/, '应同时试根域名');
+});
+
+test('自建中转只问一次(根地址下就有 /v1/models)', () => {
+  const cmd = buildModelListCommand({ baseUrl: 'http://203.0.113.10:3000', model: 'x' });
+  const hits = cmd.match(/v1\/models/g) || [];
+  assert.equal(hits.length, 1, '没有 /anthropic 后缀时不该重复请求');
+  assert.match(cmd, /Authorization: Bearer \$\{DEEPSEEK_API_KEY:-\}/);
+  assert.ok(!/sk-[A-Za-z0-9]{16,}/.test(cmd));
+});
+
+test('从 /v1/models 响应里抽出模型 id,deepseek 排前面', () => {
+  const body = JSON.stringify({
+    object: 'list',
+    data: [
+      { id: 'gpt-4o', object: 'model', owned_by: 'openai' },
+      { id: 'deepseek-chat', object: 'model' },
+      { id: 'claude-3-5-sonnet', object: 'model' },
+      { id: 'deepseek-reasoner', object: 'model' }
+    ]
+  });
+  const out = parseModelList(`RAS_ROOT=http://a.b:1\n${body}`);
+  assert.deepEqual(out.slice(0, 2), ['deepseek-chat', 'deepseek-reasoner']);
+  assert.ok(out.includes('gpt-4o'));
+  // object/owned_by 的值不该被当成模型名
+  assert.ok(!out.includes('list'));
+  assert.ok(!out.includes('model'));
+});
+
+test('同一模型在两次请求里重复出现只保留一个', () => {
+  const dup = '{"data":[{"id":"deepseek-chat"}]} {"data":[{"id":"deepseek-chat"}]}';
+  assert.deepEqual(parseModelList(dup), ['deepseek-chat']);
+});
+
+test('拿不到列表时返回空数组而不是抛错(端点可能不提供该接口)', () => {
+  assert.deepEqual(parseModelList(''), []);
+  assert.deepEqual(parseModelList('404 page not found'), []);
+});
