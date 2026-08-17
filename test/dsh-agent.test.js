@@ -6,7 +6,8 @@ const { execFileSync } = require('child_process');
 
 const {
   dshInstallCommand, dshEnvPosix, dshEnvPowershell, dshArgs,
-  withHistory, describeExit, DSH_PACKAGE
+  withHistory, describeExit, DSH_PACKAGE,
+  dshDiagnoseCommand, parseDshConfig, explainSilence
 } = require('../electron/ssh/dsh');
 const { AgentSession } = require('../electron/ssh/AgentSession');
 
@@ -213,4 +214,58 @@ test('测试按钮在本机也要有 —— 之前被 !isLocal 整块藏了', ()
     '测试按钮区块不该被 !isLocal 包住');
   assert.match(src, /测试 \{isLocal \? '本机' : '远程'\} Codex/);
   assert.match(src, /测试 \{isLocal \? '本机' : '远程'\} DeepSeek/);
+});
+
+/* 用户连发三条消息,一条回复都没有 —— 没报错,也没内容。
+ * 查官方 README(npm 包内)确认了两件事:
+ *  1. `dsh --profile headless "job"` 语法是对的,且 headless profile 首次运行才初始化;
+ *  2. 模型与凭据在 $DSH_HOME/cordis.patch.yml 的配置层里,dsh 不读 DEEPSEEK_API_KEY。
+ * 所以「加了 API key 还是不行」很可能是加错了地方,而我们连这点都没告诉用户。 */
+
+test('诊断用官方 --dump-config,不启动就能看配置树', () => {
+  const cmd = dshDiagnoseCommand();
+  assert.match(cmd, /--profile headless/);
+  assert.match(cmd, /--dump-config/);
+});
+
+test('配置树没有模型路由时,明确指出 key 该写在哪', () => {
+  const r = parseDshConfig('some: yaml\nwithout: routing\n');
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'unconfigured');
+  assert.match(r.message, /cordis\.patch\.yml/);
+  // 关键:必须点破「不是环境变量」,否则用户会一直在错的地方加
+  assert.match(r.message, /不是 DEEPSEEK_API_KEY/);
+});
+
+test('配置树里有模型就认为就绪,并报出模型名', () => {
+  const r = parseDshConfig('route:\n  model: deepseek-v4-pro\n  apiKey: xxx\n');
+  assert.equal(r.ok, true);
+  assert.equal(r.model, 'deepseek-v4-pro');
+  assert.equal(r.hasKey, true);
+});
+
+test('空输出判为 profile 未初始化,不谎报就绪', () => {
+  const r = parseDshConfig('');
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'empty');
+});
+
+test('退 0 且无输出时给出解释,而不是一片空白', () => {
+  const msg = explainSilence(0, 'some stderr tail');
+  assert.match(msg, /没有任何输出/);
+  assert.match(msg, /cordis\.patch\.yml/);
+  assert.match(msg, /some stderr tail/);
+
+  const src = read('electron/ssh/AgentSession.js');
+  // 原来是 `if (text) emit(...)` —— 没文本就彻底沉默
+  assert.match(src, /explainSilence\(exitCode, this\.lastStderr\)/);
+});
+
+test('测试 dsh:先查配置再实跑,且退 0 无输出不算通过', () => {
+  const src = read('electron/main.js');
+  assert.match(src, /dshMod\.dshDiagnoseCommand\(\)/);
+  assert.match(src, /parseDshConfig/);
+  // 「测试通过」但对话里一片空白是最误导的组合
+  assert.match(src, /const silent = agent === 'dsh' && !out;/);
+  assert.match(src, /!looksNetErr && !silent/);
 });

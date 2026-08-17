@@ -67,6 +67,38 @@ function dshEnvPowershell(rawCfg) {
  * dsh 没有 --model 之类的开关(模型由 profile 配置决定),所以对话里的
  * 模型选择对它无效 —— 界面上要如实标出来,不能让用户以为选了有用。
  */
+/**
+ * 诊断命令:不启动、只把合成后的配置树打出来(官方 --dump-config)。
+ * 用来回答「模型路由到底配没配」——「我加了 API key 还是不行」多半
+ * 是加错了地方:dsh 的模型/凭据在 $DSH_HOME/cordis.patch.yml 的配置层里,
+ * 不读 DEEPSEEK_API_KEY 环境变量。
+ */
+function dshDiagnoseCommand() {
+  return 'dsh --profile headless --dump-config 2>&1';
+}
+
+/**
+ * 从 --dump-config 输出里判断模型路由是否可用。
+ * 只做保守判断:拿不准就说拿不准,不要给用户一个假的「已就绪」。
+ */
+function parseDshConfig(stdout = '') {
+  const text = String(stdout || '');
+  if (!text.trim()) return { ok: false, reason: 'empty', message: 'dsh 没有输出配置,多半是 profile 尚未初始化(首次运行会自动初始化,需要联网且较慢)' };
+  if (/command not found|not found|ENOENT/i.test(text) && !/model/i.test(text)) {
+    return { ok: false, reason: 'missing', message: '本机找不到 dsh 命令,先到「环境配置」页安装' };
+  }
+  const model = text.match(/model:\s*['"]?([A-Za-z0-9._-]+)/);
+  const hasKey = /apiKey|api_key|authorization/i.test(text);
+  if (!model && !hasKey) {
+    return {
+      ok: false, reason: 'unconfigured',
+      message: '配置树里没有模型路由 —— dsh 的模型与密钥写在 $DSH_HOME/cordis.patch.yml,'
+        + '不是 DEEPSEEK_API_KEY 环境变量。到「浏览」页启动 dsh 配置界面填一次。'
+    };
+  }
+  return { ok: true, model: model ? model[1] : '', hasKey, message: `模型路由已配置${model ? `:${model[1]}` : ''}` };
+}
+
 function dshArgs() {
   return '--profile headless';
 }
@@ -109,7 +141,25 @@ function describeExit(code, stdout, stderr) {
   };
 }
 
+/**
+ * dsh 正常退出却一个字都没输出时的解释。
+ * 静默是最糟的失败方式 —— 用户只看到消息发出去、然后什么都没有。
+ */
+function explainSilence(code, stderr = '') {
+  const tail = String(stderr || '').trim().slice(-600);
+  const lines = [
+    `dsh 退出(码 ${code ?? '未知'})但没有任何输出。`,
+    '常见原因:',
+    '· headless profile 首次运行需要联网自动初始化,可能很慢或失败',
+    '· 模型路由没配 —— dsh 的模型/密钥在 $DSH_HOME/cordis.patch.yml,不读 DEEPSEEK_API_KEY',
+    '到「环境配置」页点「测试 dsh」可以看到确切原因。'
+  ];
+  if (tail) lines.push('—— stderr ——', tail);
+  return lines.join('\n');
+}
+
 module.exports = {
+  dshDiagnoseCommand, parseDshConfig, explainSilence,
   DSH_PACKAGE, DSH_BIN, DSH_MIN_NODE,
   dshInstallCommand, dshEnvPosix, dshEnvPowershell, dshArgs,
   withHistory, describeExit

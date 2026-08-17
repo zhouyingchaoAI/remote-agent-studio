@@ -11,7 +11,9 @@ const path = require('path');
 const { shellQuote } = require('./SSHManager');
 const { extractImagePaths, isDangerousCommand } = require('../chat/attachments');
 const { deepseekEnvPosix, deepseekEnvPowershell, resolveDeepseekModel } = require('./deepseek');
-const { dshEnvPosix, dshEnvPowershell, dshArgs, withHistory, describeExit } = require('./dsh');
+const {
+  dshEnvPosix, dshEnvPowershell, dshArgs, withHistory, describeExit, explainSilence
+} = require('./dsh');
 const { isTransientAgentError, describeTransient } = require('../transientErrors');
 
 const AGENT_PATH = 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"; ' +
@@ -283,7 +285,14 @@ class AgentSession extends EventEmitter {
         // dsh 只在 stdout 打最终文本,收尾时整段发出(没有流式增量可用)
         const text = this.dshBuffer.trim();
         this.dshBuffer = '';
-        if (text) this._emitMsg({ kind: 'text', text });
+        if (text) {
+          this._emitMsg({ kind: 'text', text });
+        } else if (exitCode === 0 || exitCode == null) {
+          /* 退 0 却没有任何输出:用户发完消息之后画面上什么都不会出现。
+           * 静默是最糟的失败方式 —— 宁可多说一句,也不能让人对着空白猜。
+           * (非 0 已在上面的 describeExit 分支报过,不重复。) */
+          this._emitMsg({ kind: 'error', text: explainSilence(exitCode, this.lastStderr) });
+        }
         /* dsh 没有 --resume,每轮都是全新进程。之前 withHistory 拿到的
          * 永远是空数组 —— 上一轮说了什么它根本不知道,自然没法迭代优化。
          * 会话对象自己记账,不依赖渲染层传回来。 */

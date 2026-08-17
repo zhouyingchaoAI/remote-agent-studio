@@ -639,7 +639,19 @@ async function testRemoteAgent(s, agent, log) {
     cmd = `${env} ${deepseekEnvPosix()} cd "$HOME" && ` +
       `claude -p --permission-mode plan --model '${DEEPSEEK_DEFAULT_MODEL}' '仅回复两个字:可用' 2>&1 </dev/null`;
   } else if (agent === 'dsh') {
-    // dsh 无头模式:一次性任务,成功退 0
+    /* dsh 先做配置诊断再做真实调用。
+     * 「我加了 API key 还是不行」通常是加错地方了:dsh 的模型与凭据在
+     * $DSH_HOME/cordis.patch.yml 的配置层里,不读 DEEPSEEK_API_KEY。
+     * 光跑一次任务只会得到一句沉默,说明不了任何问题。 */
+    log('检查 dsh 配置树(--dump-config,不会真的启动)...\n');
+    const d = await s.ssh.exec(`${env} ${dshMod.dshDiagnoseCommand()}`).catch((e) => ({ stdout: e.message, code: 1 }));
+    const parsed = dshMod.parseDshConfig(d.stdout || '');
+    log(`  ${parsed.ok ? '✓' : '✗'} ${parsed.message}\n`);
+    if (!parsed.ok) {
+      log('  提示:到「浏览」页点「启动并打开」dsh 配置界面,在里面配好模型与密钥。\n');
+      return { ok: false, output: (d.stdout || '').slice(-500) };
+    }
+    log('配置就绪,实跑一次无头任务(首次可能较慢,profile 需要初始化)...\n');
     cmd = `${env} ${dshMod.dshEnvPosix()} cd "$HOME" && dsh ${dshMod.dshArgs()} '仅回复两个字:可用' 2>&1 </dev/null`;
   } else {
     // 默认用 opus 测试:CLI 的默认模型可能是账号已无额度的那个,
@@ -652,7 +664,14 @@ async function testRemoteAgent(s, agent, log) {
   const lower = out.toLowerCase();
   const looksAuthErr = /unauthorized|not logged in|api key|401|403|login|authenticat/i.test(out);
   const looksNetErr = /tim(e|)out|network|connection|proxy|econn|getaddrinfo|dns/i.test(lower);
-  const ok = r.code === 0 && !looksAuthErr && !looksNetErr;
+  // dsh 退 0 却没输出不能算通过:那正是对话里「发了消息什么都没有」的样子
+  const silent = agent === 'dsh' && !out;
+  const ok = r.code === 0 && !looksAuthErr && !looksNetErr && !silent;
+  if (silent) {
+    log('✗ dsh 退出码 0 但没有任何输出 —— 这正是对话里发消息后一片空白的原因。\n'
+      + '  多为 headless profile 首次初始化未完成,或模型路由未生效。\n');
+    return { ok: false, output: '' };
+  }
   if (ok) {
     log(`✓ 远程 ${agent} 测试通过,认证与网络均正常。\n`);
     log(`  返回: ${out.slice(-200)}\n`);
