@@ -63,7 +63,16 @@ class AgentSession extends EventEmitter {
     super();
     this.ssh = ssh;
     this.proxy = proxy;
-    this.opts = { ...opts, permissionMode: normalizePermissionMode(opts) };
+    /* 在源头把可空字段收敛成确定类型。
+     * 这类 `cfg = {}` 默认参数挡不住 null 的 TypeError 已经出现两次
+     * (normalizePermissionMode、dshEnvPosix),每次都是整轮对话直接崩。
+     * 与其在每个下游消费点补 `|| {}`,不如让下游永远拿不到 null。 */
+    this.opts = {
+      ...opts,
+      permissionMode: normalizePermissionMode(opts),
+      dshConfig: (opts && opts.dshConfig) || {},
+      history: Array.isArray(opts && opts.history) ? opts.history : []
+    };
     this.claudeSessionId = null;
     this.codexSessionId = null; // codex 会话/线程 ID,优先用它精确 resume
     this.codexStarted = false;

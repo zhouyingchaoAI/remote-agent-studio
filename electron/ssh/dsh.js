@@ -30,7 +30,11 @@ function dshInstallCommand() {
  * HTTP_PROXY/HTTPS_PROXY —— 不设的话远程机器走代理上网会直接连不通。
  * @param cfg {permissionMode?} 权限模式取值官方未公开完整列表,留空则继承其默认的 workspace-write
  */
-function dshEnvPosix(cfg = {}) {
+function dshEnvPosix(rawCfg) {
+  // 默认参数只挡 undefined。settings 里存的是 dshConfig: null,
+  // null.permissionMode 直接 TypeError,整轮对话就废了 —— 上次在
+  // normalizePermissionMode 踩过一模一样的坑,这里是同一个类型的第二处。
+  const cfg = rawCfg || {};
   const parts = [
     'export NODE_USE_ENV_PROXY=1;',
     // 凭据从环境读取;key 仍存在 ~/.remote-agent-env.sh(600),不内联
@@ -44,7 +48,8 @@ function dshEnvPosix(cfg = {}) {
   return parts.join(' ');
 }
 
-function dshEnvPowershell(cfg = {}) {
+function dshEnvPowershell(rawCfg) {
+  const cfg = rawCfg || {};
   const parts = [
     '$env:NODE_USE_ENV_PROXY=\'1\';',
     '$env:DEEPSEEK_API_KEY=$env:DEEPSEEK_API_KEY;'
@@ -70,7 +75,8 @@ function dshArgs() {
  * 多轮上下文:dsh 每次都是新会话,只能把历史摘要拼进任务文本。
  * 不做的话第二句「那再改一下 X」它完全不知道在说什么。
  */
-function withHistory(prompt, history = []) {
+function withHistory(prompt, rawHistory) {
+  const history = Array.isArray(rawHistory) ? rawHistory : [];
   const items = (history || []).filter((h) => h && h.text);
   if (!items.length) return prompt;
   const digest = items.map((h) => `${h.role === 'user' ? '用户' : '助手'}:${String(h.text).slice(0, 800)}`).join('\n');
@@ -87,7 +93,8 @@ function withHistory(prompt, history = []) {
  * 官方:completed 退 0,其余退 1。所以非 0 不一定是崩溃,
  * 也可能是任务未达成 —— 报错措辞不能写成「进程崩溃」误导用户。
  */
-function describeExit(code, stdout = '', stderr = '') {
+function describeExit(code, stdout, stderr) {
+  stdout = String(stdout || ''); stderr = String(stderr || '');
   if (code === 0) return { ok: true };
   const detail = String(stderr || '').trim() || String(stdout || '').trim().slice(-400);
   if (/not found|command not found|ENOENT/i.test(detail)) {

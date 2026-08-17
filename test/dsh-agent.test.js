@@ -141,3 +141,32 @@ test('技能目录换成 ~/.dsh/skills', () => {
   assert.equal(ENGINE_SKILL_DIRS.dsh, '.dsh/skills');
   assert.equal(ENGINE_SKILL_DIRS.grok, undefined);
 });
+/* 用户实测:发消息直接崩 —— Cannot read properties of null (reading 'permissionMode')。
+ * 这是同一类 bug 的第二次:`cfg = {}` 默认参数只在 undefined 时生效,
+ * 而 settings 里存的是 dshConfig: null。第一次出在 normalizePermissionMode。 */
+
+test('可空配置传 null 不崩 —— 默认参数挡不住 null', () => {
+  for (const bad of [null, undefined, 0, '', false]) {
+    assert.doesNotThrow(() => dshEnvPosix(bad), `dshEnvPosix(${JSON.stringify(bad)}) 崩了`);
+    assert.doesNotThrow(() => dshEnvPowershell(bad));
+    assert.match(dshEnvPosix(bad), /NODE_USE_ENV_PROXY=1/);
+  }
+});
+
+test('history 传 null 不崩,原样返回提示词', () => {
+  assert.equal(withHistory('干活', null), '干活');
+  assert.equal(withHistory('干活', undefined), '干活');
+  assert.equal(withHistory('干活', 'not-an-array'), '干活');
+});
+
+test('describeExit 的 stdout/stderr 传 null 不崩', () => {
+  assert.doesNotThrow(() => describeExit(1, null, null));
+  assert.doesNotThrow(() => describeExit(0, undefined, undefined));
+});
+
+test('AgentSession 在源头收敛可空字段,下游拿不到 null', () => {
+  const src = read('electron/ssh/AgentSession.js');
+  // 与其在每个消费点补 || {},不如让下游永远拿不到 null
+  assert.match(src, /dshConfig: \(opts && opts\.dshConfig\) \|\| \{\}/);
+  assert.match(src, /history: Array\.isArray\(opts && opts\.history\)/);
+});
