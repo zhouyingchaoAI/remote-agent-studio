@@ -294,7 +294,8 @@ test('端点已是中转时,不再重复劝人改 baseUrl', () => {
 });
 
 test('配置树能读出 baseUrl,用于判断端点是否指错', () => {
-  const r = parseDshConfig('route:\n  model: deepseek-chat\n  baseUrl: http://203.0.113.10:3000\n');
+  const r = parseDshConfig(
+    'route:\n  model: deepseek-chat\n  apiKey: sk-relay\n  baseUrl: http://203.0.113.10:3000\n');
   assert.equal(r.ok, true);
   assert.equal(r.baseUrl, 'http://203.0.113.10:3000');
   assert.match(r.message, /@ http:\/\/203\.0\.113\.10:3000/);
@@ -304,4 +305,22 @@ test('dsh 的认证失败走专属解释,不复用 codex 那套说辞', () => {
   const src = read('electron/main.js');
   assert.match(src, /looksAuthErr && agent === 'dsh'/);
   assert.match(src, /explainAuthFailure\(out, dshBaseUrl\)/);
+});
+
+/* 用户在 dsh 的网页界面里填了官方 key。但 web 与 headless 是两个独立
+ * profile,各有自己的 cordis.patch.yml —— 填在 web 那份里,headless 读不到。
+ * 而模型路由来自随附模板、一直都在,不能拿它代表「配好了」。 */
+
+test('有模型路由但没 key 时不谎报就绪,并点明 profile 隔离', () => {
+  const r = parseDshConfig('route:\n  model: deepseek-v4-flash\n');
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'nokey');
+  assert.match(r.message, /两个独立 profile/);
+  assert.match(r.message, /\$DSH_HOME\/cordis\.patch\.yml/);
+});
+
+test('模型与 key 都在才算就绪', () => {
+  const r = parseDshConfig('route:\n  model: deepseek-v4-flash\n  apiKey: sk-official\n');
+  assert.equal(r.ok, true);
+  assert.match(r.message, /已读到 API key/);
 });

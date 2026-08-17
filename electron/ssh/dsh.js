@@ -98,9 +98,21 @@ function parseDshConfig(stdout = '') {
     };
   }
   const url = baseUrl ? baseUrl[1] : '';
+  /* 有模型路由但没有 key 是一个很具体的坑:dsh 的 web 与 headless 是两个
+   * 独立 profile,各有自己的 cordis.patch.yml。在 web 界面里填的 key 如果
+   * 落在 web 那份里,headless 就完全看不到 —— 用户会觉得「明明填了」。
+   * 模型路由来自随附模板,所以它一直都在,不能拿它代表「配好了」。 */
+  if (!hasKey) {
+    return {
+      ok: false, reason: 'nokey', model: model ? model[1] : '', baseUrl: url,
+      message: `headless profile 里有模型路由${model ? `(${model[1]})` : ''}但没有 API key。`
+        + 'dsh 的 web 与 headless 是两个独立 profile —— 在网页里填的 key 若只写进了 web 那份,'
+        + 'headless 读不到。请把 key 写到 home 级的 $DSH_HOME/cordis.patch.yml(对所有 profile 生效)。'
+    };
+  }
   return {
     ok: true, model: model ? model[1] : '', baseUrl: url, hasKey,
-    message: `模型路由已配置${model ? `:${model[1]}` : ''}${url ? ` @ ${url}` : ''}`
+    message: `模型路由已配置${model ? `:${model[1]}` : ''}${url ? ` @ ${url}` : ''},且已读到 API key`
   };
 }
 
