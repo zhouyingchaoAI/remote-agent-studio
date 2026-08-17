@@ -178,6 +178,24 @@ function ConvCard({ conv }) {
 }
 
 /* ---------------- 单个对话视图 ---------------- */
+/**
+ * 从对话消息里抽出给 dsh 的历史。
+ * 只取用户指令与助手正文 —— 错误提示、工具日志喂回去只会误导它。
+ */
+export function dshHistoryFrom(messages = [], maxItems = 12) {
+  const out = [];
+  for (const m of messages || []) {
+    if (!m || !m.text) continue;
+    if (m.role === 'user') { out.push({ role: 'user', text: m.text }); continue; }
+    // 引擎侧消息在 store 里是 role:'agent'(不是 'assistant');
+    // 只取正文,error/raw/tool/reasoning 喂回去只会误导它
+    if (m.role === 'agent' && (m.kind === 'text' || m.kind === 'result')) {
+      out.push({ role: 'assistant', text: m.text });
+    }
+  }
+  return out.slice(-maxItems);
+}
+
 function ChatView({ hostId, conv }) {
   const running = useStore((s) => s.agentRunning[conv.id] || false);
   const setActiveConv = useStore((s) => s.setActiveConv);
@@ -200,7 +218,12 @@ function ChatView({ hostId, conv }) {
   useEffect(() => {
     window.api.agent.start({
       hostId, convId: conv.id,
-      opts: { agent: conv.agent, cwd: conv.cwd, model: conv.model, permissionMode },
+      opts: {
+        agent: conv.agent, cwd: conv.cwd, model: conv.model, permissionMode,
+        /* dsh 没有 resume:重开应用后会话对象是空的,不喂历史就等于从零开始。
+           claude/codex 靠各自的 sessionId 续聊,不需要也不该走这条。 */
+        history: conv.agent === 'dsh' ? dshHistoryFrom(conv.messages) : []
+      },
       resume: { claudeSessionId: conv.claudeSessionId, codexSessionId: conv.codexSessionId, codexStarted: conv.codexStarted }
     }).then(() => setStarted(true)).catch(() => setStarted(true));
     // eslint-disable-next-line

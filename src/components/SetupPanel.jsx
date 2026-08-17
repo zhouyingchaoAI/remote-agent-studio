@@ -178,26 +178,28 @@ export default function SetupPanel({ hostId, host }) {
           <h3 style={{ marginTop: 18 }}>本机 Claude Code 认证</h3>
           <LocalClaudeCard isLocal={isLocal} busy={busy}
             onSync={run(() => window.api.setup.syncAuth({ hostId, agent: 'claude' }))} />
-          {!isLocal && <div className="row gap" style={{ marginTop: 6 }}>
+          {/* 之前这块被 !isLocal 包着,本机模式下一个测试按钮都看不到 ——
+              而「这个引擎到底能不能用」恰恰是本机也要回答的问题 */}
+          <div className="row gap" style={{ marginTop: 6 }}>
             <button className="btn" disabled={busy}
               onClick={run(() => window.api.setup.testRemoteAgent({ hostId, agent: 'codex' }))}>
-              测试远程 Codex
+              测试 {isLocal ? '本机' : '远程'} Codex
             </button>
             <button className="btn" disabled={busy}
               onClick={run(() => window.api.setup.testRemoteAgent({ hostId, agent: 'claude' }))}>
-              测试远程 Claude
+              测试 {isLocal ? '本机' : '远程'} Claude
             </button>
             <button className="btn" disabled={busy}
               title="DeepSeek 基于 Claude Code CLI + DeepSeek 官方 Anthropic 兼容端点,需先写入 DEEPSEEK_API_KEY"
               onClick={run(() => window.api.setup.testRemoteAgent({ hostId, agent: 'deepseek' }))}>
-              测试远程 DeepSeek
+              测试 {isLocal ? '本机' : '远程'} DeepSeek
             </button>
             <button className="btn" disabled={busy}
               title="DeepSeek Harness 无头模式实测一次(需 DEEPSEEK_API_KEY)"
               onClick={run(() => window.api.setup.testRemoteAgent({ hostId, agent: 'dsh' }))}>
               测试 dsh
             </button>
-          </div>}
+          </div>
         </Fold>
 
         {!isLocal && <Fold title="API Key(可选)" hint="也可在「终端」页交互登录">

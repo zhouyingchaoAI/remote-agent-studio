@@ -82,6 +82,18 @@ class AgentSession extends EventEmitter {
     this.permissionHintEmitted = false;
   }
 
+  /**
+   * 记录 dsh 的一轮问答,供下一轮拼上下文。
+   * 留最近 6 轮:再多会把提示词撑爆,而 dsh 每轮都要把它整段重发。
+   */
+  _recordDshTurn(prompt, reply) {
+    const h = this.opts.history;
+    if (prompt) h.push({ role: 'user', text: String(prompt) });
+    if (reply) h.push({ role: 'assistant', text: String(reply) });
+    const MAX = 12;
+    if (h.length > MAX) h.splice(0, h.length - MAX);
+  }
+
   _emitMsg(msg) {
     // 重试通告降级成状态提示,不占据错误气泡
     if ((msg.kind === 'error' || msg.kind === 'stderr') && isRetryNotice(msg.text)) {
@@ -272,6 +284,10 @@ class AgentSession extends EventEmitter {
         const text = this.dshBuffer.trim();
         this.dshBuffer = '';
         if (text) this._emitMsg({ kind: 'text', text });
+        /* dsh 没有 --resume,每轮都是全新进程。之前 withHistory 拿到的
+         * 永远是空数组 —— 上一轮说了什么它根本不知道,自然没法迭代优化。
+         * 会话对象自己记账,不依赖渲染层传回来。 */
+        this._recordDshTurn(prompt, text);
       }
       return { imagePaths: [...this.imagePaths] };
     } finally {

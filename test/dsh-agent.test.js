@@ -170,3 +170,47 @@ test('AgentSession 在源头收敛可空字段,下游拿不到 null', () => {
   assert.match(src, /dshConfig: \(opts && opts\.dshConfig\) \|\| \{\}/);
   assert.match(src, /history: Array\.isArray\(opts && opts\.history\)/);
 });
+
+/* 用户:「还是无法使用 deepseek harness 迭代优化,另外都没有测试按钮」。
+ * 两个真问题,都不在我先前以为的地方。 */
+
+test('dsh 每轮把问答记进 history —— 否则下一轮完全失忆', () => {
+  const s = new AgentSession({ exec() {} }, null, {
+    agent: 'dsh', cwd: '/tmp/proj', dshConfig: null
+  });
+  // 第一轮:没有历史,原样发指令
+  const first = s.buildCommand('把 README 补上安装章节', {});
+  assert.ok(!first.includes('此前对话摘要'), '首轮不该凭空造历史');
+
+  s._recordDshTurn('把 README 补上安装章节', '已在 README 加了「安装」小节');
+  const second = s.buildCommand('再补一段常见问题', {});
+  assert.match(second, /此前对话摘要/);
+  assert.match(second, /已在 README 加了/, '上一轮的结论必须带进下一轮,这才谈得上迭代');
+  assert.match(second, /本轮指令:再补一段常见问题/);
+});
+
+test('history 有上限,不会把提示词无限撑大', () => {
+  const s = new AgentSession({ exec() {} }, null, { agent: 'dsh', cwd: '/tmp' });
+  for (let i = 0; i < 30; i += 1) s._recordDshTurn(`指令${i}`, `回复${i}`);
+  assert.ok(s.opts.history.length <= 12, `实际 ${s.opts.history.length} 条`);
+  // 保留的应是最近的
+  assert.match(s.opts.history[s.opts.history.length - 1].text, /回复29/);
+});
+
+test('从对话记录抽历史:认 role:agent,滤掉错误与工具噪音', () => {
+  const src = read('src/components/ChatPanel.jsx');
+  // store 里引擎消息是 role:'agent',写成 'assistant' 会一条都抽不到
+  assert.match(src, /m\.role === 'agent' && \(m\.kind === 'text' \|\| m\.kind === 'result'\)/);
+  assert.ok(!/m\.role === 'assistant'/.test(src), 'store 里没有 assistant 这个 role');
+  // 只有 dsh 需要喂历史,claude/codex 各自有 sessionId 续聊
+  assert.match(src, /conv\.agent === 'dsh' \? dshHistoryFrom/);
+});
+
+test('测试按钮在本机也要有 —— 之前被 !isLocal 整块藏了', () => {
+  const src = read('src/components/SetupPanel.jsx');
+  const block = src.slice(src.indexOf('测试 dsh') - 1400, src.indexOf('测试 dsh'));
+  assert.ok(!block.includes('{!isLocal && <div className="row gap" style={{ marginTop: 6 }}>'),
+    '测试按钮区块不该被 !isLocal 包住');
+  assert.match(src, /测试 \{isLocal \? '本机' : '远程'\} Codex/);
+  assert.match(src, /测试 \{isLocal \? '本机' : '远程'\} DeepSeek/);
+});
