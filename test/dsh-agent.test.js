@@ -7,7 +7,7 @@ const { execFileSync } = require('child_process');
 const {
   dshInstallCommand, dshEnvPosix, dshEnvPowershell, dshArgs,
   withHistory, describeExit, DSH_PACKAGE,
-  dshDiagnoseCommand, parseDshConfig, explainSilence
+  dshDiagnoseCommand, parseDshConfig, explainSilence, explainAuthFailure
 } = require('../electron/ssh/dsh');
 const { AgentSession } = require('../electron/ssh/AgentSession');
 
@@ -268,4 +268,40 @@ test('测试 dsh:先查配置再实跑,且退 0 无输出不算通过', () => {
   // 「测试通过」但对话里一片空白是最误导的组合
   assert.match(src, /const silent = agent === 'dsh' && !out;/);
   assert.match(src, /!looksNetErr && !silent/);
+});
+
+/* 实测诊断输出:
+ *   ✓ 模型路由已配置:deepseek-v4-flash
+ *   ✗ exit 1 —— dsh: AUTH: Authentication Fails, Your api key: ****4CQ7 is invalid
+ * key 尾号对应用户自建 new-api 中转签发的 key,而 dsh 默认送去官方端点验签。
+ * 我们当时给的建议是「确认已登录且 auth.json 有效」—— dsh 根本没有 auth.json。 */
+
+test('认证失败要指出 key 与端点错配,而不是叫人去查 auth.json', () => {
+  const msg = explainAuthFailure(
+    'dsh: AUTH: Authentication Fails, Your api key: ****4CQ7 is invalid', '');
+  assert.match(msg, /\*\*\*\*4CQ7/, '要回显被拒的 key,便于确认填的是哪一把');
+  assert.match(msg, /api\.deepseek\.com/, '要说清当前打的是哪个端点');
+  assert.match(msg, /中转/);
+  assert.match(msg, /baseUrl/);
+  assert.ok(!/auth\.json/.test(msg), 'dsh 没有 auth.json,这条建议会把人带偏');
+});
+
+test('端点已是中转时,不再重复劝人改 baseUrl', () => {
+  const msg = explainAuthFailure('api key: ****4CQ7 is invalid', 'http://203.0.113.10:3000');
+  assert.match(msg, /203\.0\.113\.10/);
+  assert.match(msg, /额度|模型名/, '此时该查的是中转上的 key/额度/模型名');
+  assert.ok(!/platform\.deepseek\.com/.test(msg), '端点没指错就别再劝申请官方 key');
+});
+
+test('配置树能读出 baseUrl,用于判断端点是否指错', () => {
+  const r = parseDshConfig('route:\n  model: deepseek-chat\n  baseUrl: http://203.0.113.10:3000\n');
+  assert.equal(r.ok, true);
+  assert.equal(r.baseUrl, 'http://203.0.113.10:3000');
+  assert.match(r.message, /@ http:\/\/203\.0\.113\.10:3000/);
+});
+
+test('dsh 的认证失败走专属解释,不复用 codex 那套说辞', () => {
+  const src = read('electron/main.js');
+  assert.match(src, /looksAuthErr && agent === 'dsh'/);
+  assert.match(src, /explainAuthFailure\(out, dshBaseUrl\)/);
 });

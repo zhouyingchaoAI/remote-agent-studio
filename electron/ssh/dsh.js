@@ -88,6 +88,7 @@ function parseDshConfig(stdout = '') {
     return { ok: false, reason: 'missing', message: '本机找不到 dsh 命令,先到「环境配置」页安装' };
   }
   const model = text.match(/model:\s*['"]?([A-Za-z0-9._-]+)/);
+  const baseUrl = text.match(/base[_-]?[Uu]rl:\s*['"]?(https?:\/\/[^\s'"]+)/);
   const hasKey = /apiKey|api_key|authorization/i.test(text);
   if (!model && !hasKey) {
     return {
@@ -96,7 +97,11 @@ function parseDshConfig(stdout = '') {
         + '不是 DEEPSEEK_API_KEY 环境变量。到「浏览」页启动 dsh 配置界面填一次。'
     };
   }
-  return { ok: true, model: model ? model[1] : '', hasKey, message: `模型路由已配置${model ? `:${model[1]}` : ''}` };
+  const url = baseUrl ? baseUrl[1] : '';
+  return {
+    ok: true, model: model ? model[1] : '', baseUrl: url, hasKey,
+    message: `模型路由已配置${model ? `:${model[1]}` : ''}${url ? ` @ ${url}` : ''}`
+  };
 }
 
 function dshArgs() {
@@ -145,6 +150,36 @@ function describeExit(code, stdout, stderr) {
  * dsh 正常退出却一个字都没输出时的解释。
  * 静默是最糟的失败方式 —— 用户只看到消息发出去、然后什么都没有。
  */
+/**
+ * 解释 dsh 的认证失败。
+ *
+ * 最常见的错配:用户拿自建中转(new-api/one-api)签发的 key 填进 dsh,
+ * 而 dsh 默认把它送去 api.deepseek.com 官方端点验签 —— 官方当然不认这把 key。
+ * 通用的「检查登录状态」提示在这里毫无用处,dsh 也没有 auth.json。
+ * @param baseUrl 配置树里读到的端点,用来判断是不是指错了地方
+ */
+function explainAuthFailure(output = '', baseUrl = '') {
+  const masked = String(output).match(/api key:\s*(\S+)/i);
+  const lines = ['dsh 认证失败:配置里的 API key 被端点拒绝了。'];
+  if (masked) lines.push(`  被拒的 key:${masked[1]}`);
+  const official = !baseUrl || /api\.deepseek\.com/i.test(baseUrl);
+  lines.push(`  当前端点:${baseUrl || 'api.deepseek.com(默认)'}`);
+  if (official) {
+    lines.push(
+      '',
+      '最常见的原因是 key 与端点不匹配:',
+      '· 若这把 key 来自你自建的中转(new-api/one-api),它只在中转上有效 ——',
+      '  必须同时把 dsh 的 baseUrl 指到中转地址,否则请求会被送去官方端点验签。',
+      '· 若你想用官方端点,请到 platform.deepseek.com 申请一把官方 key。'
+    );
+  } else {
+    lines.push('', '端点已指向自建中转,那么请检查:key 是否在该中转上有效、是否还有额度、'
+      + `模型名是否是中转上真实存在的(中转常不提供官方同名模型)。`);
+  }
+  lines.push('', '改配置的位置:$DSH_HOME/cordis.patch.yml,或到「浏览」页打开 dsh 配置界面。');
+  return lines.join('\n');
+}
+
 function explainSilence(code, stderr = '') {
   const tail = String(stderr || '').trim().slice(-600);
   const lines = [
@@ -159,7 +194,7 @@ function explainSilence(code, stderr = '') {
 }
 
 module.exports = {
-  dshDiagnoseCommand, parseDshConfig, explainSilence,
+  dshDiagnoseCommand, parseDshConfig, explainSilence, explainAuthFailure,
   DSH_PACKAGE, DSH_BIN, DSH_MIN_NODE,
   dshInstallCommand, dshEnvPosix, dshEnvPowershell, dshArgs,
   withHistory, describeExit

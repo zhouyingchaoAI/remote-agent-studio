@@ -631,6 +631,7 @@ async function testRemoteAgent(s, agent, log) {
     ' [ -s "$HOME/.remote-agent-env.sh" ] && . "$HOME/.remote-agent-env.sh";';
   log(`\n测试远程 ${agent} 可用性(实际调用一次,约 10-30 秒)...\n`);
   let cmd;
+  let dshBaseUrl = '';  // dsh 诊断读到的端点,用于解释认证失败
   if (agent === 'codex') {
     cmd = `${env} cd "$HOME" && codex exec --skip-git-repo-check --sandbox read-only ` +
       `'仅回复两个字:可用' 2>&1 </dev/null`;
@@ -651,6 +652,7 @@ async function testRemoteAgent(s, agent, log) {
       log('  提示:到「浏览」页点「启动并打开」dsh 配置界面,在里面配好模型与密钥。\n');
       return { ok: false, output: (d.stdout || '').slice(-500) };
     }
+    dshBaseUrl = parsed.baseUrl || '';
     log('配置就绪,实跑一次无头任务(首次可能较慢,profile 需要初始化)...\n');
     cmd = `${env} ${dshMod.dshEnvPosix()} cd "$HOME" && dsh ${dshMod.dshArgs()} '仅回复两个字:可用' 2>&1 </dev/null`;
   } else {
@@ -684,6 +686,9 @@ async function testRemoteAgent(s, agent, log) {
   } else if (/OAuth session expired|could not be refreshed/i.test(out)) {
     log('  登录态已过期:请在本机运行一次 claude 确认仍是登录状态,然后回到这里重新点「下发 Claude 认证」。\n' +
       '  (订阅登录的 token 有有效期,过期后需要重新下发一次)\n');
+  } else if (looksAuthErr && agent === 'dsh') {
+    // dsh 没有 auth.json —— 拿 codex 那套说辞会把人带偏
+    log(`${dshMod.explainAuthFailure(out, dshBaseUrl)}\n`);
   } else if (looksAuthErr) {
     log(agent === 'claude'
       ? '  疑似认证问题:macOS 的 Claude 凭据在钥匙串里,请点「下发 Claude 认证」自动导出;或改用 ANTHROPIC_API_KEY。\n'
