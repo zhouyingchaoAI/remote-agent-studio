@@ -38,7 +38,10 @@ function filterStderrNoise(text) {
     .join('\n');
 }
 
-function normalizePermissionMode(opts = {}) {
+function normalizePermissionMode(rawOpts) {
+  // 默认参数只在 undefined 时生效,挡不住显式传进来的 null ——
+  // 而 null.permissionMode 会直接抛 TypeError 把整轮打断
+  const opts = rawOpts || {};
   if (opts.permissionMode === 'system') return 'system';
   if (opts.permissionMode === 'workspace') return 'workspace';
   return opts.autoApprove === true ? 'system' : 'workspace';
@@ -185,8 +188,23 @@ class AgentSession extends EventEmitter {
 
   async send(prompt, turn = {}) {
     if (this.running) throw new Error('上一轮仍在执行中');
+
+    /* buildCommand 会因配置非法而抛错(比如 DeepSeek 端点地址为空)。
+     * 它以前在 try 之外、running 已置 true 之后调用 —— 一旦抛错,
+     * running 永远停在 true,之后每条消息都报「上一轮仍在执行中」,
+     * 整个对话彻底卡死,只能新建。所以先构造命令,成功了再置 running。 */
+    let cmd;
+    try {
+      cmd = this.buildCommand(prompt, turn);
+    } catch (e) {
+      this._emitMsg({
+        kind: 'error',
+        text: `无法构造命令:${e.message}\n→ 多为引擎配置有误,请到「环境配置」页检查后重试。`
+      });
+      throw e;
+    }
+
     this.running = true;
-    const cmd = this.buildCommand(prompt, turn);
     this.imagePaths = [];
     this.lastLines = [];   // 最近的 stdout 行(诊断用)
     this.lastStderr = '';  // 最近的 stderr(诊断用)
