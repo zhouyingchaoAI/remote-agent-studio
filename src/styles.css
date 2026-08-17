@@ -652,3 +652,17 @@ progress { width: 140px; height: 6px; }
 .adv { margin-top: 12px; }
 .adv summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .adv .form-grid { margin-top: 8px; }
+
+/* ---------------- 内置浏览器 ---------------- */
+.browser-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.browser-bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.browser-url { flex: 1; min-width: 0; font-size: 12px; }
+.browser-services { display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
+  padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 12px; flex-shrink: 0; }
+.browser-services .svc { display: inline-flex; align-items: center; gap: 6px; }
+.browser-services .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.browser-services .dot.ready { background: #6ee7b7; }
+.browser-error { padding: 6px 10px; font-size: 12px; color: var(--red);
+  border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.browser-view { flex: 1; min-height: 0; border: none; background: #fff; }

@@ -98,6 +98,17 @@ export default function SetupPanel({ hostId, host }) {
               title="DeepSeek 官方 agent harness(npm 包 @deepseek-ai/dsh,需 Node ≥ 22.19)">
               {env?.dsh ? '升级 dsh 到最新' : '一键安装 dsh'}
             </button>
+            {isLocal && env?.dsh && (
+              // dsh 的模型/提供方只能在它自己的 Web UI 里配,这里一键拉起并用内置浏览器打开
+              <button className="btn" disabled={busy} title="启动 dsh 配置界面并在内置浏览器中打开"
+                onClick={async () => {
+                  const s = await window.api.web.start({ id: 'dsh' }).catch(() => null);
+                  useStore.getState().setPendingBrowserUrl(s?.url || 'http://127.0.0.1:3080');
+                  useStore.getState().setTab('browser');
+                }}>
+                配置 dsh 模型
+              </button>
+            )}
           </div>
           <p className="muted small">
             {isLocal

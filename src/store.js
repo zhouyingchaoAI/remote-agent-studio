@@ -51,6 +51,9 @@ export const useStore = create((set, get) => ({
   // 待在终端里自动执行的命令(如「在本机登录 Claude」跳转过去自动敲 claude)
   pendingTermCommand: null,
   setPendingTermCommand: (payload) => set({ pendingTermCommand: payload }),
+  // 内置浏览器要打开的地址(由 dsh 配置等入口设置)
+  pendingBrowserUrl: null,
+  setPendingBrowserUrl: (url) => set({ pendingBrowserUrl: url }),
   // 网络中断后的自动续跑次数(按对话计,用户发新消息时清零)
   autoResumeCount: {},
   setAutoResumeCount: (convId, n) =>

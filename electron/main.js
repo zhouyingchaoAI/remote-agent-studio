@@ -10,6 +10,7 @@ const { AgentSession } = require('./ssh/AgentSession');
 const { deepseekEnvPosix, DEEPSEEK_DEFAULT_MODEL } = require('./ssh/deepseek');
 const deepseekMod = require('./ssh/deepseek');
 const dshMod = require('./ssh/dsh');
+const webServices = require('./webServices');
 const { LocalExecutor } = require('./LocalExecutor');
 const { AttachmentService } = require('./chat/AttachmentService');
 const stt = require('./stt');
@@ -87,7 +88,10 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // 内置浏览器面板需要 <webview>:用来打开 dsh 配置界面、远程起的 Web 服务等。
+      // webview 内部保持默认的沙箱与 contextIsolation,不开 nodeIntegration。
+      webviewTag: true
     }
   });
 
@@ -166,6 +170,8 @@ app.whenReady().then(() => {
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('before-quit', () => webServices.stopAll());
+
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
 ipcMain.handle('shell:openExternal', (_e, url) => {
@@ -1098,6 +1104,14 @@ ipcMain.handle('deepseek:testEndpoint', async (_e, { hostId, cfg } = {}) => {
   const r = await ssh.exec(`${env} ${cmd}`);
   return deepseekMod.parseEndpointProbe(`${r.stdout || ''}${r.stderr || ''}`, cfg);
 });
+
+/* ------------------------------------------------------------------ 本机 Web 服务
+ * dsh 的模型配置只能在它自己的 Web UI 里做,这里负责把进程拉起来,
+ * 由内置浏览器面板打开,省去「切终端敲命令 + 切浏览器」两次上下文切换。 */
+ipcMain.handle('web:list', () => webServices.listStatus());
+ipcMain.handle('web:start', (_e, { id } = {}) =>
+  webServices.start(id, (text) => win?.webContents.send('web:log', { id, text })));
+ipcMain.handle('web:stop', (_e, { id } = {}) => webServices.stop(id));
 
 /** 拉取端点可用模型 —— 模型名靠猜必错,直接问服务端 */
 ipcMain.handle('deepseek:listModels', async (_e, { hostId, cfg } = {}) => {

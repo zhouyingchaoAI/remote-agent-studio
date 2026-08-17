@@ -42,6 +42,12 @@ contextBridge.exposeInMainWorld('api', {
     testEndpoint: invoke('deepseek:testEndpoint'),
     listModels: invoke('deepseek:listModels')
   },
+  web: {
+    list: invoke('web:list'),
+    start: invoke('web:start'),
+    stop: invoke('web:stop'),
+    onLog: on('web:log')
+  },
   setup: {
     detect: invoke('setup:detect'),
     installAgent: invoke('setup:installAgent'),
