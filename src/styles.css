@@ -641,3 +641,14 @@ progress { width: 140px; height: 6px; }
   border: 1px solid var(--border); background: var(--bg); max-height: 240px; overflow: auto; }
 .endpoint-result.ok { border-color: rgba(110,231,183,0.45); color: #6ee7b7; }
 .endpoint-result.bad { border-color: rgba(229,83,75,0.45); }
+
+/* 必填但为空的输入框:红边提示,别让用户对着空框发呆 */
+.input-missing { border-color: rgba(229,83,75,0.6) !important; }
+
+/* DeepSeek 端点配置:线性步骤,别让用户猜顺序 */
+.step-row { display: flex; align-items: center; gap: 8px; margin: 14px 0 6px; font-size: 13px; }
+.step-row:first-child { margin-top: 0; }
+.seg .btn { flex: 1; }
+.adv { margin-top: 12px; }
+.adv summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.adv .form-grid { margin-top: 8px; }

@@ -159,11 +159,9 @@ test('脱敏只留头尾,足够辨认又不泄漏', () => {
 
 test('本机也能写 API Key(此前只对远程开放,本地项目等于没入口)', () => {
   const fs = require('fs');
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src/components/SetupPanel.jsx'), 'utf8');
-  const seg = src.slice(src.indexOf('function DeepseekEndpointManager'));
-  const keySection = seg.slice(seg.indexOf('API Key'), seg.indexOf('API Key') + 400);
-  assert.ok(!/\{!isLocal && \(/.test(keySection), 'API Key 区块不该再被 !isLocal 挡住');
-  assert.match(seg, /写入本机/);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src/components/DeepseekEndpoint.jsx'), 'utf8');
+  assert.ok(!/isLocal &&/.test(src), 'API Key 区块不该再被 isLocal 挡住');
+  assert.match(src, /setEnvKey/);
 });
 
 /* ---------------- 端点实测 ---------------- */
@@ -267,4 +265,39 @@ test('同一模型在两次请求里重复出现只保留一个', () => {
 test('拿不到列表时返回空数组而不是抛错(端点可能不提供该接口)', () => {
   assert.deepEqual(parseModelList(''), []);
   assert.deepEqual(parseModelList('404 page not found'), []);
+});
+
+/* 用户反馈「都不会填了」「UI 逻辑混乱」—— 面板重做成线性四步 */
+
+test('切来源时不清空已填的地址', () => {
+  const fs = require('fs');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src/components/DeepseekEndpoint.jsx'), 'utf8');
+  const seg = src.slice(src.indexOf('const pickSource'), src.indexOf('const importRelay'));
+  // 只有在「当前是官方地址」时才换成中转默认值,不无条件清空
+  assert.match(seg, /form\.baseUrl === OFFICIAL\.baseUrl/);
+});
+
+test('官方模式不显示地址与模型框(没有可决策的东西就别摆出来)', () => {
+  const fs = require('fs');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src/components/DeepseekEndpoint.jsx'), 'utf8');
+  assert.match(src, /source === 'relay' && \(/, '地址/模型区应只在中转模式显示');
+  assert.match(src, /你只需要下面填一个 API Key/);
+});
+
+test('保存/写 Key/测试合成一个按钮,用户不必记顺序', () => {
+  const fs = require('fs');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src/components/DeepseekEndpoint.jsx'), 'utf8');
+  const seg = src.slice(src.indexOf('const saveAndTest'), src.indexOf('const needUrl'));
+  assert.match(seg, /applySettings/);
+  assert.match(seg, /setEnvKey/);
+  assert.match(seg, /testEndpoint/);
+  assert.match(src, /保存并测试/);
+});
+
+test('地址没填时按钮禁用并当场标出来', () => {
+  const fs = require('fs');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src/components/DeepseekEndpoint.jsx'), 'utf8');
+  assert.match(src, /needUrl/);
+  assert.match(src, /还没填/);
+  assert.match(src, /input-missing/);
 });
