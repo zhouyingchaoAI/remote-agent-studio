@@ -20,10 +20,24 @@ export default function BrowserPanel() {
   const [loading, setLoading] = useState(false);
   const [failure, setFailure] = useState('');
   const [services, setServices] = useState([]);
+  const [starting, setStarting] = useState('');
+  const [log, setLog] = useState('');
+  const [showLog, setShowLog] = useState(false);
+  const [waited, setWaited] = useState(0);
   const viewRef = useRef(null);
+  const logRef = useRef(null);
 
   const refreshServices = () => window.api.web.list().then(setServices).catch(() => {});
   useEffect(() => { refreshServices(); }, []);
+
+  // 启动过程必须看得见:否则白屏时用户无从判断是在下载、在报错、还是压根没起
+  useEffect(() => window.api.web.onLog(({ text }) => {
+    setLog((p) => (p + text).slice(-20000));
+    requestAnimationFrame(() => {
+      if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+    });
+  }), []);
+  useEffect(() => window.api.web.onWaiting(({ seconds }) => setWaited(seconds)), []);
 
   // 别处(如 dsh 配置按钮)指定了要打开的地址
   useEffect(() => {
@@ -63,14 +77,27 @@ export default function BrowserPanel() {
     try { viewRef.current?.loadURL(next); } catch (_) {}
   };
 
+  /**
+   * 启动服务并等它真的能连上再导航。
+   * 固定 sleep 是猜的:dsh 首次可能要下载依赖、构建前端产物,几十秒都正常,
+   * 猜短了就是白屏 + ERR_CONNECTION_REFUSED,用户完全不知道发生了什么。
+   */
   const startService = async (id) => {
-    setFailure('');
+    setFailure(''); setStarting(id); setLog(''); setWaited(0); setShowLog(true);
     try {
-      const s = await window.api.web.start({ id });
+      await window.api.web.start({ id });
       await refreshServices();
-      // 服务要几秒才起得来,直接跳过去会白屏 —— 等一下再导航
-      setTimeout(() => go(s.url), 2500);
+      const r = await window.api.web.waitReady({ id, timeoutMs: 120000 });
+      if (r.ready) { go(r.url); setFailure(''); }
+      else {
+        setFailure(r.reason === 'exited'
+          ? '服务已退出 —— 看下面的日志'
+          : '等了 2 分钟仍未监听端口 —— 看下面的日志,首次运行可能仍在下载依赖');
+        if (r.log) setLog((p) => p + r.log);
+      }
+      await refreshServices();
     } catch (e) { setFailure(`启动失败:${e.message}`); }
+    finally { setStarting(''); }
   };
 
   return (
@@ -106,12 +133,27 @@ export default function BrowserPanel() {
                 }}>停止</button>
               </>
             ) : (
-              <button className="btn tiny" onClick={() => startService(s.id)}>启动并打开</button>
+              <button className="btn tiny" disabled={!!starting}
+                onClick={() => startService(s.id)}>
+                {starting === s.id ? `启动中…${waited ? ` ${waited}s` : ''}` : '启动并打开'}
+              </button>
             )}
           </span>
         ))}
-        <span className="muted small">只能打开本机的服务;远程主机的 Web UI 需要端口转发</span>
+        <span className="flex1" />
+        {(log || starting) && (
+          <button className="btn tiny ghost" onClick={() => setShowLog((v) => !v)}>
+            {showLog ? '隐藏日志' : '启动日志'}
+          </button>
+        )}
+        <span className="muted small">只能打开本机的服务</span>
       </div>
+
+      {showLog && (log || starting) && (
+        <pre className="browser-log" ref={logRef}>
+          {log || '启动中,等待输出…\n首次运行可能需要下载依赖,请耐心等待。'}
+        </pre>
+      )}
 
       {failure && (
         <div className="browser-error">

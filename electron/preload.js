@@ -46,7 +46,9 @@ contextBridge.exposeInMainWorld('api', {
     list: invoke('web:list'),
     start: invoke('web:start'),
     stop: invoke('web:stop'),
-    onLog: on('web:log')
+    waitReady: invoke('web:waitReady'),
+    onLog: on('web:log'),
+    onWaiting: on('web:waiting')
   },
   setup: {
     detect: invoke('setup:detect'),

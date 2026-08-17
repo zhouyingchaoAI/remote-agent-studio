@@ -1112,6 +1112,12 @@ ipcMain.handle('web:list', () => webServices.listStatus());
 ipcMain.handle('web:start', (_e, { id } = {}) =>
   webServices.start(id, (text) => win?.webContents.send('web:log', { id, text })));
 ipcMain.handle('web:stop', (_e, { id } = {}) => webServices.stop(id));
+/** 等端口真的可连:固定 sleep 是猜的,dsh 首次可能要几十秒 */
+ipcMain.handle('web:waitReady', (_e, { id, timeoutMs } = {}) =>
+  webServices.waitReady(id, {
+    timeoutMs,
+    onTick: (sec) => win?.webContents.send('web:waiting', { id, seconds: sec })
+  }));
 
 /** 拉取端点可用模型 —— 模型名靠猜必错,直接问服务端 */
 ipcMain.handle('deepseek:listModels', async (_e, { hostId, cfg } = {}) => {

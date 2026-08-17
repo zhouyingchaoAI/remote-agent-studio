@@ -73,3 +73,50 @@ test('dsh 配置入口只在本机且已安装时出现', () => {
   assert.match(src, /setPendingBrowserUrl/);
   assert.match(src, /setTab\('browser'\)/);
 });
+
+/* 用户反馈:点了「配置 dsh 模型」得到 ERR_CONNECTION_REFUSED —— 服务没起来,
+ * 而界面上什么线索都没有。三个原因:等待时间是猜的、日志不可见、
+ * 明明装了 dsh 却仍走 npx 重新下载。 */
+
+test('装了全局 dsh 就直接用它,npx 只作为回退', () => {
+  const src = read('electron/webServices.js');
+  assert.match(src, /command: 'dsh'/);
+  assert.match(src, /fallback: \{ command: 'npx'/);
+  // 走 npx @latest 每次都要联网解析下载,首次几十秒
+  assert.match(src, /几十秒/);
+});
+
+test('命令不存在时自动退到 npx,而不是丢一句 ENOENT', () => {
+  const src = read('electron/webServices.js');
+  assert.match(src, /err\.code === 'ENOENT'/);
+  assert.match(src, /def\.fallback/);
+});
+
+test('补上 npm 全局 bin 路径(GUI 应用继承不到 shell 的 PATH)', () => {
+  const src = read('electron/webServices.js');
+  assert.match(src, /\.npm-global\/bin/);
+  assert.match(src, /PATH: `\$\{process\.env\.PATH/);
+});
+
+test('等端口真能连上再导航,不用固定 sleep', () => {
+  const src = read('electron/webServices.js');
+  assert.match(src, /function waitReady/);
+  assert.match(src, /net\.connect/);
+  // 进程已退出就别再空等,直接把日志给用户
+  assert.match(src, /reason: 'exited'/);
+  assert.match(src, /reason: 'timeout'/);
+
+  const panel = read('src/components/BrowserPanel.jsx');
+  assert.match(panel, /web\.waitReady/);
+  assert.ok(!/setTimeout\(\(\) => go\(/.test(panel), '不该再用固定 sleep 猜启动时间');
+});
+
+test('启动日志可见 —— 白屏时用户要能判断在下载还是报错', () => {
+  const panel = read('src/components/BrowserPanel.jsx');
+  assert.match(panel, /web\.onLog/);
+  assert.match(panel, /browser-log/);
+  assert.match(panel, /启动日志/);
+  // 等待秒数也要显示,否则不知道是卡住还是在进行
+  assert.match(panel, /onWaiting/);
+  assert.match(panel, /启动中…/);
+});
