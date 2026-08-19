@@ -670,9 +670,14 @@ progress { width: 140px; height: 6px; }
   line-height: 1.6; white-space: pre-wrap; word-break: break-all; background: var(--bg);
   border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .browser-services .flex1 { flex: 1; }
-.artifact-file { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin: 6px 0;
-  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
-.artifact-icon { font-size: 22px; flex-shrink: 0; }
-.artifact-meta { flex: 1; min-width: 0; }
-.artifact-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.artifact-meta .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+/* 产物下载卡片:类型图标 + 名称 + 副标题 + 右侧动作 */
+.artifact-card { display: flex; align-items: center; gap: 10px; max-width: 560px;
+  padding: 8px 10px; margin: 4px 0; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px; }
+.artifact-badge { flex-shrink: 0; width: 30px; height: 30px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 700; font-size: 13px; }
+.artifact-body { flex: 1; min-width: 0; }
+.artifact-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-sub { font-size: 11px; color: var(--muted); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }

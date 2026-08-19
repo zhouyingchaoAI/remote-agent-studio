@@ -46,8 +46,21 @@ test('前端渲染文件卡片并能保存', () => {
   assert.match(src, /case 'file':/);
   assert.match(src, /function ArtifactFile/);
   assert.match(src, /window\.api\.artifacts\.saveAs/);
-  assert.match(src, /保存到本机/);
   assert.match(src, /在文件夹中显示/);
+});
+
+test('按扩展名给出类型标签与配色,Word 与 Excel 要能一眼区分', () => {
+  // 纯逻辑抽在 src/fileKind.js:JSX 文件 node 直接 require 不了,
+  // 而这类映射表恰恰最该被测
+  const { fileKind } = require('../src/fileKind.js');
+  assert.deepEqual(
+    { ...fileKind('轨交智能客流识别平台产品说明书.docx') },
+    { ext: 'DOCX', label: '文档', color: '#2b5797', letter: 'W' });
+  assert.equal(fileKind('data.xlsx').letter, 'X');
+  assert.notEqual(fileKind('a.docx').color, fileKind('a.xlsx').color);
+  // 未知扩展名不能崩,也不能给出误导性的类型
+  assert.equal(fileKind('noext').label, '文件');
+  assert.equal(fileKind('').letter, '?');
 });
 
 test('端到端:真实 docx 落在产物目录里能被发现并标为 file', async () => {

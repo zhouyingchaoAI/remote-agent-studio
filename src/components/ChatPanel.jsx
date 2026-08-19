@@ -11,6 +11,7 @@ import {
 import FilePreview from './FilePreview.jsx';
 import EngineStatus from './EngineStatus.jsx';
 import Markdown from './Markdown.jsx';
+import { fileKind } from '../fileKind.js';
 
 /* 统一 diff(unified diff)红绿渲染 */
 function DiffView({ text = '' }) {
@@ -934,7 +935,7 @@ function Message({ m, hostId, convId, onEnableSystemMode, isLast, running, onQui
 }
 
 /**
- * 非图片产物(docx/pdf/xlsx/zip…)的交付卡片。
+ * 非图片产物(docx/pdf/xlsx/zip…)的下载入口。
  *
  * 这类文件以前根本到不了界面:产物扫描只认图片扩展名,
  * 模型写的那句「下载 xxx」只是纯文本,点了当然没反应。
@@ -943,6 +944,7 @@ function ArtifactFile({ hostId, remotePath, name }) {
   const [saved, setSaved] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const kind = fileKind(name);
 
   const save = async () => {
     setBusy(true); setError('');
@@ -954,22 +956,22 @@ function ArtifactFile({ hostId, remotePath, name }) {
   };
 
   return (
-    <div className="artifact-file">
-      <span className="artifact-icon">📄</span>
-      <div className="artifact-meta">
-        <div className="artifact-name" title={remotePath}>{name}</div>
-        {saved
-          ? <div className="muted small">已保存到 {saved}</div>
-          : <div className="muted small">{remotePath}</div>}
-        {error && <div className="error-text small">{error}</div>}
+    <div className="artifact-card" title={remotePath}>
+      <span className="artifact-badge" style={{ background: kind.color }}>{kind.letter}</span>
+      <div className="artifact-body">
+        <div className="artifact-title">{name}</div>
+        <div className="artifact-sub">
+          {error
+            ? <span className="error-text">{error}</span>
+            : saved ? `已保存到 ${saved}` : `${kind.label} · ${kind.ext}`}
+        </div>
       </div>
-      {saved && (
-        <button className="btn small ghost"
+      {saved
+        ? <button className="btn small ghost"
           onClick={() => window.api.artifacts.reveal({ localPath: saved })}>在文件夹中显示</button>
-      )}
-      <button className="btn small" disabled={busy} onClick={save}>
-        {busy ? '保存中…' : (saved ? '另存一份' : '保存到本机')}
-      </button>
+        : <button className="btn small" disabled={busy} onClick={save}>
+          {busy ? '保存中…' : '保存'}
+        </button>}
     </div>
   );
 }
