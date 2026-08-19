@@ -5,7 +5,6 @@ const os = require('os');
 const { shellQuote } = require('../ssh/SSHManager');
 const {
   MAX_ATTACHMENT_BYTES,
-  IMAGE_EXTENSIONS,
   classifyFile,
   uniqueRemoteNames,
   validateFiles
@@ -112,18 +111,19 @@ class AttachmentService {
 
   async listArtifacts({ convId, messageId, extraPaths = [], isLocal }) {
     const dir = await this.directory('artifacts', convId, messageId, isLocal);
+    /* 产物不只有图片。agent 交付最多的其实是 docx/pdf/xlsx/zip ——
+     * 原来这里只扫图片扩展名,文档生成出来就被静默丢掉,
+     * 对话里那句「下载 xxx」只是模型写的纯文本,背后什么都没有。 */
     let scanned = [];
     if (isLocal) {
       if (fs.existsSync(dir)) {
         scanned = fs.readdirSync(dir, { withFileTypes: true })
-          .filter((entry) => entry.isFile() && classifyFile(entry.name) === 'image')
+          .filter((entry) => entry.isFile())
           .map((entry) => path.join(dir, entry.name));
       }
     } else {
-      const extensionArgs = [...IMAGE_EXTENSIONS]
-        .map((ext) => `-iname '*${ext}'`).join(' -o ');
       const result = await this.ssh.exec(
-        `find ${shellQuote(dir)} -maxdepth 2 -type f \\( ${extensionArgs} \\) -print 2>/dev/null`
+        `find ${shellQuote(dir)} -maxdepth 2 -type f -print 2>/dev/null`
       );
       scanned = (result.stdout || '').split(/\r?\n/).filter(Boolean);
     }
@@ -133,14 +133,18 @@ class AttachmentService {
         ? candidate.replace(/\\{2,}/g, '\\')
         : candidate)
       .filter((candidate) => this._isWithin(candidate, dir, isLocal))
-      .filter((candidate) => classifyFile(candidate) === 'image')
       .filter((candidate) => {
         const key = candidate.replace(/\\/g, '/');
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
       })
-      .map((remotePath) => ({ remotePath, name: path.basename(remotePath) }));
+      // 标注类型:图片直接内联预览,其余走「保存到本机」
+      .map((remotePath) => ({
+        remotePath,
+        name: path.basename(remotePath),
+        kind: classifyFile(remotePath) === 'image' ? 'image' : 'file'
+      }));
   }
 
   async resolveImage({ hostId, convId, remotePath, isLocal, cwd }) {

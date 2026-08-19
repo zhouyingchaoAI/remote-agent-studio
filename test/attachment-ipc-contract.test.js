@@ -19,5 +19,7 @@ test('main send contract carries message attachments through artifact discovery'
   assert.match(source, /ensureArtifactDir\(\{ convId, messageId: turnId, isLocal \}\)/);
   assert.match(source, /agent\.send\(prompt, \{ attachments, artifactDir \}\)/);
   assert.match(source, /service\.listArtifacts/);
-  assert.match(source, /msg: \{ kind: 'image'/);
+  // 产物按类型分派了:图片内联,docx/pdf 之类走文件卡片。
+  // 原来这里断言的是「一律发 image」,那正是 docx 点不动的原因。
+  assert.match(source, /kind: artifact\.kind === 'file' \? 'file' : 'image'/);
 });

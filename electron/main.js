@@ -1744,10 +1744,12 @@ ipcMain.handle('agent:send', async (_e, { hostId, convId, messageId, prompt, att
     isLocal
   });
   for (const artifact of artifacts) {
+    /* 原来无论什么产物都发 kind:'image',docx 当图片渲染自然什么都不出。
+     * 现在按类型分派:图片内联预览,其余给一张可保存到本机的文件卡片。 */
     send('agent:message', {
       hostId,
       convId,
-      msg: { kind: 'image', ...artifact }
+      msg: { ...artifact, kind: artifact.kind === 'file' ? 'file' : 'image' }
     });
   }
   send('agent:message', {
@@ -1892,6 +1894,36 @@ ipcMain.handle('fs:upload', async (_e, { hostId, localPath, remotePath, transfer
   } finally {
     transferSignals.delete(transferId);
   }
+});
+
+/**
+ * 把一次对话产出的文件另存到本机。
+ *
+ * 走独立通道而不是复用 fs:download,是因为这里要先弹保存框拿目标路径,
+ * 而且本机会话根本不需要传输 —— 直接复制即可。
+ */
+ipcMain.handle('artifact:saveAs', async (_e, { hostId, remotePath, name } = {}) => {
+  if (!remotePath) throw new Error('缺少文件路径');
+  const r = await dialog.showSaveDialog(win, {
+    title: '保存产物',
+    defaultPath: path.join(app.getPath('downloads'), name || path.basename(remotePath))
+  });
+  if (r.canceled || !r.filePath) return { canceled: true };
+  if (hostId === LOCAL_ID) {
+    // 本机:产物就在本地磁盘上,没有"下载"这回事
+    await fs.promises.copyFile(remotePath, r.filePath);
+  } else {
+    const s = getSession(hostId);
+    await s.ssh.download(remotePath, r.filePath, () => {}, null);
+  }
+  return { canceled: false, localPath: r.filePath };
+});
+
+/** 在系统文件管理器里定位刚保存的文件 */
+ipcMain.handle('artifact:reveal', async (_e, { localPath } = {}) => {
+  if (!localPath) return { ok: false };
+  shell.showItemInFolder(localPath);
+  return { ok: true };
 });
 
 /** 下载:文件或整个目录 */

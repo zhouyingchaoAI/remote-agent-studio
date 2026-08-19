@@ -199,5 +199,5 @@ test('local artifact discovery collapses escaped Windows path duplicates', async
     convId: 'c1', messageId: 'm1', isLocal: true, extraPaths: [escaped]
   });
 
-  assert.deepEqual(result, [{ remotePath: imagePath, name: 'preview.png' }]);
+  assert.deepEqual(result, [{ remotePath: imagePath, name: 'preview.png', kind: 'image' }]);
 });

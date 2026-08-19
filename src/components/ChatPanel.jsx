@@ -926,9 +926,52 @@ function Message({ m, hostId, convId, onEnableSystemMode, isLast, running, onQui
       );
     case 'image':
       return <ImagePreview hostId={hostId} convId={convId} remotePath={m.remotePath} name={m.name} />;
+    case 'file':
+      return <ArtifactFile hostId={hostId} remotePath={m.remotePath} name={m.name} />;
     default:
       return <div className="msg thin"><pre className="dim">{m.text || JSON.stringify(m)}</pre></div>;
   }
+}
+
+/**
+ * 非图片产物(docx/pdf/xlsx/zip…)的交付卡片。
+ *
+ * 这类文件以前根本到不了界面:产物扫描只认图片扩展名,
+ * 模型写的那句「下载 xxx」只是纯文本,点了当然没反应。
+ */
+function ArtifactFile({ hostId, remotePath, name }) {
+  const [saved, setSaved] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const save = async () => {
+    setBusy(true); setError('');
+    try {
+      const r = await window.api.artifacts.saveAs({ hostId, remotePath, name });
+      if (!r.canceled) setSaved(r.localPath);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="artifact-file">
+      <span className="artifact-icon">📄</span>
+      <div className="artifact-meta">
+        <div className="artifact-name" title={remotePath}>{name}</div>
+        {saved
+          ? <div className="muted small">已保存到 {saved}</div>
+          : <div className="muted small">{remotePath}</div>}
+        {error && <div className="error-text small">{error}</div>}
+      </div>
+      {saved && (
+        <button className="btn small ghost"
+          onClick={() => window.api.artifacts.reveal({ localPath: saved })}>在文件夹中显示</button>
+      )}
+      <button className="btn small" disabled={busy} onClick={save}>
+        {busy ? '保存中…' : (saved ? '另存一份' : '保存到本机')}
+      </button>
+    </div>
+  );
 }
 
 function ImagePreview({ hostId, convId, remotePath, name, compact = false }) {
