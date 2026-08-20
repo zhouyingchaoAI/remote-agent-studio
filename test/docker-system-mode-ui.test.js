@@ -11,7 +11,8 @@ test('ChatPanel exposes the system-mode toggle, confirmation, badge, restart, an
   // 断言语义而不是那一行的排版:permissionMode 必须随 agent:start 传下去。
   // 原来写死了整行字面量,给 opts 加个字段就误报。
   assert.match(source, /agent\.start\(\{[\s\S]{0,400}?permissionMode/);
-  assert.match(source, /\[conv\.id, permissionMode, conv\.model, conv\.agent\]/);
+  // 断言依赖项包含权限模式即可 —— 写死整个数组,加一个依赖就误报
+  assert.match(source, /\}, \[conv\.id, permissionMode,[^\]]*\]\);/);
   assert.match(source, /updateConversationPermission/);
   assert.match(source, /window\.confirm/);
   assert.match(source, /Docker/);

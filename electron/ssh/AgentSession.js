@@ -14,6 +14,7 @@ const { deepseekEnvPosix, deepseekEnvPowershell, resolveDeepseekModel } = requir
 const {
   dshEnvPosix, dshEnvPowershell, dshArgs, withHistory, describeExit, explainSilence
 } = require('./dsh');
+const { codexReasoningFlag } = require('./codexOptions');
 const { isTransientAgentError, describeTransient } = require('../transientErrors');
 
 const AGENT_PATH = 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"; ' +
@@ -146,7 +147,8 @@ class AgentSession extends EventEmitter {
         ].filter(Boolean))]
           .map((dir) => `--add-dir ${powershellQuote(dir)}`)
           .join(' ');
-        const flags = `--json --skip-git-repo-check ${approval} ${modelArg} ${images} ${writableDirs}`;
+        const effort = codexReasoningFlag(this.opts.reasoningEffort);
+        const flags = `--json --skip-git-repo-check ${approval} ${modelArg} ${effort} ${images} ${writableDirs}`;
         // 优先用会话 ID 精确 resume;仅在拿不到 ID 时退回 --last(同目录多会话时可能串线)
         const resume = this.codexSessionId
           ? `resume ${powershellQuote(this.codexSessionId)} `
@@ -193,7 +195,10 @@ class AgentSession extends EventEmitter {
         .map((dir) => `--add-dir ${shellQuote(dir)}`)
         .join(' ');
       // 全局选项(--json/--skip-git-repo-check/--sandbox/-m)必须放在 resume 子命令之前
-      const flags = `--json --skip-git-repo-check ${approval} ${m} ${images} ${writableDirs}`;
+      // 推理强度用 -c 覆盖而不是改远程 config.toml —— 后者是全局的,
+      // 会影响用户在终端里的其他 codex 会话
+      const effort = codexReasoningFlag(this.opts.reasoningEffort);
+      const flags = `--json --skip-git-repo-check ${approval} ${m} ${effort} ${images} ${writableDirs}`;
       // 优先用会话 ID 精确 resume;仅在拿不到 ID 时退回 --last(同目录多会话时可能串线)
       if (this.codexSessionId)
         return wrap(`codex exec ${flags} resume ${shellQuote(this.codexSessionId)} ${q}`);

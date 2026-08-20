@@ -681,3 +681,5 @@ progress { width: 140px; height: 6px; }
 .artifact-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-sub { font-size: 11px; color: var(--muted); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
+.reasoning-picker { background: var(--panel); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 6px; font-size: 12px; }

@@ -12,6 +12,7 @@ import FilePreview from './FilePreview.jsx';
 import EngineStatus from './EngineStatus.jsx';
 import Markdown from './Markdown.jsx';
 import { fileKind } from '../fileKind.js';
+import { REASONING_EFFORTS } from '../reasoningEfforts.js';
 
 /* 统一 diff(unified diff)红绿渲染 */
 function DiffView({ text = '' }) {
@@ -223,12 +224,14 @@ function ChatView({ hostId, conv }) {
         agent: conv.agent, cwd: conv.cwd, model: conv.model, permissionMode,
         /* dsh 没有 resume:重开应用后会话对象是空的,不喂历史就等于从零开始。
            claude/codex 靠各自的 sessionId 续聊,不需要也不该走这条。 */
-        history: conv.agent === 'dsh' ? dshHistoryFrom(conv.messages) : []
+        history: conv.agent === 'dsh' ? dshHistoryFrom(conv.messages) : [],
+        // 只有 codex 有 model_reasoning_effort
+        reasoningEffort: conv.agent === 'codex' ? (conv.reasoningEffort || '') : ''
       },
       resume: { claudeSessionId: conv.claudeSessionId, codexSessionId: conv.codexSessionId, codexStarted: conv.codexStarted }
     }).then(() => setStarted(true)).catch(() => setStarted(true));
     // eslint-disable-next-line
-  }, [conv.id, permissionMode, conv.model, conv.agent]);
+  }, [conv.id, permissionMode, conv.model, conv.agent, conv.reasoningEffort]);
 
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
@@ -495,6 +498,23 @@ function ChatView({ hostId, conv }) {
           disabled={running}
           onChange={(m) => { setStarted(false); updateConversationModel(conv.id, m); }}
         />
+        {/* 推理强度只有 codex 有(model_reasoning_effort);
+            放在模型旁边,因为这两个是同一件事的两个维度 */}
+        {conv.agent === 'codex' && (
+          <select className="reasoning-picker" disabled={running}
+            title="推理强度 model_reasoning_effort。极高(xhigh)取决于模型是否提供,不是所有模型都支持"
+            value={conv.reasoningEffort || ''}
+            onChange={(e) => {
+              setStarted(false);
+              useStore.getState().updateConversationReasoning(conv.id, e.target.value);
+            }}>
+            {REASONING_EFFORTS.map((r) => (
+              <option key={r.value} value={r.value}>
+                {r.value ? `推理 ${r.label}` : '推理默认'}
+              </option>
+            ))}
+          </select>
+        )}
         {conv.usage && (conv.usage.inputTokens > 0 || conv.usage.outputTokens > 0) && (
           <span className="usage-badge muted small"
             title={`累计输入 ${conv.usage.inputTokens.toLocaleString()} / 输出 ${conv.usage.outputTokens.toLocaleString()} tokens${conv.usage.costUsd ? ` · 费用 $${conv.usage.costUsd.toFixed(4)}` : ''}`}>

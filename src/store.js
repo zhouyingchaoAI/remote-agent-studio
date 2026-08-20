@@ -80,7 +80,7 @@ export const useStore = create((set, get) => ({
     const full = {
       messages: [], claudeSessionId: null, codexSessionId: null,
       codexStarted: false,
-      permissionMode: 'workspace', autoApprove: false, model: '',
+      permissionMode: 'workspace', autoApprove: false, model: '', reasoningEffort: '',
       createdAt: Date.now(), ...conv, updatedAt: Date.now()
     };
     set((st) => ({ conversations: { ...st.conversations, [conv.id]: full } }));
@@ -94,6 +94,7 @@ export const useStore = create((set, get) => ({
       id, hostId,
       title: opts.title || (opts.cwd ? opts.cwd.split('/').filter(Boolean).pop() : '新对话') || '新对话',
       agent: opts.agent, cwd: opts.cwd || '', model: opts.model || '',
+      reasoningEffort: opts.reasoningEffort || '',
       permissionMode: normalizePermissionMode(opts),
       autoApprove: !!opts.autoApprove,
       messages: [], claudeSessionId: null, codexSessionId: null, codexStarted: false,
@@ -260,6 +261,21 @@ export const useStore = create((set, get) => ({
         conversations: {
           ...s.conversations,
           [convId]: { ...c, model: String(model || '').trim(), updatedAt: Date.now() }
+        }
+      };
+    });
+    persist();
+  },
+
+  /** codex 的推理强度(model_reasoning_effort);其他引擎没有对应开关 */
+  updateConversationReasoning: (convId, effort) => {
+    set((s) => {
+      const c = s.conversations[convId];
+      if (!c) return {};
+      return {
+        conversations: {
+          ...s.conversations,
+          [convId]: { ...c, reasoningEffort: String(effort || '').trim(), updatedAt: Date.now() }
         }
       };
     });
