@@ -510,7 +510,7 @@ function ChatView({ hostId, conv }) {
             }}>
             {REASONING_EFFORTS.map((r) => (
               <option key={r.value} value={r.value}>
-                {r.value ? `推理 ${r.label}` : '推理默认'}
+                {r.value ? `🧠 ${r.label}` : '🧠 默认'}
               </option>
             ))}
           </select>

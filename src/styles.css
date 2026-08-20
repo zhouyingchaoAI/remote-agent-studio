@@ -681,5 +681,10 @@ progress { width: 140px; height: 6px; }
 .artifact-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-sub { font-size: 11px; color: var(--muted); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
-.reasoning-picker { background: var(--panel); color: var(--fg); border: 1px solid var(--border);
+/* 推理强度:跟模型下拉同一行。
+   select 在 flex 容器里默认会被拉伸,不锁宽就会独占一行 */
+.reasoning-picker { flex: 0 0 auto; width: auto; max-width: 104px;
+  background: var(--panel); color: var(--fg); border: 1px solid var(--border);
   border-radius: 6px; padding: 3px 6px; font-size: 12px; }
+/* 顶栏里的下拉一律不参与伸缩,否则一个长模型名就把整行挤换行 */
+.chat-header select { flex: 0 0 auto; }
