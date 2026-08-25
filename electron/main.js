@@ -308,6 +308,26 @@ ipcMain.handle('image:saveAs', async (_e, { dataUrl, name } = {}) => {
   return { saved: true, path: r.filePath };
 });
 
+/**
+ * 读剪贴板里的「路径」。
+ *
+ * 在 Finder 里 ⌘C 一个文件夹,剪贴板上放的是文件引用而不是文本 ——
+ * 往输入框 ⌘V 什么都不会出现,看起来就像「粘贴坏了」。
+ * 所以纯文本拿不到时,再去读 macOS 的 public.file-url。
+ */
+ipcMain.handle('clipboard:readPath', () => {
+  const text = clipboard.readText().trim();
+  if (text) return { path: text, source: 'text' };
+  // Finder 复制的文件夹:走 file-url
+  for (const fmt of ['public.file-url', 'NSFilenamesPboardType']) {
+    try {
+      const raw = clipboard.read(fmt);
+      if (raw && raw.trim()) return { path: raw.trim(), source: 'file' };
+    } catch (_) { /* 该格式不存在,继续试下一个 */ }
+  }
+  return { path: '', source: 'none' };
+});
+
 ipcMain.handle('clipboard:readText', () => clipboard.readText());
 ipcMain.handle('clipboard:writeText', (_event, text) => {
   clipboard.writeText(typeof text === 'string' ? text : '');

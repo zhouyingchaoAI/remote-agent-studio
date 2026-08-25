@@ -13,6 +13,7 @@ import EngineStatus from './EngineStatus.jsx';
 import Markdown from './Markdown.jsx';
 import { fileKind } from '../fileKind.js';
 import { REASONING_EFFORTS } from '../reasoningEfforts.js';
+import { normalizePastedPath, looksLikePath } from '../pastePath.js';
 
 /* 统一 diff(unified diff)红绿渲染 */
 function DiffView({ text = '' }) {
@@ -1086,7 +1087,52 @@ function RemoteDirPicker({ hostId, value, onChange }) {
       setDir({ path: d.path, entries: d.entries.filter((e) => e.isDir || e.isLink) });
     } catch (e) { setErr(e.message); }
   };
-  const toggle = () => { if (!open) load('~'); setOpen(!open); };
+  // 从当前填的目录开始浏览,而不是永远回到 HOME ——
+  // 刚粘完一个路径就被弹回 ~,等于白粘
+  const toggle = () => { if (!open) load(value?.trim() || '~'); setOpen(!open); };
+
+  /**
+   * 处理粘贴。
+   * 在 Finder 里 ⌘C 一个文件夹,剪贴板上是文件引用而不是文本,
+   * 直接 ⌘V 什么都不会出现 —— 那正是「不能直接复制进去」的样子。
+   */
+  /** 粘贴/拖入后统一走这里:落值 + 顺手把目录列表打开停在那儿 */
+  const applyPasted = (raw, opts) => {
+    const next = normalizePastedPath(raw, opts);
+    if (!next) return;
+    onChange(next);
+    setOpen(true);
+    load(next);
+  };
+
+  const onPastePath = async (e) => {
+    const dt = e.clipboardData;
+    // 先看有没有真实文件(Finder 复制/拖拽)
+    const file = dt?.files?.[0];
+    if (file) {
+      e.preventDefault();
+      try {
+        const full = window.api.dialog.pathForDroppedFile(file);
+        // 复制的是文件就退到它所在目录
+        const isFile = !!file.type || /\.[A-Za-z0-9]+$/.test(full);
+        applyPasted(full, { isFile });
+        return;
+      } catch (_) { /* 拿不到就走下面的文本分支 */ }
+    }
+    const text = dt?.getData('text/plain') || '';
+    if (text && looksLikePath(text)) {
+      e.preventDefault();
+      applyPasted(text);
+      return;
+    }
+    // 文本和文件都拿不到:去问主进程读 file-url(纯 ⌘V 时 clipboardData 可能是空的)
+    if (!text) {
+      e.preventDefault();
+      const r = await window.api.clipboard.readPath().catch(() => null);
+      // 从 file-url 拿到的是被复制的那个条目本身,可能是文件
+      if (r?.path) applyPasted(r.path, { isFile: r.source === 'file' && /\.[A-Za-z0-9]+$/.test(r.path) });
+    }
+  };
   const parent = () => {
     const parts = (dir?.path || '/').split('/').filter(Boolean);
     parts.pop();
@@ -1097,7 +1143,18 @@ function RemoteDirPicker({ hostId, value, onChange }) {
     <div className="dir-picker-wrap">
       <div className="row" style={{ gap: 8 }}>
         <input value={value} onChange={(e) => onChange(e.target.value)}
-          placeholder="~/my-project(留空为 HOME)" />
+          onPaste={onPastePath}
+          onDrop={(e) => {
+            // 从 Finder 直接拖一个文件夹进来
+            const f = e.dataTransfer?.files?.[0];
+            if (!f) return;
+            e.preventDefault();
+            try {
+              const full = window.api.dialog.pathForDroppedFile(f);
+              applyPasted(full, { isFile: !!f.type });
+            } catch (_) {}
+          }}
+          placeholder="粘贴或拖入目录,也可点「浏览」" />
         <button className="btn" type="button" onClick={toggle}>{open ? '收起' : '浏览'}</button>
       </div>
       {open && (

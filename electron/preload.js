@@ -12,6 +12,7 @@ const on = (ch) => (cb) => {
 contextBridge.exposeInMainWorld('api', {
   clipboard: {
     readText: invoke('clipboard:readText'),
+    readPath: invoke('clipboard:readPath'),
     writeText: invoke('clipboard:writeText'),
     writeImage: invoke('clipboard:writeImage'),
     saveImage: invoke('clipboard:saveImage'),
