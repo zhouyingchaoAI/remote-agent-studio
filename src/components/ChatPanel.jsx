@@ -939,6 +939,15 @@ function Message({ m, hostId, convId, onEnableSystemMode, isLast, running, onQui
   switch (m.kind) {
     case 'text':
     case 'result': {
+      /* 引擎的收尾事件与最后一段回复重复时,后端只留下费用/耗时。
+         这里就渲染成一行元信息,不要套一个空气泡。 */
+      if (!m.text) {
+        return m.costUsd != null ? (
+          <div className="msg-meta standalone">
+            ${m.costUsd?.toFixed(4)}{m.durationMs != null && ` · ${(m.durationMs / 1000).toFixed(1)}s`}
+          </div>
+        ) : null;
+      }
       const opts = (isLast && !running && onQuickReply) ? extractOptions(m.text) : [];
       const asksConfirm = isLast && !running && onQuickReply && !opts.length &&
         isAwaitingConfirm(m.text);

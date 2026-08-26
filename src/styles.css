@@ -725,3 +725,5 @@ progress { width: 140px; height: 6px; }
 .errlog-text { font-size: 11px; white-space: pre-wrap; word-break: break-all;
   max-height: 220px; overflow: auto; margin: 6px 0; }
 .errlog-text.dim { color: var(--muted); }
+/* 收尾元信息(正文与上一条重复时只剩这行) */
+.msg-meta.standalone { padding: 2px 0 8px 4px; }

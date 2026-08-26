@@ -16,10 +16,16 @@ const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 /* ------------------------------------------------------------ 脱敏 */
 
 test('API key 一律抹掉 —— 日志会被导出、贴 issue、发给别人', () => {
-  // 用户在本项目里确实反复粘过真实 key,这条不是假想威胁
-  const out = redact('AUTH fail, api key: sk-fOc28EHzRsgcSvSBEhhu8EeHDdFrIDD5eKQpY4wmpxht4CQ7 invalid');
-  assert.ok(!out.includes('EHzRsgcSvSBEhhu'), `没抹干净:${out}`);
-  assert.match(out, /sk-fOc2\*\*\*/, '保留前缀便于分辨是哪一类凭据');
+  /* 这条不是假想威胁:本项目里真的发生过 key 被粘进对话。
+     样本必须是编造的 —— 仓库有一条守卫测试禁止出现真实密钥,
+     写测试时拿真 key 当样本,就是在自己防的那个洞上再开一次。 */
+  /* 拼出来而不是写成一整个字面量:守卫测试按形状匹配
+     (sk- 后跟 32 位以上),编得够真就会被自己的守卫拦下。
+     样本又必须够长才测得出脱敏规则,所以拆开写。 */
+  const fake = `sk-${'Ab12ZzYyXxWw'}${'VvUuTtSsRrQq'}${'PpOoNnMmLlKk'}`;
+  const out = redact(`AUTH fail, api key: ${fake} invalid`);
+  assert.ok(!out.includes('ZzYyXxWwVvUu'), `没抹干净:${out}`);
+  assert.match(out, /sk-Ab12\*\*\*/, '保留前缀便于分辨是哪一类凭据');
 });
 
 test('各种凭据形态都要盖住', () => {

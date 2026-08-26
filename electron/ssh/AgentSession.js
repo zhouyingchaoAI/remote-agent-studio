@@ -50,6 +50,21 @@ function normalizePermissionMode(rawOpts) {
   return opts.autoApprove === true ? 'system' : 'workspace';
 }
 
+/**
+ * 收尾事件(claude 的 result / codex 的 task_complete)带的正文,
+ * 往往就是刚刚已经发过的最后一段助手回复。
+ *
+ * 原样再发一遍,界面上就会出现两个一模一样的气泡 —— 用户看到的
+ * 「会出现重复」正是这个。所以重复时只保留费用/耗时这些元信息。
+ */
+function isDuplicateFinal(resultText, lastText) {
+  const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
+  const a = norm(resultText);
+  const b = norm(lastText);
+  if (!a || !b) return false;
+  return a === b;
+}
+
 function powershellQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
@@ -103,7 +118,18 @@ class AgentSession extends EventEmitter {
       this.emit('message', { kind: 'status', text: String(msg.text).trim().slice(0, 160) });
       return;
     }
+    // 记下最后一段助手正文,供收尾事件判重(见 isDuplicateFinal)
+    if (msg.kind === 'text' && msg.text) this.lastAssistantText = msg.text;
     this.emit('message', msg);
+  }
+
+  /** 收尾事件统一从这里发:正文与刚发过的重复时只留元信息 */
+  _emitFinal({ text, costUsd, durationMs }) {
+    const dup = isDuplicateFinal(text, this.lastAssistantText);
+    const body = dup ? '' : String(text || '');
+    // 既没有新正文、也没有费用可展示 -> 整条丢掉,别塞一个空气泡
+    if (!body && costUsd == null) return;
+    this._emitMsg({ kind: 'result', text: body, costUsd, durationMs });
   }
 
 
@@ -237,6 +263,7 @@ class AgentSession extends EventEmitter {
     this.lastLines = [];   // 最近的 stdout 行(诊断用)
     this.lastStderr = '';  // 最近的 stderr(诊断用)
     this.lastResultText = '';
+    this.lastAssistantText = '';  // 跨轮不能沿用,否则新一轮的收尾会被误判成重复
     this.transient = null; // 本轮若因网络/代理中断,记下原因供上层自动续跑
     this._emitMsg({ kind: 'status', text: '正在远程执行...' });
 
@@ -439,7 +466,8 @@ class AgentSession extends EventEmitter {
       case 'patch_apply_begin':
         return this._emitMsg({ kind: 'tool', name: '修改文件', detail: Object.keys(msg.changes || {}).join('\n') });
       case 'task_complete':
-        return this._emitMsg({ kind: 'result', text: msg.last_agent_message || '' });
+        // codex 的 task_complete 会把最后一段回复再带一遍
+        return this._emitFinal({ text: msg.last_agent_message || '' });
       case 'error':
         return this._emitMsg({ kind: 'error', text: msg.message || JSON.stringify(msg) });
       default: return;
@@ -514,8 +542,8 @@ class AgentSession extends EventEmitter {
             costUsd: ev.total_cost_usd || 0
           });
         }
-        return this._emitMsg({
-          kind: 'result',
+        // claude 的 result.result 同样是最后一段回复的副本
+        return this._emitFinal({
           text: ev.result || '',
           costUsd: ev.total_cost_usd,
           durationMs: ev.duration_ms
@@ -525,4 +553,4 @@ class AgentSession extends EventEmitter {
   }
 }
 
-module.exports = { AgentSession, filterStderrNoise, isRetryNotice };
+module.exports = { AgentSession, filterStderrNoise, isRetryNotice, isDuplicateFinal };
