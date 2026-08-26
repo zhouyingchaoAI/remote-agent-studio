@@ -52,7 +52,8 @@ test('浏览面板挂进 tab,且不要求主机已连接', () => {
   assert.match(app, /key: 'browser'/);
   assert.match(app, /<BrowserPanel \/>/);
   // 内置浏览器开的是本机地址,和 SSH 连接无关
-  assert.match(app, /'mobile', 'browser'\]\.includes\(activeView\)/);
+  // 断言浏览页在免连接名单里即可 —— 写死整个数组,加一个页面就误报
+  assert.match(app, /'browser'[^\]]*\]\.includes\(activeView\)/);
 });
 
 test('地址没有协议前缀时自动补 http://', () => {

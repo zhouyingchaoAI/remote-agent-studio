@@ -72,6 +72,49 @@ function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }
 
+/* ---------------------------------------------------------------- 异常日志 */
+
+const { ErrorLog, aggregate } = require('./errorLog');
+let errorLog = null;
+function logError(input) {
+  if (!errorLog) return null;
+  const entry = errorLog.append(input);
+  // 顺手推给界面,日志页开着时不用手动刷新
+  send('errors:new', entry);
+  return entry;
+}
+
+/**
+ * 把每个 IPC handler 都包一层。
+ *
+ * 用户看到的「Error invoking remote method 'xxx'」全都从这里过 ——
+ * 逐个 handler 加 try/catch 会漏,而漏掉的那个往往就是没人复现得了的那个。
+ * 包完仍然原样抛出,调用方的行为完全不变。
+ */
+const _rawHandle = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, fn) => _rawHandle(channel, async (event, ...args) => {
+  try {
+    return await fn(event, ...args);
+  } catch (e) {
+    logError({
+      source: `ipc:${channel}`,
+      text: e?.message || String(e),
+      detail: e?.stack,
+      hostId: args?.[0]?.hostId,
+      convId: args?.[0]?.convId
+    });
+    throw e;   // 观测不改变行为
+  }
+});
+
+// 主进程自己崩了也要留下痕迹,否则只剩一个白窗口
+process.on('uncaughtException', (e) => {
+  logError({ source: 'main:uncaught', text: e?.message || String(e), detail: e?.stack });
+});
+process.on('unhandledRejection', (e) => {
+  logError({ source: 'main:unhandledRejection', text: e?.message || String(e), detail: e?.stack });
+});
+
 function createWindow() {
   win = new BrowserWindow({
     show: true,
@@ -156,6 +199,7 @@ function initAutoUpdater() {
 
 app.whenReady().then(() => {
   require('./logger').initLogger(app.getPath('userData'));
+  errorLog = new ErrorLog(app.getPath('userData'));
   stt.init(app, safeStorage);
   prismflow.init(app, safeStorage);
   obsidian.init(app, safeStorage);
@@ -1028,6 +1072,10 @@ async function mobileStartTask({ hostId, prompt, convId, cwd = '', engine, model
   s.agents.set(targetConvId, agent);
 
   agent.on('message', (msg) => {
+    // 对话里的红框错误是用户最直接感知到的异常,必须进日志
+    if (msg.kind === 'error' && msg.text) {
+      logError({ source: 'agent', text: msg.text, hostId, convId, agent: agent.opts?.agent });
+    }
     if (msg.kind === 'assistant' || msg.kind === 'text') task.reply += msg.text || '';
     if (msg.kind === 'tool') {
       task.tools.push({ name: msg.name, detail: String(msg.detail || '').slice(0, 200) });
@@ -1945,6 +1993,34 @@ ipcMain.handle('artifact:reveal', async (_e, { localPath } = {}) => {
   shell.showItemInFolder(localPath);
   return { ok: true };
 });
+
+/* 异常日志:列表 / 聚合 / 清空 / 导出 */
+ipcMain.handle('errors:list', (_e, { limit } = {}) => {
+  const entries = errorLog ? errorLog.read({ limit }) : [];
+  return { entries, groups: aggregate(entries) };
+});
+ipcMain.handle('errors:clear', () => (errorLog ? errorLog.clear() : { ok: true }));
+ipcMain.handle('errors:export', async () => {
+  const entries = errorLog ? errorLog.read({ limit: 100000 }) : [];
+  const r = await dialog.showSaveDialog(win, {
+    title: '导出异常日志',
+    defaultPath: path.join(app.getPath('downloads'),
+      `ras-errors-${new Date().toISOString().slice(0, 10)}.json`)
+  });
+  if (r.canceled || !r.filePath) return { canceled: true };
+  // 导出的是已脱敏内容(写入时就洗过),可以直接贴 issue
+  await fs.promises.writeFile(r.filePath, JSON.stringify({
+    exportedAt: new Date().toISOString(),
+    total: entries.length,
+    groups: aggregate(entries),
+    entries
+  }, null, 2), 'utf8');
+  return { canceled: false, path: r.filePath };
+});
+/** 渲染进程上报(window.onerror / React 错误边界) */
+ipcMain.handle('errors:report', (_e, payload = {}) => logError({
+  ...payload, source: payload.source || 'renderer'
+}));
 
 /** 下载:文件或整个目录 */
 ipcMain.handle('fs:download', async (_e, { hostId, remotePath, localPath, transferId, isDir }) => {

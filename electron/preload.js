@@ -156,6 +156,13 @@ contextBridge.exposeInMainWorld('api', {
     pickKeyFile: invoke('dialog:pickKeyFile'),
     pathForDroppedFile: (file) => webUtils.getPathForFile(file)
   },
+  errors: {
+    list: invoke('errors:list'),
+    clear: invoke('errors:clear'),
+    export: invoke('errors:export'),
+    report: invoke('errors:report'),
+    onNew: on('errors:new')
+  },
   artifacts: {
     saveAs: invoke('artifact:saveAs'),
     reveal: invoke('artifact:reveal')

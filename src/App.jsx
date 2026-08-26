@@ -38,6 +38,7 @@ import GraphPanel from './components/GraphPanel.jsx';
 import SkillsPanel from './components/SkillsPanel.jsx';
 import MobilePanel from './components/MobilePanel.jsx';
 import BrowserPanel from './components/BrowserPanel.jsx';
+import ErrorLogPanel from './components/ErrorLogPanel.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 
 const TABS = [
@@ -49,6 +50,7 @@ const TABS = [
   { key: 'skills', label: '技能', icon: '🧩' },
   { key: 'browser', label: '浏览', icon: '🌐' },
   { key: 'mobile', label: '移动接入', icon: '📱' },
+  { key: 'errors', label: '异常日志', icon: '🩺' },
   { key: 'setup', label: '环境配置', icon: '⚙️' }
 ];
 
@@ -225,7 +227,24 @@ export default function App() {
         return st.finalizeStream(convId, msg.kind, msg);
       st.pushMessage(convId, { role: 'agent', ...msg, ts: Date.now() });
     });
-    return () => { offStatus(); offLog(); offMsg(); offMobileConv(); };
+    /* 渲染进程的未捕获错误同样要留痕 —— 白屏/组件崩掉时,
+       用户什么都看不到,日志是唯一的线索 */
+    const onWinError = (e) => window.api.errors.report({
+      source: 'renderer', text: e?.message || String(e?.error || e),
+      detail: e?.error?.stack
+    }).catch(() => {});
+    const onRejection = (e) => window.api.errors.report({
+      source: 'renderer:unhandledRejection',
+      text: e?.reason?.message || String(e?.reason), detail: e?.reason?.stack
+    }).catch(() => {});
+    window.addEventListener('error', onWinError);
+    window.addEventListener('unhandledrejection', onRejection);
+
+    return () => {
+      offStatus(); offLog(); offMsg(); offMobileConv(); 
+      window.removeEventListener('error', onWinError);
+      window.removeEventListener('unhandledrejection', onRejection);
+    };
   }, []);
 
   return (
@@ -343,7 +362,7 @@ function PersistentWorkspace({ hosts, activeHostId, activeView, statuses }) {
       {activeHost && activeView === 'mobile' && (
         <div className="workspace-layer active"><MobilePanel /></div>
       )}
-      {activeHost && status !== 'connected' && !['setup', 'skills', 'mobile', 'browser'].includes(activeView) && (
+      {activeHost && status !== 'connected' && !['setup', 'skills', 'mobile', 'browser', 'errors'].includes(activeView) && (
         <ConnectGate host={activeHost} status={status} />
       )}
     </>
