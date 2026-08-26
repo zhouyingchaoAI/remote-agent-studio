@@ -81,6 +81,7 @@ export const useStore = create((set, get) => ({
       messages: [], claudeSessionId: null, codexSessionId: null,
       codexStarted: false,
       permissionMode: 'workspace', autoApprove: false, model: '', reasoningEffort: '',
+      team: null,
       createdAt: Date.now(), ...conv, updatedAt: Date.now()
     };
     set((st) => ({ conversations: { ...st.conversations, [conv.id]: full } }));
@@ -232,7 +233,7 @@ export const useStore = create((set, get) => ({
   },
 
   /** 同一对话内切换引擎(codex / claude / deepseek):目标引擎开新会话,首条消息会自动带上下文接力 */
-  updateConversationAgent: (convId, agent) => {
+  updateConversationAgent: (convId, agent, opts = {}) => {
     set((s) => {
       const c = s.conversations[convId];
       if (!c || c.agent === agent) return {};
@@ -246,7 +247,12 @@ export const useStore = create((set, get) => ({
       return {
         conversations: {
           ...s.conversations,
-          [convId]: { ...c, agent, model: '', ...cleared, updatedAt: Date.now() }
+          /* 默认清空模型:换引擎后旧模型名多半不存在。
+             但团队模式来回切时会显式带上该引擎自己的模型,不能一并抹掉。 */
+          [convId]: {
+            ...c, agent, model: opts.model !== undefined ? opts.model : '',
+            ...cleared, updatedAt: Date.now()
+          }
         }
       };
     });
@@ -268,6 +274,31 @@ export const useStore = create((set, get) => ({
   },
 
   /** codex 的推理强度(model_reasoning_effort);其他引擎没有对应开关 */
+  /** 团队模式:整体设定/清除 */
+  setConversationTeam: (convId, team) => {
+    set((s) => {
+      const c = s.conversations[convId];
+      if (!c) return {};
+      return { conversations: { ...s.conversations, [convId]: { ...c, team, updatedAt: Date.now() } } };
+    });
+    persist();
+  },
+
+  /** 团队模式:打补丁(阶段/计数),不覆盖其余字段 */
+  updateConversationTeam: (convId, patch) => {
+    set((s) => {
+      const c = s.conversations[convId];
+      if (!c || !c.team) return {};
+      return {
+        conversations: {
+          ...s.conversations,
+          [convId]: { ...c, team: { ...c.team, ...patch }, updatedAt: Date.now() }
+        }
+      };
+    });
+    persist();
+  },
+
   updateConversationReasoning: (convId, effort) => {
     set((s) => {
       const c = s.conversations[convId];
@@ -400,6 +431,47 @@ export function buildContextDigest(messages = [], maxChars = 6000) {
 }
 
 /** 统一的发送入口:处理附件准备、记录用户消息、调用 agent(排队出队也走这里) */
+/**
+ * 换一个引擎跑这一轮(团队模式用)。
+ *
+ * 为什么不能「改完 agent 直接 sendToAgent」:ChatPanel 有个 effect 监听
+ * conv.agent,一变就调 agent:start,而主进程的 agent:start 会 cancel 掉
+ * 已存在的会话 —— 正好把我们刚发出去的这一轮掐死。
+ *
+ * 所以这里先把 running 置起来(effect 侧据此跳过重启),自己显式 start
+ * 并等它返回,再发送。顺带把该引擎自己的模型带回去,避免来回切时被清空。
+ */
+export async function runAsAgent(hostId, convId, agent, model, prompt) {
+  const st = useStore.getState();
+  const conv = st.conversations[convId];
+  if (!conv) return;
+  st.setAgentRunning(convId, true);
+  try {
+    if (conv.agent !== agent) st.updateConversationAgent(convId, agent, { model: model || '' });
+    const next = useStore.getState().conversations[convId];
+    await window.api.agent.start({
+      hostId, convId,
+      opts: {
+        agent, cwd: next.cwd, model: model || '',
+        permissionMode: next.permissionMode || 'workspace',
+        history: [], reasoningEffort: agent === 'codex' ? (next.reasoningEffort || '') : ''
+      },
+      resume: {
+        claudeSessionId: next.claudeSessionId,
+        codexSessionId: next.codexSessionId,
+        codexStarted: next.codexStarted
+      }
+    });
+    await sendToAgent(hostId, convId, prompt, [], { auto: true });
+  } catch (e) {
+    st.pushMessage(convId, {
+      role: 'agent', kind: 'error',
+      text: `团队模式切换到 ${agent} 失败:${e.message}`, ts: Date.now()
+    });
+    st.setAgentRunning(convId, false);
+  }
+}
+
 export async function sendToAgent(hostId, convId, text, files = [], opts = {}) {
   const st = useStore.getState();
   const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

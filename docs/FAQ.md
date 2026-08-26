@@ -68,3 +68,27 @@
 ## English
 
 **Can't connect:** verify with plain `ssh` first; check key format (OpenSSH, not .ppk) and the Setup-page log. **Fingerprint change alert:** TOFU protection — confirm with your server admin before trusting. **Remote box can't reach OpenAI/Anthropic:** apply a proxy in Setup (reverse tunnel through your local proxy, or LAN direct); Chinese model endpoints usually need no proxy from mainland servers. **Install fails:** read the Setup log — Node is auto-installed rootless via nvm; configure the proxy before retrying downloads. **Claude auth won't sync on macOS:** credentials live in the Keychain; use an `ANTHROPIC_API_KEY` or run `claude` login in the Terminal tab. **Where are keys stored:** a 600-permission env file on the remote, never in rc files; local credentials use the OS keychain. **Engine switching:** context is handed off via an injected summary; the target engine starts a fresh CLI session. **System Mode vs workspace:** workspace confines writes to the project dir (codex sandbox / claude acceptEdits / grok OS sandbox); System Mode removes confinement — trusted environments only. **Diagnostics:** crash logs under `userData/logs/`; one-click sanitized diagnostics export on the Setup page.
+
+## 团队模式(两个引擎协作)
+
+一个引擎干活、另一个审查,配合目标模式跨轮自动推进。
+
+```
+/team claude+codex      # Claude 干活,Codex 审查
+/goal 把登录接口补上限流并加测试
+```
+
+之后每轮:执行方做 → 审查方读改动、跑测试、挑问题 → 有问题打回返工,
+通过则交给目标模式做达成核验。状态条会显示当前谁在干活、审查了几次。
+
+`/team status` 看状态,`/team off` 关闭。
+
+**为什么是「干活 + 审查」而不是轮流接力**:两个引擎交替改同一堆文件极容易
+互相覆盖、反复推翻。职责分开后执行方只管做、审查方只管挑,谁也不会去改
+对方刚写的东西 —— 「是否真的完成」也才有第二双眼睛。
+
+**成本**:每轮审查同样烧 token,总成本大约是单引擎的两倍。轮次预算沿用
+目标模式(`/goal max N` 调整),审查方连续 3 次打回仍未通过会自动暂停。
+
+**已知边界**:审查方必须以「审查通过」或「审查不通过」作结;没给判定词时
+一律按未通过处理 —— 把含糊结论当作通过,等于审查形同虚设。

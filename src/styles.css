@@ -688,3 +688,10 @@ progress { width: 140px; height: 6px; }
   border-radius: 6px; padding: 3px 6px; font-size: 12px; }
 /* 顶栏里的下拉一律不参与伸缩,否则一个长模型名就把整行挤换行 */
 .chat-header select { flex: 0 0 auto; }
+/* 团队模式状态条 */
+.team-bar { display: flex; align-items: center; gap: 8px; padding: 5px 16px; font-size: 12px;
+  background: rgba(147,180,255,0.08); border-bottom: 1px solid var(--border); }
+.team-tag { font-weight: 600; flex-shrink: 0; }
+.team-role { padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--muted); }
+.team-role.active { color: var(--fg); border-color: #93b4ff; background: rgba(147,180,255,0.15); }
+.team-arrow { color: var(--muted); }

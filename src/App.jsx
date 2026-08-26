@@ -21,10 +21,11 @@ class ErrorBoundary extends React.Component {
   }
 }
 import {
-  useStore, loadHosts, loadConversations, loadSettings, sendToAgent,
+  useStore, loadHosts, loadConversations, loadSettings, sendToAgent, runAsAgent,
   isAwaitingConfirm, evaluateAutoConfirm, MAX_AUTO_REPLIES, MAX_AUTO_RESUME
 } from './store.js';
 import { decideGoalStep } from './goalMode.js';
+import { decideTeamStep } from './teamMode.js';
 import { autoConfirmOutcome, autoPauseMessage } from './turnFlow.js';
 import Sidebar from './components/Sidebar.jsx';
 import HostForm from './components/HostForm.jsx';
@@ -168,6 +169,30 @@ export default function App() {
             recentTexts: agentTexts,
             dangerHit: danger ? (danger.detail || '危险命令') : null
           });
+          /* 团队模式:目标模式说「还要继续」时,由它决定下一轮谁上。
+             熔断(危险命令/触顶/原地打转)仍归目标模式,这里不重复实现 ——
+             两套独立的熔断在边界情况一定会互相抵消。 */
+          if (conv.team && (step.action === 'continue' || step.action === 'verify')) {
+            const teamStep = decideTeamStep(conv.team, {
+              goalText: conv.goal.text,
+              lastText: agentTexts[agentTexts.length - 1] || '',
+              turnMessages: [...sinceLastUser].reverse()
+            });
+            if (teamStep.patch) st.updateConversationTeam(convId, teamStep.patch);
+            if (teamStep.action === 'review' || teamStep.action === 'rework') {
+              st.updateConversationGoal(convId, { rounds: (conv.goal.rounds || 0) + 1 });
+              st.pushMessage(convId, { role: 'agent', kind: 'raw', text: teamStep.message, ts: Date.now() });
+              runAsAgent(conv.hostId, convId, teamStep.agent, teamStep.model, teamStep.prompt);
+              return;
+            }
+            if (teamStep.action === 'stop') {
+              st.updateConversationGoal(convId, { status: 'paused' });
+              st.pushMessage(convId, { role: 'agent', kind: 'raw', text: teamStep.message, ts: Date.now() });
+              return;
+            }
+            // 'passed' -> 审查通过,落回目标模式自己的达成核验
+            st.pushMessage(convId, { role: 'agent', kind: 'raw', text: teamStep.message, ts: Date.now() });
+          }
           if (step.action === 'continue') {
             st.updateConversationGoal(convId, {
               rounds: (conv.goal.rounds || 0) + 1,

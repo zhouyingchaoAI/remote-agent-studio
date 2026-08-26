@@ -7,6 +7,8 @@
 export const COMMANDS = [
   { name: 'goal', args: '<目标描述> | status | pause | resume | max <轮数> | clear',
     desc: '目标模式:设定目标后跨轮自动推进,直到达成或触发上限' },
+  { name: 'team', args: '<执行方>+<审查方> | status | off',
+    desc: '团队模式:一个引擎干活、另一个审查,配合目标模式自动推进(如 /team claude+codex)' },
   { name: 'engine', args: 'codex | claude | deepseek | dsh',
     desc: '切换引擎(同对话内上下文自动接力)' },
   { name: 'model', args: '<模型名>', desc: '切换模型,留空恢复默认' },

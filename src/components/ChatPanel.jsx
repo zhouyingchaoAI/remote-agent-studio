@@ -8,6 +8,7 @@ import {
   createGoal, buildContinuePrompt, resumeGoalPatch, setGoalMaxRounds,
   GOAL_DEFAULT_MAX_ROUNDS, GOAL_EXTEND_ROUNDS
 } from '../goalMode.js';
+import { createTeam, engineLabel, TEAM_PRESETS } from '../teamMode.js';
 import FilePreview from './FilePreview.jsx';
 import EngineStatus from './EngineStatus.jsx';
 import Markdown from './Markdown.jsx';
@@ -219,6 +220,9 @@ function ChatView({ hostId, conv }) {
 
   // 进入对话/切换模型或权限时,在主进程(重新)初始化 agent 会话(带 resume 状态续聊)
   useEffect(() => {
+    /* 有轮次在途时绝不重启:agent:start 会 cancel 掉现有会话。
+       团队模式换引擎时正处于在途状态,不挡住的话会把刚发出的那一轮掐死。 */
+    if (useStore.getState().agentRunning[conv.id]) { setStarted(true); return; }
     window.api.agent.start({
       hostId, convId: conv.id,
       opts: {
@@ -258,6 +262,42 @@ function ChatView({ hostId, conv }) {
         window.api.files.saveText({
           defaultName: `${conv.title || '对话'}.md`, content: conversationToMarkdown(conv)
         }).then((r) => { if (r?.saved) localNote(`已导出到 ${r.path}`); }).catch(() => {});
+        return true;
+      }
+      case 'team': {
+        const a = args.trim().toLowerCase();
+        if (!a || a === 'status') {
+          const t = conv.team;
+          localNote(t
+            ? `团队模式:${engineLabel(t.worker)} 干活 · ${engineLabel(t.reviewer)} 审查`
+              + `(已审查 ${t.reviews || 0} 次,当前${t.phase === 'review' ? '审查中' : '执行中'})`
+            : `团队模式未开启。可用搭配:\n${TEAM_PRESETS.map((p) => `  /team ${p.worker}+${p.reviewer}  —— ${p.label}`).join('\n')}`);
+          return true;
+        }
+        if (a === 'off') {
+          useStore.getState().setConversationTeam(conv.id, null);
+          localNote('团队模式已关闭'); return true;
+        }
+        const [worker, reviewer] = a.split(/[+/,\s]+/).filter(Boolean);
+        try {
+          // 记住各自的模型:来回切引擎时不能把用户选的模型清掉
+          const team = createTeam({
+            worker, reviewer,
+            workerModel: worker === conv.agent ? (conv.model || '') : '',
+            reviewerModel: ''
+          });
+          if (!['codex', 'claude', 'deepseek', 'dsh'].includes(worker)
+            || !['codex', 'claude', 'deepseek', 'dsh'].includes(reviewer)) {
+            localNote('引擎只能是 codex / claude / deepseek / dsh'); return true;
+          }
+          useStore.getState().setConversationTeam(conv.id, team);
+          if (conv.agent !== worker) { setStarted(false); updateConversationAgent(conv.id, worker); }
+          localNote([
+            `👥 团队模式已开启:${engineLabel(worker)} 干活 · ${engineLabel(reviewer)} 审查`,
+            '需要配合目标模式使用 —— 用 /goal <目标> 设定目标后,两方会自动轮转推进。',
+            '注意:每轮审查也要花 token,成本大约是单引擎的两倍。'
+          ].join('\n'));
+        } catch (e) { localNote(`开启失败:${e.message}`); }
         return true;
       }
       case 'engine': {
@@ -569,6 +609,7 @@ function ChatView({ hostId, conv }) {
           <span>System Mode</span>
         </label>
       </div>
+      <TeamBar conv={conv} />
       <GoalBar conv={conv} />
       <div className="chat-list" ref={listRef}>
         {conv.messages.length === 0 && (
@@ -791,6 +832,32 @@ function SlashMenu({ input, index, onPick }) {
         </div>
       ))}
       <div className="slash-hint muted small">↑↓ 选择 · Tab 补全 · Esc 关闭</div>
+    </div>
+  );
+}
+
+/* 团队模式状态条:当前谁在干活、审查了几次、被打回几次 */
+function TeamBar({ conv }) {
+  const team = conv.team;
+  if (!team?.worker) return null;
+  const reviewing = team.phase === 'review';
+  return (
+    <div className="team-bar">
+      <span className="team-tag">👥 团队</span>
+      <span className={`team-role ${reviewing ? '' : 'active'}`}>
+        {engineLabel(team.worker)} 干活
+      </span>
+      <span className="team-arrow">{reviewing ? '→' : '←'}</span>
+      <span className={`team-role ${reviewing ? 'active' : ''}`}>
+        {engineLabel(team.reviewer)} 审查
+      </span>
+      <span className="muted small">
+        已审查 {team.reviews || 0} 次
+        {team.rejects > 0 && ` · 连续打回 ${team.rejects} 次`}
+      </span>
+      <span className="flex1" />
+      <button className="btn tiny ghost"
+        onClick={() => useStore.getState().setConversationTeam(conv.id, null)}>关闭</button>
     </div>
   );
 }
