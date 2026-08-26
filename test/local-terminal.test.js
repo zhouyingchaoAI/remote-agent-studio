@@ -5,20 +5,46 @@ const { summarizeCredentials } = require('../electron/claudeKeychain');
 
 /* ---------------- 本机终端 PTY ---------------- */
 
-test('mac 与 linux 用各自的 script 语法分配 PTY', () => {
-  const mac = new LocalExecutor({ platform: 'darwin' }).ptyInvocation('/bin/zsh', 100, 30);
+/* PTY 方案换过一次:原来只用系统 script,但 macOS/BSD 的 script 会对
+   自己的 stdin 调 tcgetattr,GUI 应用 spawn 出来的 stdin 是管道 ——
+   于是「本机终端」在 mac 上根本连不上。现在首选自带的 Python PTY 桥,
+   script 只在没有 python3 时兜底。 */
+
+/** 造一个"没有 python3"的执行器,用来固定退路行为 */
+function withoutPython(platform) {
+  const ex = new LocalExecutor({ platform });
+  ex.hasPython3 = () => false;
+  return ex;
+}
+
+test('有 python3 时走自带 PTY 桥,不再用 script', () => {
+  const ex = new LocalExecutor({ platform: 'darwin' });
+  ex.hasPython3 = () => { ex.python3Bin = 'python3'; return true; };
+  const r = ex.ptyInvocation('/bin/zsh', 100, 30);
+  assert.equal(r.mode, 'pty-helper');
+  assert.equal(r.bin, 'python3');
+  assert.ok(r.args[0].endsWith('pty-helper.py'));
+  assert.deepEqual(r.args.slice(1), ['/bin/zsh', '-l']);
+  // 初始尺寸走环境变量,helper 起来就 TIOCSWINSZ
+  assert.equal(r.env.PTY_COLS, '100');
+  assert.equal(r.env.PTY_ROWS, '30');
+});
+
+test('没有 python3 才退回 script,mac 与 linux 语法不同', () => {
+  const mac = withoutPython('darwin').ptyInvocation('/bin/zsh', 100, 30);
+  assert.equal(mac.mode, 'script');
   assert.equal(mac.bin, 'script');
   assert.ok(mac.args.includes('-q') && mac.args.includes('/dev/null'));
   assert.ok(mac.args.some((a) => a.includes('exec /bin/zsh -l')));
 
-  const linux = new LocalExecutor({ platform: 'linux' }).ptyInvocation('/bin/bash', 80, 24);
+  const linux = withoutPython('linux').ptyInvocation('/bin/bash', 80, 24);
   assert.equal(linux.bin, 'script');
   assert.ok(linux.args.includes('-qfc'));
   assert.ok(linux.args.some((a) => a.includes('exec /bin/bash -l')));
 });
 
-test('进 shell 前先设好窗口尺寸(否则换行会错乱)', () => {
-  const { args } = new LocalExecutor({ platform: 'linux' }).ptyInvocation('/bin/bash', 120, 40);
+test('退回 script 时仍要先设好窗口尺寸(否则换行会错乱)', () => {
+  const { args } = withoutPython('linux').ptyInvocation('/bin/bash', 120, 40);
   assert.ok(args.some((a) => a.includes('stty rows 40 cols 120')));
 });
 

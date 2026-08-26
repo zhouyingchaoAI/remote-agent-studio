@@ -41,20 +41,41 @@
   "build": {
     "appId": "com.yingchao.remoteagentstudio",
     "productName": "Remote Agent Studio",
-    "directories": { "output": "dist_electron" },
+    "directories": {
+      "output": "dist_electron"
+    },
     "files": [
       "electron/**/*",
       "dist/**/*",
       "package.json"
     ],
-    "publish": { "provider": "github", "owner": "zhouyingchaoAI", "repo": "remote-agent-studio" },
+    "publish": {
+      "provider": "github",
+      "owner": "zhouyingchaoAI",
+      "repo": "remote-agent-studio"
+    },
     "mac": {
-      "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "notarize": true
     },
-    "win": { "target": "nsis" },
-    "linux": { "target": "AppImage" }
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    },
+    "asarUnpack": [
+      "electron/pty-helper.py"
+    ]
   }
 }
