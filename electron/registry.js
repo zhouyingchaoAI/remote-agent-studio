@@ -135,6 +135,13 @@ function parseLoginResult(text, { registry } = {}) {
   if (/Cannot connect to the Docker daemon|permission denied while trying to connect/i.test(t)) {
     return { ok: false, reason: 'daemon', message: 'docker 守护进程连不上(未启动,或当前用户不在 docker 组)' };
   }
+  if (/\[超时\]/.test(t)) {
+    return {
+      ok: false, reason: 'timeout',
+      message: '登录超时:这台主机连不上该仓库。多为仓库地址/端口不对、'
+        + '主机没配到该仓库的路由或代理,也可能是 docker 卡在证书协商上。'
+    };
+  }
   if (/no such host|connection refused|timeout|i\/o timeout/i.test(t)) {
     return { ok: false, reason: 'network', message: '连不上这个仓库地址(DNS / 端口 / 代理)' };
   }

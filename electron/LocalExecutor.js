@@ -98,7 +98,12 @@ class LocalExecutor {
     return this._terminalEnvPromise;
   }
 
-  async _spawn(command) {
+  /**
+   * @param opts.stdin 有值时把它写进子进程再关闭;不传才立刻关。
+   *   原先无条件 `child.stdin.end()`,于是 `docker login --password-stdin`
+   *   这类"从标准输入读凭据"的命令在本机上永远拿不到内容。
+   */
+  async _spawn(command, opts = {}) {
     const { bin, args } = this.shellInvocation(command);
     const env = await this.resolveTerminalEnv();
     const child = spawn(bin, args, { env });
@@ -108,6 +113,7 @@ class LocalExecutor {
     child.stdin.on('error', () => {});
     child.stdout?.on('error', () => {});
     child.stderr?.on('error', () => {});
+    if (opts.stdin != null) { try { child.stdin.write(opts.stdin); } catch (_) {} }
     child.stdin.end();
     return child;
   }
@@ -246,10 +252,20 @@ class LocalExecutor {
   }
 
   async exec(command, opts = {}) {
-    const child = await this._spawn(command);
+    const child = await this._spawn(command, opts);
     return new Promise((resolve) => {
       let stdout = '';
       let stderr = '';
+      /* 超时:docker login 连不上仓库能挂很久,界面就一直停在「登录中…」。
+         宁可给个明确的超时结论,也别让人对着转圈猜。 */
+      let timer = null;
+      const done = (r) => { if (timer) clearTimeout(timer); resolve(r); };
+      if (opts.timeoutMs > 0) {
+        timer = setTimeout(() => {
+          try { child.kill('SIGKILL'); } catch (_) {}
+          done({ code: 124, stdout, stderr: `${stderr}\n[超时] 命令超过 ${Math.round(opts.timeoutMs / 1000)} 秒未返回` });
+        }, opts.timeoutMs);
+      }
       child.stdout.on('data', (data) => {
         stdout += data;
         opts.onStdout?.(data.toString());
@@ -258,8 +274,8 @@ class LocalExecutor {
         stderr += data;
         opts.onStderr?.(data.toString());
       });
-      child.on('error', (error) => resolve({ code: 1, stdout, stderr: `${stderr}${error.message}` }));
-      child.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
+      child.on('error', (error) => done({ code: 1, stdout, stderr: `${stderr}${error.message}` }));
+      child.on('close', (code) => done({ code: code ?? 0, stdout, stderr }));
     });
   }
 

@@ -2190,7 +2190,8 @@ ipcMain.handle('registry:login', async (_e, { hostId, id, registry: reg, usernam
   if (!password) return { ok: false, reason: 'nosecret', message: '没有密码可用:请填写密码,或先保存一份凭据' };
 
   const cmd = `${env}${registry.buildLoginCommand({ registry: target, username: user })}`;
-  const r = await s.ssh.exec(cmd, { stdin: `${password}\n` });
+  // 60 秒:连不上的仓库能挂很久,界面不该一直停在「登录中…」
+  const r = await s.ssh.exec(cmd, { stdin: `${password}\n`, timeoutMs: 60000 });
   const parsed = registry.parseLoginResult(r.stdout || r.stderr || '', { registry: target });
   return { ...parsed, registry: target, username: user };
 });
@@ -2215,8 +2216,8 @@ ipcMain.handle('registry:loginMany', async (_e, { hostIds = [], id } = {}) => {
       const env = hostId === LOCAL_ID ? '' : `${Installer.BIN_PATH} `;
       const cmd = `${env}${registry.buildLoginCommand({ registry: saved.registry, username: saved.username })}`;
       // eslint-disable-next-line no-await-in-loop
-      const r = await s.ssh.exec(cmd, { stdin: `${password}\n` });
-      const parsed = registry.parseLoginResult(r.stdout || '', { registry: saved.registry });
+      const r = await s.ssh.exec(cmd, { stdin: `${password}\n`, timeoutMs: 60000 });
+      const parsed = registry.parseLoginResult(r.stdout || r.stderr || '', { registry: saved.registry });
       results.push({ hostId, ...parsed });
     } catch (e) {
       results.push({ hostId, ok: false, reason: 'host', message: e.message });

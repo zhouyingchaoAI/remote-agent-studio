@@ -235,7 +235,17 @@ class SSHManager extends EventEmitter {
         stderr += d.toString();
         if (opts.onStderr) opts.onStderr(d.toString());
       });
-      stream.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
+      /* 超时:远端命令(尤其 docker login 连不上仓库时)能挂很久,
+         界面就一直停在「登录中…」。给个明确结论好过让人对着转圈猜。 */
+      let timer = null;
+      const done = (r) => { if (timer) clearTimeout(timer); resolve(r); };
+      if (opts.timeoutMs > 0) {
+        timer = setTimeout(() => {
+          try { stream.close?.() || stream.signal?.('KILL'); } catch (_) {}
+          done({ code: 124, stdout, stderr: `${stderr}\n[超时] 命令超过 ${Math.round(opts.timeoutMs / 1000)} 秒未返回` });
+        }, opts.timeoutMs);
+      }
+      stream.on('close', (code) => done({ code: code ?? 0, stdout, stderr }));
       if (opts.stdin != null) { stream.write(opts.stdin); stream.end(); }
     });
   }

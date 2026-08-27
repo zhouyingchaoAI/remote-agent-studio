@@ -136,3 +136,48 @@ test('改用户名不该把已存的密码弄丢', () => {
   const store = read('electron/registryStore.js');
   assert.match(store, /secretEnc: secret[\s\S]{0,120}prev\.secretEnc \|\| ''/);
 });
+
+/* 用户点了远程主机上的登录,界面一直停在「登录中…」。
+ * 两个真 bug:本机根本收不到密码,以及连不上的仓库能挂到天荒地老。 */
+
+test('本机 exec 必须透传 stdin —— 否则 --password-stdin 永远拿不到密码', async () => {
+  const { LocalExecutor } = require('../electron/LocalExecutor');
+  const ex = new LocalExecutor({ platform: process.platform });
+  const r = await ex.exec('cat', { stdin: 'secret-from-stdin\n' });
+  assert.equal(r.stdout.trim(), 'secret-from-stdin');
+});
+
+test('_spawn 原来无条件关 stdin,现在只在没内容时才关', () => {
+  const src = read('electron/LocalExecutor.js');
+  assert.match(src, /if \(opts\.stdin != null\) \{ try \{ child\.stdin\.write\(opts\.stdin\)/);
+  // 关闭仍要发生,否则读 stdin 的命令等不到 EOF
+  assert.match(src, /child\.stdin\.end\(\);/);
+});
+
+test('两端 exec 都支持超时,不让界面无限转圈', async () => {
+  const { LocalExecutor } = require('../electron/LocalExecutor');
+  const ex = new LocalExecutor({ platform: process.platform });
+  const t0 = Date.now();
+  const r = await ex.exec('sleep 30', { timeoutMs: 1200 });
+  assert.ok(Date.now() - t0 < 8000, '超时没生效,还在等');
+  assert.equal(r.code, 124);
+  assert.match(r.stderr, /\[超时\]/);
+
+  // SSH 侧同样要有
+  assert.match(read('electron/ssh/SSHManager.js'), /opts\.timeoutMs > 0/);
+});
+
+test('登录调用带上超时,并对超时给出对症解释', () => {
+  const main = read('electron/main.js');
+  assert.match(main, /stdin: `\$\{password\}\\n`, timeoutMs: 60000/);
+  const r = reg.parseLoginResult('\n[超时] 命令超过 60 秒未返回');
+  assert.equal(r.reason, 'timeout');
+  // 超时的下一步和「密码错」完全不同,不能混为一谈
+  assert.match(r.message, /路由或代理/);
+});
+
+test('批量登录也读 stderr —— 只读 stdout 会把失败原因丢掉', () => {
+  const main = read('electron/main.js');
+  const block = main.slice(main.indexOf("ipcMain.handle('registry:loginMany'"));
+  assert.match(block, /r\.stdout \|\| r\.stderr/);
+});
