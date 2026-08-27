@@ -2398,6 +2398,53 @@ ipcMain.handle('fs:setupDirect', async (_e, { fromHostId, toHostId } = {}) => {
     : { ok: false, message: `密钥已写入,但直连仍不通:${probe.message}` };
 });
 
+/* ---------------------------------------------------------------- 终端快速问答 */
+
+const askShell = require('./askShell');
+
+/**
+ * 一次性问答:命令记不清了,在终端里直接问。
+ *
+ * 不开会话、不改文件(只读沙箱),问完即弃。终端输出在送进模型前统一脱敏 ——
+ * 那里面 export XXX_KEY=… 之类太常见了,不能指望调用方记得洗。
+ */
+ipcMain.handle('ask:shell', async (_e, {
+  hostId, question, tail = '', imagePath = '', agent = 'codex', model = ''
+} = {}) => {
+  const s = getSession(hostId);
+
+  // 环境信息:免得给 apt 命令而机器是 yum
+  let env = {};
+  try {
+    const r = await s.ssh.exec(`${hostId === LOCAL_ID ? '' : Installer.BIN_PATH + ' '}${askShell.buildEnvCommand()}`,
+      { timeoutMs: 15000 });
+    env = askShell.parseEnv(r.stdout || '');
+  } catch (_) { /* 拿不到就不带,不影响提问 */ }
+
+  const prompt = askShell.buildAskPrompt({
+    question, tail: askShell.sanitizeTail(tail), env, hasImage: !!imagePath
+  });
+
+  const session = new AgentSession(s.ssh, s.proxy, {
+    agent, cwd: env.cwd || '', model,
+    permissionMode: 'workspace'   // 只读沙箱:问一句而已,不该动任何文件
+  });
+  let answer = '';
+  session.on('message', (msg) => {
+    if (msg.kind === 'text' || msg.kind === 'result') answer += `\n${msg.text || ''}`;
+    else if (msg.kind === 'text_delta') answer += msg.text || '';
+  });
+  try {
+    await session.send(prompt, imagePath
+      ? { attachments: [{ kind: 'image', remotePath: imagePath, name: 'screenshot.png' }] }
+      : {});
+  } finally {
+    try { session.cancel(); } catch (_) { /* 已经结束了 */ }
+  }
+  const text = answer.trim();
+  return { answer: text, commands: askShell.extractCommands(text), env };
+});
+
 /** 下载:文件或整个目录 */
 /** 下载(文件或整个目录)。与 doUpload 同理,中转段要复用。 */
 async function doDownload({ ssh, remotePath, localPath, isDir, signal, report }) {

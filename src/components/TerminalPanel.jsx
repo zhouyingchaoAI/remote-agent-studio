@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import AskShell from './AskShell.jsx';
 import { useStore } from '../store.js';
 
 /** 终端页:多标签,每个标签一个独立远程 shell */
@@ -197,6 +198,29 @@ function TermView({ hostId, termId, active }) {
         <button className="btn small" onClick={reconnect}>重连终端</button>
       </div>
       <div className="terminal-box" ref={boxRef} onContextMenu={openContextMenu} />
+      {/* 命令记不清时就地问一句,不用切出去 */}
+      <AskShell
+        hostId={hostId} termId={termId}
+        getTail={() => {
+          /* 从 xterm 的缓冲区取最近若干行。这是终端里真正显示过的内容,
+             比截图准 —— 模型不用认字,还能直接引用报错原文。 */
+          const term = termRef.current;
+          if (!term) return '';
+          const buf = term.buffer.active;
+          const lines = [];
+          const start = Math.max(0, buf.length - 80);
+          for (let i = start; i < buf.length; i += 1) {
+            lines.push(buf.getLine(i)?.translateToString(true) ?? '');
+          }
+          return lines.join('\n');
+        }}
+        onInsert={(cmd) => {
+          /* 只填不回车。模型给的可能是 rm -rf,也可能只是版本对不上 ——
+             让人看一眼再自己按回车。 */
+          window.api.term.write({ hostId, termId, data: cmd });
+          termRef.current?.focus();
+        }}
+      />
       {contextMenu && (
         <div
           className="terminal-context-menu"

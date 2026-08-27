@@ -1,0 +1,104 @@
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const path = require('path');
+const ask = require('../electron/askShell');
+
+const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+
+/* 终端里的「快速问一下」:命令记不清了,不想切出去查。
+ * 两条硬约束:发出去的终端内容必须脱敏;给回来的命令只填不执行。 */
+
+test('终端输出发给模型前必须脱敏 —— 那里面 export KEY=... 太常见了', () => {
+  const fake = `sk-${'Ab12ZzYyXxWw'}${'VvUuTtSsRrQq'}`;
+  const out = ask.sanitizeTail(`$ export DEEPSEEK_API_KEY=${fake}\n$ ls`);
+  assert.ok(!out.includes('ZzYyXxWwVvUu'), `密钥漏出去了:${out}`);
+  // 命令本身要留着,否则上下文就没意义了
+  assert.match(out, /export DEEPSEEK_API_KEY/);
+  assert.match(out, /\$ ls/);
+});
+
+test('剥掉 ANSI,否则控制序列白白占满上下文', () => {
+  const raw = '[32m$[0m docker ps\n[31merror[0m\n';
+  const out = ask.sanitizeTail(raw);
+  assert.ok(!out.includes(''), '还有 ANSI 残留');
+  assert.match(out, /\$ docker ps/);
+  assert.match(out, /error/);
+});
+
+test('限行数与字符数 —— 再多对回答没帮助,只是烧 token', () => {
+  const many = Array.from({ length: 300 }, (_, i) => `line ${i}`).join('\n');
+  const out = ask.sanitizeTail(many, { maxLines: 60 });
+  assert.ok(out.split('\n').length <= 60);
+  // 要留的是**尾部**,那才是刚发生的事
+  assert.match(out, /line 299/);
+  assert.ok(!out.includes('line 100'));
+});
+
+test('提示词要求先给命令、且放进代码块(界面靠它切按钮)', () => {
+  const p = ask.buildAskPrompt({ question: '怎么看容器日志' });
+  assert.match(p, /\*\*先给命令\*\*/);
+  assert.match(p, /```bash/);
+  // 用户是在终端里急着用
+  assert.match(p, /简短/);
+  // 不确定就说不确定,别编一条看起来对的
+  assert.match(p, /不要编一条看起来对的/);
+  assert.throws(() => ask.buildAskPrompt({ question: '  ' }), /不能为空/);
+});
+
+test('带上环境信息,免得给 apt 命令而机器是 yum', () => {
+  const p = ask.buildAskPrompt({
+    question: '装个 jq', env: { os: 'CentOS 7', shell: 'bash', user: 'root', cwd: '/root' }
+  });
+  assert.match(p, /系统:CentOS 7/);
+  assert.match(p, /用户:root\(root\)/);
+  assert.match(p, /别给错包管理器/);
+
+  const parsed = ask.parseEnv('__OS__=Ubuntu 22.04\n__SHELL__=zsh\n__USER__=chency\n__CWD__=/home/chency');
+  assert.deepEqual(parsed, { os: 'Ubuntu 22.04', shell: 'zsh', user: 'chency', cwd: '/home/chency' });
+});
+
+test('抽命令:先滤注释再剥提示符 —— 顺序反了会把中文说明当成命令', () => {
+  const out = ask.extractCommands('```bash\n$ docker logs -f abc\n# 这是注释\ndocker logs --tail 100 abc\n```');
+  assert.deepEqual(out, ['docker logs -f abc\ndocker logs --tail 100 abc']);
+  // 没有代码块时不要瞎猜
+  assert.deepEqual(ask.extractCommands('就用 docker logs 吧'), []);
+  // 多个块各自成条
+  assert.equal(ask.extractCommands('```\nls\n```\n```bash\npwd\n```').length, 2);
+});
+
+test('命令只填进终端,绝不自动执行', () => {
+  const ui = read('src/components/TerminalPanel.jsx');
+  /* 模型给的可能是 rm -rf,也可能只是版本对不上。让人看一眼再按回车,
+     成本是一秒,省掉的是不可逆的事故。 */
+  assert.match(ui, /window\.api\.term\.write\(\{ hostId, termId, data: cmd \}\)/);
+  assert.ok(!/data: `\$\{cmd\}\\n`/.test(ui), '不能替用户回车');
+  assert.match(ui, /只填不回车/);
+  const panel = read('src/components/AskShell.jsx');
+  assert.match(panel, /填进终端但不回车/);
+  assert.match(panel, /不会自动执行/);
+});
+
+test('上下文取自 xterm 缓冲区,比截图准', () => {
+  const ui = read('src/components/TerminalPanel.jsx');
+  assert.match(ui, /term\.buffer\.active/);
+  assert.match(ui, /translateToString\(true\)/);
+  // 截图是可选项,不是唯一来源
+  assert.match(read('src/components/AskShell.jsx'), /screenshot\.capture/);
+});
+
+test('问答是只读的一次性调用,不该动任何文件', () => {
+  const main = read('electron/main.js');
+  const block = main.slice(main.indexOf("ipcMain.handle('ask:shell'"));
+  assert.match(block, /permissionMode: 'workspace'/);
+  assert.match(block, /只读沙箱/);
+  // 脱敏发生在主进程,不指望调用方记得洗
+  assert.match(block, /askShell\.sanitizeTail\(tail\)/);
+});
+
+test('⌘K 唤起 —— 手已经在键盘上,不该逼人去够鼠标', () => {
+  const panel = read('src/components/AskShell.jsx');
+  assert.match(panel, /e\.metaKey \|\| e\.ctrlKey/);
+  assert.match(panel, /key\.toLowerCase\(\) === 'k'/);
+  assert.match(panel, /e\.key === 'Escape'/);
+});

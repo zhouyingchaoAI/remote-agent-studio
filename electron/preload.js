@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('api', {
     test: invoke('stt:test')
   },
   voice: { interpret: invoke('voice:interpret') },
+  ask: { shell: invoke('ask:shell') },
   screenshot: {
     capture: invoke('screenshot:capture'),
     shortcutStatus: invoke('screenshot:shortcutStatus'),

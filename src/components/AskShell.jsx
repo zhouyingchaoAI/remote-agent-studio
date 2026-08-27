@@ -1,0 +1,131 @@
+import React, { useState, useRef, useEffect } from 'react';
+
+/**
+ * 终端里的「快速问一下」。
+ *
+ * 场景:命令记不清了,不想切出去查。所以整个交互只有三步 ——
+ * 打开(⌘K)、问、把命令拿走。
+ *
+ * 关键取舍:命令**只填进终端,绝不自动执行**。模型给的可能是 rm -rf,
+ * 也可能只是版本对不上;让人看一眼再按回车,成本是一秒,省掉的是不可逆的事故。
+ */
+export default function AskShell({ hostId, termId, getTail, onInsert }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [err, setErr] = useState('');
+  const [withTail, setWithTail] = useState(true);
+  const [shot, setShot] = useState(null);   // {path, name}
+  const inputRef = useRef(null);
+
+  // ⌘K / Ctrl+K 唤起 —— 手已经在键盘上,不该逼人去够鼠标
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setOpen((v) => !v);
+      } else if (e.key === 'Escape' && open) setOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
+  useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 30); }, [open]);
+
+  const ask = async () => {
+    if (!q.trim() || busy) return;
+    setBusy(true); setErr(''); setResult(null);
+    try {
+      const r = await window.api.ask.shell({
+        hostId, question: q,
+        tail: withTail ? (getTail?.() || '') : '',
+        imagePath: shot?.path || ''
+      });
+      setResult(r);
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  };
+
+  const capture = async () => {
+    try {
+      const r = await window.api.screenshot.capture();
+      if (r?.path) setShot({ path: r.path, name: r.name || '截图' });
+    } catch (e) { setErr(`截图失败:${e.message}`); }
+  };
+
+  if (!open) {
+    return (
+      <button className="ask-fab" title="快速问一下(⌘K)" onClick={() => setOpen(true)}>
+        💬 问一下
+      </button>
+    );
+  }
+
+  return (
+    <div className="ask-panel">
+      <div className="row gap ask-head">
+        <b>快速问一下</b>
+        <span className="muted small">⌘K 开关 · Esc 关闭</span>
+        <span className="flex1" />
+        <button className="icon-btn" onClick={() => setOpen(false)}>✕</button>
+      </div>
+
+      <div className="row gap">
+        <input ref={inputRef} className="ask-input" value={q}
+          placeholder="例如:怎么看某个容器最近 100 行日志"
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); } }} />
+        <button className="btn small primary" disabled={busy || !q.trim()} onClick={ask}>
+          {busy ? '问中…' : '问'}
+        </button>
+      </div>
+
+      <div className="row gap ask-opts">
+        <label className="check-row inline" title="终端输出是最好的上下文,发送前已脱敏">
+          <input type="checkbox" checked={withTail} onChange={(e) => setWithTail(e.target.checked)} />
+          <span className="small">带上终端最近输出(已脱敏)</span>
+        </label>
+        <button className="btn tiny ghost" onClick={capture}>截图</button>
+        {shot && (
+          <span className="muted small">
+            已附 {shot.name}
+            <button className="icon-btn" onClick={() => setShot(null)}>✕</button>
+          </span>
+        )}
+      </div>
+
+      {err && <p className="error-text small">{err}</p>}
+
+      {result && (
+        <div className="ask-result">
+          {result.commands.length > 0 && (
+            <div className="ask-cmds">
+              {result.commands.map((c, i) => (
+                <div key={i} className="ask-cmd">
+                  <pre>{c}</pre>
+                  <div className="row gap">
+                    <button className="btn tiny" onClick={() => {
+                      window.api.clipboard.writeText(c);
+                    }}>复制</button>
+                    {/* 只填不执行:让人看一眼再按回车 */}
+                    <button className="btn tiny primary"
+                      title="填进终端但不回车,你确认后自己执行"
+                      onClick={() => { onInsert?.(c); setOpen(false); }}>
+                      填入终端
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <pre className="ask-answer">{result.answer}</pre>
+          <p className="muted small">
+            命令只会填进终端、不会自动执行 —— 按回车前请自己看一眼。
+            {result.env?.os ? ` 已按「${result.env.os}」作答。` : ''}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
