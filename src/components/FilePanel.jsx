@@ -14,6 +14,8 @@ export default function FilePanel({ hostId }) {
      由主进程决定走直连还是经本机中转。 */
   const [leftHostId, setLeftHostId] = useState('local');
   const [hosts, setHosts] = useState([]);
+  const [leftErr, setLeftErr] = useState('');
+  const [leftConnecting, setLeftConnecting] = useState(false);
   const leftIsLocal = leftHostId === 'local';
   const [local, setLocal] = useState({ path: '', entries: [] });
   const [remote, setRemote] = useState({ path: '', entries: [] });
@@ -27,22 +29,58 @@ export default function FilePanel({ hostId }) {
 
   useEffect(() => { window.api.hosts.list().then(setHosts).catch(() => {}); }, []);
 
-  /* 左栏的列目录:本机走 listLocal,选了远程主机就走 listRemote。
-     两个接口返回同样的形状,所以下面的渲染不用分叉。 */
+  /**
+   * 左栏列目录。本机走 listLocal,选了远程主机就走 listRemote
+   * (两个接口返回同样的形状,渲染不用分叉)。
+   *
+   * 失败时必须把内容清空:选择器写着 A 主机、列表却还是上一台的内容,
+   * 这时候点传输或删除,操作的目标完全不是用户以为的那台 —— 那不是显示
+   * 问题,是会真的删错东西。
+   */
   const loadLocal = useCallback(async (p) => {
+    setLeftErr('');
     try {
       setLocal(leftIsLocal
         ? await window.api.files.listLocal(p || null)
         : await window.api.files.listRemote({ hostId: leftHostId, dirPath: p || '~' }));
       setSelLocal(null);
-    } catch (e) { setErr(e.message); }
+    } catch (e) {
+      setLocal({ path: '', entries: [] });
+      setSelLocal(null);
+      setLeftErr(e.message);
+    }
   }, [leftHostId, leftIsLocal]);
+
+  /**
+   * 选左栏主机。远程主机可能还没连过 —— 侧边栏点进去才会建连接,
+   * 从这里选是连不上的,所以要自己确保连上。
+   */
+  const pickLeftHost = useCallback(async (id) => {
+    setLeftHostId(id);
+    setSelLocal(null);
+    setLocal({ path: '', entries: [] });
+    setLeftErr('');
+    if (id === 'local') return;
+    const host = hosts.find((h) => h.id === id);
+    if (!host) { setLeftErr('主机不存在'); return; }
+    setLeftConnecting(true);
+    try {
+      // 已连上时 connect 是幂等的;没连上就在这里建连接
+      await window.api.ssh.connect(host);
+    } catch (e) {
+      setLeftErr(`连接 ${host.name || host.host} 失败:${e.message}`);
+    } finally { setLeftConnecting(false); }
+  }, [hosts]);
   const loadRemote = useCallback(async (p) => {
     try { setRemote(await window.api.files.listRemote({ hostId, dirPath: p || '~' })); setSelRemote(null); }
     catch (e) { setErr(e.message); }
   }, [hostId]);
 
-  useEffect(() => { loadLocal(); loadRemote(); }, [loadLocal, loadRemote]);
+  /* 连接还在进行时不要去列目录 —— 那时必然拿到「主机未连接」,
+     然后这条假错误会盖掉真正的连接结果。连完 leftConnecting 翻回 false,
+     effect 会自己再跑一次。 */
+  useEffect(() => { if (!leftConnecting) loadLocal(); }, [loadLocal, leftConnecting]);
+  useEffect(() => { loadRemote(); }, [loadRemote]);
 
   useEffect(() => window.api.files.onProgress((p) => {
     /* 远程→远程时进度带的是源主机 id,不一定等于当前页面的 hostId。
@@ -224,25 +262,30 @@ export default function FilePanel({ hostId }) {
           title={
             <span className="pane-title-row">
               <select className="pane-host-select" value={leftHostId}
-                onChange={(e) => { setLeftHostId(e.target.value); setSelLocal(null); }}
+                disabled={leftConnecting}
+                onChange={(e) => pickLeftHost(e.target.value)}
                 title="选另一台远程主机即可远程→远程传输">
                 <option value="local">本机</option>
                 {hosts.filter((h) => h.id !== hostId).map((h) => (
                   <option key={h.id} value={h.id}>{h.name || h.host}</option>
                 ))}
               </select>
-              <span className="muted small">{local.path}</span>
+              <span className="muted small">
+                {leftConnecting ? '连接中…' : (leftErr ? '—' : local.path)}
+              </span>
             </span>
           }
-          data={local} sel={selLocal}
+          data={local} sel={selLocal} error={leftErr}
           onUp={() => loadLocal(parentOf(local.path, localSep))}
           onOpen={(e) => e.isDir
             ? loadLocal(joinPath(local.path, e.name, localSep))
             : setPreview({ hostId: 'local', path: joinPath(local.path, e.name, localSep), name: e.name })}
           onSelect={setSelLocal} />
         <div className="file-actions">
-          <button className="btn" title="上传(支持整个文件夹)" onClick={upload} disabled={!selLocal}>→</button>
-          <button className="btn" title="下载(支持整个文件夹)" onClick={download} disabled={!selRemote}>←</button>
+          <button className="btn" title="上传(支持整个文件夹)" onClick={upload}
+            disabled={!selLocal || !!leftErr}>→</button>
+          <button className="btn" title="下载(支持整个文件夹)" onClick={download}
+            disabled={!selRemote || !!leftErr || leftConnecting}>←</button>
           <button className="btn" title="远程新建文件夹" onClick={() => setNewDirName('')}>📁+</button>
           <button className="btn danger" title="删除远程" onClick={removeRemote} disabled={!selRemote}>🗑</button>
         </div>
@@ -367,10 +410,21 @@ export default function FilePanel({ hostId }) {
   );
 }
 
-function Pane({ title, data, sel, onUp, onOpen, onSelect }) {
+function Pane({ title, data, sel, onUp, onOpen, onSelect, error }) {
   return (
     <div className="pane">
-      <div className="pane-title" title={title}>{title}</div>
+      <div className="pane-title" title={typeof title === 'string' ? title : undefined}>{title}</div>
+      {/* 出错时只显示错误,绝不把上一台主机的列表留在这儿 ——
+          选择器写着 A、内容却是 B,按下传输/删除就会打到错的目标 */}
+      {error ? (
+        <div className="pane-error">
+          <p className="error-text">{error}</p>
+          <p className="muted small">
+            切换主机时已自动尝试连接,仍然失败说明这台主机当前连不上 ——
+            检查网络与凭据,或在左侧主机列表里单独连一次看具体报错。
+          </p>
+        </div>
+      ) : (
       <div className="pane-list">
         <div className="file-row" onDoubleClick={onUp}>📁 ..</div>
         {data.entries.map((e) => (
@@ -383,6 +437,7 @@ function Pane({ title, data, sel, onUp, onOpen, onSelect }) {
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }

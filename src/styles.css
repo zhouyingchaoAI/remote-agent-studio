@@ -757,3 +757,4 @@ progress { width: 140px; height: 6px; }
 .pane-host-select { padding: 2px 6px; font-size: 12px; border-radius: 4px;
   background: var(--panel); color: var(--fg); border: 1px solid var(--border); }
 .pane-title-row .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-error { padding: 16px; }

@@ -167,3 +167,42 @@ test('配完立刻验证一次,不让用户再传一遍才知道成没成', () =
   assert.match(block, /buildProbeCommand/);
   assert.match(block, /密钥已写入,但直连仍不通/);
 });
+
+/* 用户在左栏选了「智能办公助手开发环境」,内容却还是本机的目录,
+ * 底下报「主机未连接」。选择器和内容对不上是危险状态:那时候按传输或
+ * 删除,操作的目标完全不是他以为的那台。 */
+
+test('列目录失败时必须清空内容,不能留着上一台主机的列表', () => {
+  const ui = read('src/components/FilePanel.jsx');
+  assert.match(ui, /setLocal\(\{ path: '', entries: \[\] \}\);[\s\S]{0,80}setLeftErr\(e\.message\)/);
+  // 这不是显示问题,是会真的删错东西
+  assert.match(ui, /是会真的删错东西/);
+});
+
+test('出错时面板只显示错误,不渲染任何文件行', () => {
+  const ui = read('src/components/FilePanel.jsx');
+  assert.match(ui, /function Pane\(\{ title, data, sel, onUp, onOpen, onSelect, error \}\)/);
+  assert.match(ui, /\{error \? \([\s\S]{0,400}\) : \(/);
+  assert.match(ui, /pane-error/);
+});
+
+test('从左栏选远程主机要自己建连接 —— 侧边栏点进去才连是连不上的', () => {
+  const ui = read('src/components/FilePanel.jsx');
+  assert.match(ui, /const pickLeftHost = useCallback/);
+  assert.match(ui, /await window\.api\.ssh\.connect\(host\)/);
+  // 切换瞬间先清空,避免旧内容和新选择短暂共存
+  assert.match(ui, /setLeftHostId\(id\);[\s\S]{0,120}setLocal\(\{ path: '', entries: \[\] \}\)/);
+});
+
+test('连接进行中不去列目录,否则会拿到一条假的「主机未连接」', () => {
+  const ui = read('src/components/FilePanel.jsx');
+  assert.match(ui, /if \(!leftConnecting\) loadLocal\(\)/);
+  // 连完翻回 false,effect 自己再跑一次
+  assert.match(ui, /\[loadLocal, leftConnecting\]/);
+});
+
+test('左栏出错时挡住传输按钮,免得打到错的目标', () => {
+  const ui = read('src/components/FilePanel.jsx');
+  assert.match(ui, /disabled=\{!selLocal \|\| !!leftErr\}/);
+  assert.match(ui, /disabled=\{!selRemote \|\| !!leftErr \|\| leftConnecting\}/);
+});
