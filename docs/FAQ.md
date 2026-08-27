@@ -164,7 +164,17 @@ IPC、日志或异常日志里。
 **不读你 shell 里的 `https_proxy`**。所以在终端里 `curl https://harbor.example.com/v2/`
 一切正常(返回 401 是 registry 未认证时的正常应答),`docker login` 却连不出去。
 
-诊断会分别验证 shell 与守护进程,并给出配置命令:
+**反过来的情况同样常见**:守护进程配了外网代理,而仓库是内网地址
+(`172.16.x`/`10.x`/`192.168.x`)。内网请求被发去外网代理,正好连不上 ——
+这时要做的是把它加进守护进程的 **NO_PROXY**,而不是加代理。诊断会识别出
+这一条并给出合并后的 NO_PROXY 配置。
+
+**HTTP 仓库**:诊断会 https 与 http 各试一次。只写死 https 的话,
+`http://ip:port` 这种自建仓库会被报成"连不上",而它其实好好的。若 http 通
+而 https 不通,会主动提示必须先声明 `insecure-registries` —— 否则你会看到
+"网络正常"然后登录照样失败。
+
+缺代理时的配置命令:
 
 ```
 sudo mkdir -p /etc/systemd/system/docker.service.d

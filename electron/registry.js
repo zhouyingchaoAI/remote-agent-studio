@@ -25,16 +25,36 @@ const DOCKER_HUB_ALIASES = ['', 'docker.io', 'index.docker.io', 'index.docker.io
  * 用户可能填 https://harbor.x.com、harbor.x.com/、或者留空表示 Docker Hub。
  */
 function normalizeRegistry(input) {
-  let s = String(input || '').trim();
-  s = s.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  const raw = String(input || '').trim();
+  /* 协议必须记下来,不能剥完就丢:自建 Harbor 常常是 http://ip:port,
+     而探测若写死 https 会得到"连不上"的假结论 —— 用户看到的就是
+     一个明明能用的仓库被报成网络不通。 */
+  const scheme = /^http:\/\//i.test(raw) ? 'http' : /^https:\/\//i.test(raw) ? 'https' : '';
+  const s = raw.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
   if (DOCKER_HUB_ALIASES.includes(s.toLowerCase())) {
-    return { server: '', configKey: DOCKER_HUB_KEY, label: 'Docker Hub', isHub: true };
+    return { server: '', configKey: DOCKER_HUB_KEY, label: 'Docker Hub', isHub: true, scheme: 'https' };
   }
   // 地址会进命令行:只允许 主机[:端口][/路径] 里的安全字符
   if (!/^[A-Za-z0-9._-]+(:\d{1,5})?(\/[A-Za-z0-9._\-/]*)?$/.test(s)) {
     throw new Error(`仓库地址不合法:${input}`);
   }
-  return { server: s, configKey: s, label: s, isHub: false };
+  return { server: s, configKey: s, label: s, isHub: false, scheme, isPrivate: isPrivateHost(s) };
+}
+
+/**
+ * 是不是内网/私网地址。
+ * 这决定了「守护进程配了代理」到底是好事还是坏事:内网仓库走外网代理
+ * 通常正好把它变成连不上,该做的是把它加进 NO_PROXY 而不是加代理。
+ */
+function isPrivateHost(serverOrHost) {
+  const host = String(serverOrHost || '').split('/')[0].split(':')[0];
+  if (/^(localhost|127\.|::1$)/i.test(host)) return true;
+  if (/^10\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+  // 没有点的主机名(裸机器名)与 .local/.internal 也按内网算
+  if (!host.includes('.') || /\.(local|internal|lan|intra)$/i.test(host)) return true;
+  return false;
 }
 
 /**
@@ -103,11 +123,16 @@ function buildConfigCommand() {
  * 环境变量,于是 curl 一切正常、docker login 却永远连不出去。
  */
 function buildDiagnoseCommand({ registry }) {
-  const { server } = normalizeRegistry(registry);
+  const { server, scheme } = normalizeRegistry(registry);
   const host = server || 'registry-1.docker.io';
+  /* https 与 http 都试一遍。写死 https 会把 http://ip:port 这种自建仓库
+     报成"连不上",而它其实好好的 —— 假结论比没结论更误事。 */
+  const order = scheme === 'http' ? ['http', 'https'] : ['https', 'http'];
   return [
     'echo "__SHELL_PROXY__=${https_proxy:-${HTTPS_PROXY:-none}}"',
-    `echo "__CURL__=$(curl -sS -o /dev/null -m 15 -w '%{http_code}' https://${host}/v2/ 2>&1 | tail -1)"`,
+    'echo "__NO_PROXY__=${no_proxy:-${NO_PROXY:-none}}"',
+    ...order.map((sch) =>
+      `echo "__CURL_${sch.toUpperCase()}__=$(curl -sS -o /dev/null -m 12 -w '%{http_code}' ${sch}://${host}/v2/ 2>&1 | tail -1)"`),
     // docker info 直接暴露守护进程自己的代理设置,比翻 systemd 文件可靠
     'echo "__DAEMON__=$(docker info --format \'{{.HTTPSProxy}}|{{.HTTPProxy}}|{{.NoProxy}}\' 2>/dev/null)"'
   ].join('; ');
@@ -121,19 +146,46 @@ function parseDiagnose(text, { registry } = {}) {
   const t = String(text || '');
   const pick = (k) => (t.match(new RegExp(`__${k}__=(.*)`)) || [, ''])[1].trim();
   const shellProxy = pick('SHELL_PROXY');
-  const curl = pick('CURL');
+  const shellNoProxy = pick('NO_PROXY');
+  const curlHttps = pick('CURL_HTTPS');
+  const curlHttp = pick('CURL_HTTP');
   const daemon = pick('DAEMON');
-  const [dHttps, dHttp] = daemon.split('|');
+  const [dHttps, dHttp, dNoProxy] = daemon.split('|');
 
-  const shellOk = /^(200|401|403)$/.test(curl);   // 401 是 registry 未认证时的正常应答
+  let info = { server: String(registry || ''), isPrivate: false, scheme: '' };
+  try { info = normalizeRegistry(registry); } catch (_) { /* 非法地址,下面按未知处理 */ }
+
+  const alive = (c) => /^(200|401|403)$/.test(c);   // 401 是 registry 未认证时的正常应答
+  const httpsOk = alive(curlHttps);
+  const httpOk = alive(curlHttp);
+  const shellOk = httpsOk || httpOk;
   const shellUsesProxy = !!shellProxy && shellProxy !== 'none';
-  const daemonHasProxy = !!(dHttps || dHttp);
+  const daemonProxy = dHttps || dHttp || '';
+  const daemonHasProxy = !!daemonProxy;
+  const daemonNoProxyCovers = (dNoProxy || '').split(/[,\s]+/).filter(Boolean)
+    .some((x) => info.server && info.server.includes(x.replace(/^\./, '')));
 
   const facts = [
-    `shell 代理:${shellUsesProxy ? shellProxy : '未设置'}`,
-    `shell 连仓库:${shellOk ? `通(HTTP ${curl})` : `不通(${curl || '无响应'})`}`,
-    `docker 守护进程代理:${daemonHasProxy ? (dHttps || dHttp) : '未设置'}`
+    `仓库:${info.server || 'Docker Hub'}${info.isPrivate ? '(内网地址)' : ''}`,
+    `shell 代理:${shellUsesProxy ? shellProxy : '未设置'}`
+      + (shellNoProxy && shellNoProxy !== 'none' ? ` · NO_PROXY=${shellNoProxy}` : ''),
+    `shell 连仓库:${shellOk
+      ? `通(${httpOk ? 'http' : 'https'} HTTP ${httpOk ? curlHttp : curlHttps})`
+      : `不通(https=${curlHttps || '-'} http=${curlHttp || '-'})`}`,
+    `docker 守护进程代理:${daemonHasProxy ? daemonProxy : '未设置'}`
+      + (dNoProxy ? ` · NO_PROXY=${dNoProxy}` : '')
   ].join('\n');
+
+  /* 内网仓库 + 守护进程配了代理 + 该地址没在 NO_PROXY 里
+     —— 这是「配了代理反而连不上」的经典组合,方向和缺代理正好相反。 */
+  if (info.isPrivate && daemonHasProxy && !daemonNoProxyCovers) {
+    return {
+      ok: false, reason: 'daemonNoProxy', facts,
+      message: `${info.server} 是内网地址,而 docker 守护进程配了代理 ${daemonProxy} —— `
+        + '内网地址走外网代理正好连不上。要把它加进守护进程的 NO_PROXY,而不是加代理。',
+      advice: noProxyAdvice(info.server, daemonProxy, dNoProxy)
+    };
+  }
 
   if (shellOk && shellUsesProxy && !daemonHasProxy) {
     return {
@@ -143,13 +195,57 @@ function parseDiagnose(text, { registry } = {}) {
       advice: daemonProxyAdvice(shellProxy, registry)
     };
   }
+
   if (!shellOk) {
     return {
       ok: false, reason: 'network', facts,
-      message: '这台主机的 shell 就连不上仓库,先解决网络/代理/DNS,再谈 docker 登录。'
+      message: `这台主机的 shell 也连不上 ${info.server}(https 与 http 都试过了)。`
+        + '先确认地址/端口对不对、这台机器有没有到该网段的路由,再谈 docker 登录。'
     };
   }
+
+  /* http 通而 https 不通:docker 默认只认 HTTPS,必须声明 insecure-registry。
+     这条要主动提示 —— 否则用户会看到"网络正常"然后登录照样失败。 */
+  if (httpOk && !httpsOk) {
+    return {
+      ok: false, reason: 'insecure', facts,
+      message: `${info.server} 只提供 HTTP。shell 能连上,但 docker 默认只认 HTTPS,`
+        + '必须先把它声明为 insecure registry,否则登录一定失败。',
+      advice: certAdvice(registry, 'server gave HTTP response to HTTPS client')
+    };
+  }
+
   return { ok: true, facts, message: '网络看起来正常:shell 与守护进程都能连到仓库。' };
+}
+
+/**
+ * 内网仓库要从守护进程代理里排除掉。
+ * 同样只给命令不代改 —— 要写 systemd 配置并重启 docker。
+ */
+function noProxyAdvice(server, proxyUrl, currentNoProxy) {
+  const host = String(server || '').split('/')[0].split(':')[0];
+  const merged = [...new Set([
+    ...(currentNoProxy || '').split(/[,\s]+/).filter(Boolean),
+    'localhost', '127.0.0.1', '::1', host
+  ])].join(',');
+  return [
+    `把 ${host} 加进 docker 守护进程的 NO_PROXY(它现在会把内网请求也发给代理):`,
+    '',
+    '  sudo mkdir -p /etc/systemd/system/docker.service.d',
+    '  sudo tee /etc/systemd/system/docker.service.d/http-proxy.conf <<EOF',
+    '  [Service]',
+    `  Environment="HTTP_PROXY=${proxyUrl || ''}"`,
+    `  Environment="HTTPS_PROXY=${proxyUrl || ''}"`,
+    `  Environment="NO_PROXY=${merged}"`,
+    '  EOF',
+    '  sudo systemctl daemon-reload',
+    '  sudo systemctl restart docker',
+    '',
+    '  # 注意:重启 docker 会掐掉这台机器上所有正在运行的容器',
+    '  # 验证:docker info | grep -i "no proxy"',
+    '',
+    `整段网段一起排除可以写 NO_PROXY=...,${host.replace(/\.\d+$/, '.0/24')}`
+  ].join('\n');
 }
 
 /**

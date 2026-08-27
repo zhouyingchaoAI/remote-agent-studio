@@ -199,13 +199,13 @@ test('诊断分别验证 shell 与守护进程,而不是只看一边', () => {
 
 test('复刻用户现场:shell 通 + 守护进程无代理 -> 指向守护进程代理', () => {
   const r = reg.parseDiagnose(
-    '__SHELL_PROXY__=http://10.1.33.75:7890\n__CURL__=401\n__DAEMON__=||\n',
+    '__SHELL_PROXY__=http://10.1.33.75:7890\n__CURL_HTTPS__=401\n__CURL_HTTP__=000\n__DAEMON__=||\n',
     { registry: 'harbor.chencytech.com' });
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'daemonProxy');
   assert.match(r.message, /守护进程没配代理/);
   // 事实要摆出来,不能只给结论
-  assert.match(r.facts, /shell 连仓库:通\(HTTP 401\)/);
+  assert.match(r.facts, /shell 连仓库:通\(https HTTP 401\)/);
   assert.match(r.facts, /docker 守护进程代理:未设置/);
   // 建议里要带上用户实际的代理地址,不是占位符
   assert.match(r.advice, /HTTPS_PROXY=http:\/\/10\.1\.33\.75:7890/);
@@ -215,20 +215,27 @@ test('复刻用户现场:shell 通 + 守护进程无代理 -> 指向守护进程
 
 test('401 算连通 —— 那是 registry 未认证时的正常应答', () => {
   for (const code of ['200', '401', '403']) {
-    const r = reg.parseDiagnose(`__SHELL_PROXY__=none\n__CURL__=${code}\n__DAEMON__=http://p:1|http://p:1|`, {});
+    // 用公网域名,否则会命中「内网 + 守护进程有代理」那条分支
+    const r = reg.parseDiagnose(
+      `__SHELL_PROXY__=none\n__CURL_HTTPS__=${code}\n__CURL_HTTP__=${code}\n__DAEMON__=http://p:1|http://p:1|`,
+      { registry: 'harbor.example.com' });
     assert.equal(r.ok, true, `HTTP ${code} 不该被当成不通`);
   }
 });
 
 test('shell 自己就不通时,先说网络别扯 docker', () => {
-  const r = reg.parseDiagnose('__SHELL_PROXY__=none\n__CURL__=000\n__DAEMON__=||', {});
+  const r = reg.parseDiagnose(
+    '__SHELL_PROXY__=none\n__CURL_HTTPS__=000\n__CURL_HTTP__=000\n__DAEMON__=||',
+    { registry: 'harbor.example.com' });
   assert.equal(r.reason, 'network');
-  assert.match(r.message, /先解决网络/);
+  assert.match(r.message, /https 与 http 都试过了/);
 });
 
 test('两边都有代理时不误报', () => {
   const r = reg.parseDiagnose(
-    '__SHELL_PROXY__=http://p:7890\n__CURL__=401\n__DAEMON__=http://p:7890|http://p:7890|localhost', {});
+    '__SHELL_PROXY__=http://p:7890\n__CURL_HTTPS__=401\n__CURL_HTTP__=401\n'
+    + '__DAEMON__=http://p:7890|http://p:7890|localhost',
+    { registry: 'harbor.example.com' });
   assert.equal(r.ok, true);
 });
 
@@ -292,4 +299,83 @@ test('网络/超时类失败自动跑诊断,省得用户再点一次', () => {
   const ui = read('src/components/RegistryLogin.jsx');
   assert.match(ui, /r\.reason === 'network' \|\| r\.reason === 'timeout'/);
   assert.match(ui, /—— 诊断 ——/);
+});
+
+/* 用户换成自建的 http://172.16.5.246:8080(HTTP + 内网 IP),诊断报
+ * 「shell 连仓库:不通(000)」并让他去解决网络 —— 两处都不对:
+ *  1. 探测写死了 https,HTTP 仓库必然 000,是个假结论;
+ *  2. 守护进程配的是外网代理 10.1.4.246:7890,而目标是内网 172.16 段 ——
+ *     内网走外网代理正好连不上,方向和「缺代理」正相反。 */
+
+test('保留协议:http:// 的仓库不能被当成 https 探测', () => {
+  const r = reg.normalizeRegistry('http://172.16.5.246:8080');
+  assert.equal(r.scheme, 'http');
+  assert.equal(r.server, '172.16.5.246:8080');
+  assert.equal(reg.normalizeRegistry('https://harbor.x.com').scheme, 'https');
+  // 没写协议时不猜
+  assert.equal(reg.normalizeRegistry('harbor.x.com').scheme, '');
+});
+
+test('诊断两种协议都试,且 http 仓库先试 http', () => {
+  const cmd = reg.buildDiagnoseCommand({ registry: 'http://172.16.5.246:8080' });
+  assert.match(cmd, /__CURL_HTTP__[\s\S]*__CURL_HTTPS__/, 'http 仓库应先试 http');
+  assert.match(cmd, /http:\/\/172\.16\.5\.246:8080\/v2\//);
+  assert.match(cmd, /https:\/\/172\.16\.5\.246:8080\/v2\//);
+  // https 仓库反过来
+  assert.match(reg.buildDiagnoseCommand({ registry: 'https://harbor.x.com' }),
+    /__CURL_HTTPS__[\s\S]*__CURL_HTTP__/);
+});
+
+test('识别内网地址 —— 这决定「配代理」是好事还是坏事', () => {
+  for (const h of ['172.16.5.246:8080', '10.1.6.230', '192.168.1.5', 'localhost:5000',
+    'registry', 'harbor.local']) {
+    assert.equal(reg.normalizeRegistry(h).isPrivate, true, `${h} 应判为内网`);
+  }
+  for (const h of ['harbor.chencytech.com', '8.8.8.8']) {
+    assert.equal(reg.normalizeRegistry(h).isPrivate, false, `${h} 不该判为内网`);
+  }
+  // 172.32 不在私网段里
+  assert.equal(reg.normalizeRegistry('172.32.0.1').isPrivate, false);
+});
+
+test('复刻用户现场:内网仓库 + 守护进程有外网代理 -> 该加 NO_PROXY', () => {
+  const r = reg.parseDiagnose(
+    '__SHELL_PROXY__=none\n__NO_PROXY__=none\n__CURL_HTTP__=000\n__CURL_HTTPS__=000\n'
+    + '__DAEMON__=http://10.1.4.246:7890|http://10.1.4.246:7890|',
+    { registry: 'http://172.16.5.246:8080' });
+  assert.equal(r.reason, 'daemonNoProxy');
+  assert.match(r.message, /内网地址走外网代理正好连不上/);
+  assert.match(r.advice, /NO_PROXY=localhost,127\.0\.0\.1,::1,172\.16\.5\.246/);
+  // 事实里要标出这是内网地址,否则用户看不懂为什么结论反过来了
+  assert.match(r.facts, /内网地址/);
+  // 两种协议的结果都要摆出来
+  assert.match(r.facts, /https=000 http=000/);
+});
+
+test('已经在 NO_PROXY 里就不再重复建议', () => {
+  const r = reg.parseDiagnose(
+    '__SHELL_PROXY__=none\n__CURL_HTTP__=401\n__CURL_HTTPS__=000\n'
+    + '__DAEMON__=http://p:7890|http://p:7890|localhost,172.16.5.246',
+    { registry: 'http://172.16.5.246:8080' });
+  assert.notEqual(r.reason, 'daemonNoProxy');
+});
+
+test('http 通而 https 不通 -> 主动提示要声明 insecure registry', () => {
+  const r = reg.parseDiagnose(
+    '__SHELL_PROXY__=none\n__CURL_HTTP__=401\n__CURL_HTTPS__=000\n__DAEMON__=||',
+    { registry: 'http://172.16.5.246:8080' });
+  assert.equal(r.reason, 'insecure');
+  /* 不主动说的话,用户会看到「网络正常」然后登录照样失败 ——
+     docker 默认只认 HTTPS */
+  assert.match(r.message, /docker 默认只认 HTTPS/);
+  assert.match(r.advice, /insecure-registries/);
+});
+
+test('真连不上时不再只说「先解决网络」,要说清两种协议都试过', () => {
+  const r = reg.parseDiagnose(
+    '__SHELL_PROXY__=none\n__CURL_HTTP__=000\n__CURL_HTTPS__=000\n__DAEMON__=||',
+    { registry: 'http://10.0.0.9:5000' });
+  assert.equal(r.reason, 'network');
+  assert.match(r.message, /https 与 http 都试过了/);
+  assert.match(r.message, /路由/);
 });
