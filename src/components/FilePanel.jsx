@@ -56,7 +56,8 @@ export default function FilePanel({ hostId }) {
       totalFiles: p.totalFiles ?? t.totalFiles,
       scanning: p.scanning ?? false,
       phase: p.phase ?? t.phase,
-      relayReason: p.relayReason ?? t.relayReason
+      relayReason: p.relayReason ?? t.relayReason,
+      relayCode: p.relayCode ?? t.relayCode
     } : t));
   }), [hostId, leftHostId]);
 
@@ -67,6 +68,30 @@ export default function FilePanel({ hostId }) {
   };
 
   const dropTransfer = (id) => setTransfers((ts) => ts.filter((t) => t.id !== id));
+
+  /* 配置直连:在源主机生成公钥并写进目标主机的 authorized_keys。
+     这是一次真实的授权变更,所以要用户确认,不在传输失败时自动做掉。 */
+  const [setupBusy, setSetupBusy] = useState('');
+  const setupDirect = async (t) => {
+    if (!window.confirm(
+      `将在源主机生成 SSH 密钥(若无),并把它的公钥写入目标主机的 ~/.ssh/authorized_keys。\n`
+      + '这等于给目标主机加了一把可免密登录的钥匙。是否继续?'
+    )) return;
+    setSetupBusy(t.id);
+    try {
+      const r = await window.api.files.setupDirect({
+        fromHostId: t.fromHostId, toHostId: t.toHostId
+      });
+      setTransfers((ts) => ts.map((x) => x.id === t.id
+        ? { ...x, setupMsg: r.message, setupOk: r.ok } : x));
+    } catch (e) {
+      setTransfers((ts) => ts.map((x) => x.id === t.id ? { ...x, setupMsg: e.message } : x));
+    } finally { setSetupBusy(''); }
+  };
+
+  /** 直连不可用时,只有「缺密钥」是我们能一键解决的 */
+  const canSetupDirect = (t) => t.relayCode === 'auth'
+    && t.fromHostId && t.toHostId && t.fromHostId !== 'local' && t.toHostId !== 'local';
 
   const joinPath = (dir, name, sep = '/') =>
     dir.endsWith(sep) ? dir + name : dir + sep + name;
@@ -278,6 +303,15 @@ export default function FilePanel({ hostId }) {
                       直连不可用:{t.relayReason}
                     </span>
                   )}
+                  {canSetupDirect(t) && (
+                    <button className="btn tiny" disabled={setupBusy === t.id}
+                      onClick={() => setupDirect(t)}>
+                      {setupBusy === t.id ? '配置中…' : '配置直连'}
+                    </button>
+                  )}
+                  {t.setupMsg && (
+                    <span className={t.setupOk ? 'ok small' : 'error-text small'}>{t.setupMsg}</span>
+                  )}
                   <button className="btn small ghost" onClick={() => dropTransfer(t.id)}>移除</button>
                 </>
               ) : t.phase === 'probe' ? (
@@ -300,6 +334,22 @@ export default function FilePanel({ hostId }) {
                   {/* 中转是两段,不标出来的话进度条会先冲到 100 再跳回 0 */}
                   {t.phase === 'download' && <span className="muted small">中转 1/2 下载</span>}
                   {t.phase === 'upload' && <span className="muted small">中转 2/2 上传</span>}
+                  {/* 传 1.8G 时用户正盯着进度条,该在这时候就说清为什么没走直连 */}
+                  {t.relayReason && (
+                    <span className="muted small" title="解决之后就能走直连,数据不必经过本机">
+                      直连不可用:{t.relayReason}
+                    </span>
+                  )}
+                  {canSetupDirect(t) && (
+                    <button className="btn tiny" disabled={setupBusy === t.id}
+                      onClick={() => setupDirect(t)}
+                      title="在源主机生成密钥并写入目标主机的 authorized_keys">
+                      {setupBusy === t.id ? '配置中…' : '配置直连'}
+                    </button>
+                  )}
+                  {t.setupMsg && (
+                    <span className={t.setupOk ? 'ok small' : 'error-text small'}>{t.setupMsg}</span>
+                  )}
                   <progress value={t.transferred} max={t.total || 1} />
                   <button className="btn small ghost" disabled={t.cancelling}
                     onClick={() => cancelTransfer(t)}>{t.cancelling ? '取消中…' : '取消'}</button>

@@ -2307,7 +2307,8 @@ ipcMain.handle('fs:copyHostToHost', async (_e, {
   await fs.promises.mkdir(path.dirname(tmp), { recursive: true });
   const dst = getSession(toHostId);
   try {
-    report({ phase: 'download', relayReason: probe.message || probe.reason });
+    // 直连不可用的原因要在**传输过程中**就摆出来 —— 传 1.8G 时用户正盯着进度条
+    report({ phase: 'download', relayReason: probe.message || probe.reason, relayCode: probe.reason });
     await doDownload({
       ssh: src.ssh, remotePath: srcPath, localPath: tmp, isDir,
       signal: newSignal(transferId),
@@ -2324,6 +2325,42 @@ ipcMain.handle('fs:copyHostToHost', async (_e, {
     // 临时文件必须清,否则中转几个大镜像就把本机磁盘吃满了
     await fs.promises.rm(path.dirname(tmp), { recursive: true, force: true }).catch(() => {});
   }
+});
+
+/**
+ * 配置两台主机之间的直连:在源主机生成/取出公钥,追加到目标主机的
+ * authorized_keys。之后再传就能走 scp 直连,不必经本机中转。
+ *
+ * 这是一次真实的授权变更(给目标主机加了一把可登录的钥匙),所以只在
+ * 用户明确点击时执行,绝不在传输失败时自动做掉。
+ */
+ipcMain.handle('fs:setupDirect', async (_e, { fromHostId, toHostId } = {}) => {
+  if (!fromHostId || !toHostId || fromHostId === toHostId) throw new Error('源与目标主机不合法');
+  const src = getSession(fromHostId);
+  const dst = getSession(toHostId);
+  const dstHost = (loadHosts() || []).find((x) => x.id === toHostId);
+  if (!dstHost) throw new Error('目标主机不存在');
+
+  const keyOut = await src.ssh.exec(`${Installer.BIN_PATH} ${h2h.buildEnsureKeyCommand()}`,
+    { timeoutMs: 30000 });
+  const pub = (keyOut.stdout || '').trim().split('\n').filter((l) => l.startsWith('ssh-')).pop() || '';
+  if (!pub) throw new Error(`源主机没能生成/读取公钥:${(keyOut.stdout || keyOut.stderr || '').slice(-200)}`);
+
+  const put = await dst.ssh.exec(`${Installer.BIN_PATH} ${h2h.buildInstallKeyCommand(pub)}`,
+    { timeoutMs: 30000 });
+  if (!/__KEY_OK__/.test(put.stdout || '')) {
+    throw new Error(`写入目标主机 authorized_keys 失败:${(put.stdout || put.stderr || '').slice(-200)}`);
+  }
+
+  // 配完立刻验证一次,否则用户还得再传一遍才知道成没成
+  const verify = await src.ssh.exec(
+    `${Installer.BIN_PATH} ${h2h.buildProbeCommand({
+      user: dstHost.username, host: dstHost.host, port: dstHost.port
+    })}`, { timeoutMs: 20000 });
+  const probe = h2h.parseProbe(verify.stdout || verify.stderr || '');
+  return probe.direct
+    ? { ok: true, message: '直连已配好,之后的传输会直接走源主机 → 目标主机' }
+    : { ok: false, message: `密钥已写入,但直连仍不通:${probe.message}` };
 });
 
 /** 下载:文件或整个目录 */

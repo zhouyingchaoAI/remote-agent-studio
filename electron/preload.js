@@ -144,6 +144,7 @@ contextBridge.exposeInMainWorld('api', {
     upload: invoke('fs:upload'),
     download: invoke('fs:download'),
     copyHostToHost: invoke('fs:copyHostToHost'),
+    setupDirect: invoke('fs:setupDirect'),
     readFile: invoke('fs:readFile'),
     saveText: invoke('fs:saveText'),
     imageThumb: invoke('fs:imageThumb'),

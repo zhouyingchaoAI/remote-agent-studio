@@ -94,6 +94,46 @@ function parseCopyResult(text) {
   };
 }
 
+/* ------------------------------------------------------- 配置直连(下发公钥) */
+
+/**
+ * 确保源主机有一把 ssh 密钥,并把公钥打出来。
+ *
+ * 用 ed25519:比 RSA 短、快,现代 OpenSSH 都支持。
+ * -N '' 是空口令 —— 有口令的密钥没法用于非交互的 scp,那正是我们要的场景;
+ * 这一点必须让用户知情,所以配置直连是个显式按钮而不是自动行为。
+ */
+function buildEnsureKeyCommand() {
+  return [
+    'mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"',
+    // 已有就不动:重新生成会把这台机器现有的所有免密关系全部作废
+    '[ -f "$HOME/.ssh/id_ed25519" ] || ssh-keygen -t ed25519 -N "" -f "$HOME/.ssh/id_ed25519" -q',
+    'cat "$HOME/.ssh/id_ed25519.pub"'
+  ].join('; ');
+}
+
+/**
+ * 把公钥追加到目标主机的 authorized_keys。
+ *
+ * 公钥不是秘密,可以走命令行。但仍要做两件事:
+ *  · 去重 —— 重复追加会让文件越来越长,且看不出是不是已经配过;
+ *  · 权限必须对 —— authorized_keys 权限过宽时 sshd 会**直接忽略它**,
+ *    表现为"明明配了却还是要密码",极难查。
+ */
+function buildInstallKeyCommand(publicKey) {
+  const key = String(publicKey || '').trim();
+  if (!/^(ssh-(ed25519|rsa)|ecdsa-sha2-\S+)\s+[A-Za-z0-9+/=]+/.test(key)) {
+    throw new Error('公钥格式不对,拒绝写入 authorized_keys');
+  }
+  const q = shellQuote(key);
+  return [
+    'mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"',
+    'touch "$HOME/.ssh/authorized_keys" && chmod 600 "$HOME/.ssh/authorized_keys"',
+    `grep -qxF ${q} "$HOME/.ssh/authorized_keys" || echo ${q} >> "$HOME/.ssh/authorized_keys"`,
+    'echo __KEY_OK__'
+  ].join('; ');
+}
+
 /**
  * 中转用的本机临时路径。
  * 带上传输 id,避免两个任务撞同名。
@@ -118,5 +158,6 @@ module.exports = {
   sshOpts, safePort, safeUserHost,
   buildProbeCommand, parseProbe,
   buildDirectCopyCommand, parseCopyResult,
+  buildEnsureKeyCommand, buildInstallKeyCommand,
   relayTempPath, relayProgress
 };

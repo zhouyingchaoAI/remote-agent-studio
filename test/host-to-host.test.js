@@ -109,3 +109,61 @@ test('界面:左栏可选主机,并显示走的是直连还是中转', () => {
   // 左栏选了远程后,路径分隔符不能再按 Windows 判
   assert.match(ui, /leftIsLocal && local\.path\.includes/);
 });
+
+/* 用户问「远程到远程为啥不能直接过去非要中转」——
+ * 说明两件事都没做到:传输过程中没告诉他原因,也没给他解决的办法。 */
+
+test('直连原因要在传输过程中就报出去,不能等传完', () => {
+  const main = read('electron/main.js');
+  // 传 1.8G 时用户正盯着进度条,那时候才最需要知道为什么
+  assert.match(main, /report\(\{ phase: 'download', relayReason: probe\.message \|\| probe\.reason, relayCode: probe\.reason \}\)/);
+  const ui = read('src/components/FilePanel.jsx');
+  assert.match(ui, /直连不可用:\{t\.relayReason\}/);
+});
+
+test('生成密钥用 ed25519 且不覆盖已有的', () => {
+  const cmd = h2h.buildEnsureKeyCommand();
+  assert.match(cmd, /ssh-keygen -t ed25519/);
+  /* 重新生成会把这台机器现有的所有免密关系全部作废 —— 这个副作用太大,
+     必须先判存在 */
+  assert.match(cmd, /\[ -f "\$HOME\/\.ssh\/id_ed25519" \] \|\|/);
+  assert.match(cmd, /chmod 700 "\$HOME\/\.ssh"/);
+});
+
+test('写 authorized_keys:去重、权限、且只接受真的公钥', () => {
+  const key = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKey root@src';
+  const cmd = h2h.buildInstallKeyCommand(key);
+  assert.match(cmd, /grep -qxF/, '重复追加会让文件越来越长且看不出配没配过');
+  /* 权限过宽时 sshd 会直接忽略 authorized_keys,表现为"明明配了还要密码",
+     极难查 —— 所以每次都显式 chmod */
+  assert.match(cmd, /chmod 600 "\$HOME\/\.ssh\/authorized_keys"/);
+  assert.match(cmd, /__KEY_OK__/);
+
+  for (const bad of ['rm -rf /', '', 'not-a-key', 'ssh-ed25519']) {
+    assert.throws(() => h2h.buildInstallKeyCommand(bad), /公钥格式不对/, `放过了:${bad}`);
+  }
+});
+
+test('配置直连是显式动作,不在传输失败时自动做掉', () => {
+  const ui = read('src/components/FilePanel.jsx');
+  // 给目标主机加一把可免密登录的钥匙,属于真实授权变更
+  assert.match(ui, /window\.confirm\(/);
+  assert.match(ui, /可免密登录的钥匙/);
+  const main = read('electron/main.js');
+  assert.match(main, /只在\s*\n?\s*\* 用户明确点击时执行,绝不在传输失败时自动做掉/);
+});
+
+test('只有「缺密钥」这一种原因能一键解决,别的不给按钮', () => {
+  const ui = read('src/components/FilePanel.jsx');
+  // 网络不通、host key 变更都不是加个公钥能解决的
+  assert.match(ui, /t\.relayCode === 'auth'/);
+  // 本机不参与:本机→远程本来就不走这条路
+  assert.match(ui, /t\.fromHostId !== 'local' && t\.toHostId !== 'local'/);
+});
+
+test('配完立刻验证一次,不让用户再传一遍才知道成没成', () => {
+  const main = read('electron/main.js');
+  const block = main.slice(main.indexOf("ipcMain.handle('fs:setupDirect'"));
+  assert.match(block, /buildProbeCommand/);
+  assert.match(block, /密钥已写入,但直连仍不通/);
+});
