@@ -2196,6 +2196,18 @@ ipcMain.handle('registry:login', async (_e, { hostId, id, registry: reg, usernam
   return { ...parsed, registry: target, username: user };
 });
 
+/**
+ * 网络诊断。分别验证 shell 与 docker 守护进程能不能连到仓库 ——
+ * 这两件事经常不一致,而且是 Harbor 登录卡死最常见的原因。
+ */
+ipcMain.handle('registry:diagnose', async (_e, { hostId, registry: reg } = {}) => {
+  const s = getSession(hostId);
+  const env = hostId === LOCAL_ID ? '' : `${Installer.BIN_PATH} `;
+  const r = await s.ssh.exec(`${env}${registry.buildDiagnoseCommand({ registry: reg })}`,
+    { timeoutMs: 30000 });
+  return registry.parseDiagnose(r.stdout || r.stderr || '', { registry: reg });
+});
+
 ipcMain.handle('registry:logout', async (_e, { hostId, registry: reg } = {}) => {
   const s = getSession(hostId);
   const env = hostId === LOCAL_ID ? '' : `${Installer.BIN_PATH} `;

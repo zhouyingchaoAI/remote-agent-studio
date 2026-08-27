@@ -171,6 +171,7 @@ contextBridge.exposeInMainWorld('api', {
     remove: invoke('registry:remove'),
     login: invoke('registry:login'),
     logout: invoke('registry:logout'),
+    diagnose: invoke('registry:diagnose'),
     loginMany: invoke('registry:loginMany')
   },
   errors: {

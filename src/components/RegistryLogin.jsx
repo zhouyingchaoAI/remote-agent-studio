@@ -57,6 +57,16 @@ export default function RegistryLogin({ hostId, isLocal, hostLabel }) {
     finally { setBusy(''); refresh(); }
   };
 
+  const diagnose = async () => {
+    setBusy('diag'); setNote(''); setAdvice('');
+    try {
+      const r = await window.api.registry.diagnose({ hostId, registry: form.registry || HUB });
+      setNote(`${r.facts}\n\n${r.ok ? '✓ ' : '✗ '}${r.message}`);
+      if (r.advice) setAdvice(r.advice);
+    } catch (e) { setNote(`诊断失败:${e.message}`); }
+    finally { setBusy(''); }
+  };
+
   const loginAllHosts = async () => {
     if (!form.id) { setNote('先保存一条凭据,才能一键登录多台主机'); return; }
     setBusy('many'); setNote('');
@@ -152,6 +162,10 @@ export default function RegistryLogin({ hostId, isLocal, hostLabel }) {
               {busy === 'many' ? '批量登录中…' : '登录到所有主机'}
             </button>
           )}
+          <button className="btn small ghost" disabled={!!busy} onClick={diagnose}
+            title="分别检查 shell 与 docker 守护进程能不能连到这个仓库">
+            {busy === 'diag' ? '诊断中…' : '诊断网络'}
+          </button>
           <button className="btn small primary" disabled={!!busy || !form.username} onClick={login}>
             {busy === 'login' ? '登录中…' : '登录'}
           </button>

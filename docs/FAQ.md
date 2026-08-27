@@ -159,7 +159,28 @@ IPC、日志或异常日志里。
 
 保存后可以「登录到所有主机」,一次把本机与全部远程主机都登上。
 
-**Harbor 自签证书 / HTTP 仓库**是最常见的失败原因。登录失败时会识别出来并
+**登录卡住不动?先点「诊断网络」。** 最常见的原因是 **docker 守护进程没配代理**:
+`docker login` 的网络请求不是 CLI 发的,而是 docker 守护进程发的,守护进程
+**不读你 shell 里的 `https_proxy`**。所以在终端里 `curl https://harbor.example.com/v2/`
+一切正常(返回 401 是 registry 未认证时的正常应答),`docker login` 却连不出去。
+
+诊断会分别验证 shell 与守护进程,并给出配置命令:
+
+```
+sudo mkdir -p /etc/systemd/system/docker.service.d
+sudo tee /etc/systemd/system/docker.service.d/http-proxy.conf <<EOF
+[Service]
+Environment="HTTP_PROXY=http://你的代理:端口"
+Environment="HTTPS_PROXY=http://你的代理:端口"
+Environment="NO_PROXY=localhost,127.0.0.1,::1"
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart docker      # 会掐掉这台机器上所有正在运行的容器
+```
+
+如果仓库在内网可直连,给主机加一条路由/DNS 也行,不必让守护进程走代理。
+
+**Harbor 自签证书 / HTTP 仓库**是另一个常见失败原因。登录失败时会识别出来并
 给出两条处置命令:装 CA 证书到 `/etc/docker/certs.d/<host>/ca.crt`(推荐,
 不降低安全级别、也不用重启 docker),或把它写进 `daemon.json` 的
 `insecure-registries`。**应用不代改** —— 那是主机级安全配置,而且改完要重启

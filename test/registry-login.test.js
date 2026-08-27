@@ -172,12 +172,74 @@ test('登录调用带上超时,并对超时给出对症解释', () => {
   assert.match(main, /stdin: `\$\{password\}\\n`, timeoutMs: 60000/);
   const r = reg.parseLoginResult('\n[超时] 命令超过 60 秒未返回');
   assert.equal(r.reason, 'timeout');
-  // 超时的下一步和「密码错」完全不同,不能混为一谈
-  assert.match(r.message, /路由或代理/);
+  // 超时的下一步和「密码错」完全不同,不能混为一谈;
+  // 且要点名最常见的那个原因,而不是罗列一堆可能性
+  assert.match(r.message, /守护进程没配代理/);
 });
 
 test('批量登录也读 stderr —— 只读 stdout 会把失败原因丢掉', () => {
   const main = read('electron/main.js');
   const block = main.slice(main.indexOf("ipcMain.handle('registry:loginMany'"));
   assert.match(block, /r\.stdout \|\| r\.stderr/);
+});
+
+/* 用户在远程主机上跑 curl 完全正常(通过 https_proxy 连上,返回 401 —— 那是
+ * registry 未认证时的正常应答),但 docker login 一直卡住。
+ *
+ * 根因:docker login 的网络请求不是 CLI 发的,是 **docker 守护进程** 发的。
+ * 守护进程不读 shell 里的 https_proxy,于是 curl 通、docker 不通。 */
+
+test('诊断分别验证 shell 与守护进程,而不是只看一边', () => {
+  const cmd = reg.buildDiagnoseCommand({ registry: 'harbor.example.com' });
+  assert.match(cmd, /https_proxy/, '要看 shell 的代理');
+  assert.match(cmd, /curl -sS[^;]*harbor\.example\.com\/v2\//, '要从 shell 实测连通性');
+  // docker info 直接暴露守护进程自己的代理,比翻 systemd 文件可靠
+  assert.match(cmd, /docker info --format[^;]*HTTPSProxy/);
+});
+
+test('复刻用户现场:shell 通 + 守护进程无代理 -> 指向守护进程代理', () => {
+  const r = reg.parseDiagnose(
+    '__SHELL_PROXY__=http://10.1.33.75:7890\n__CURL__=401\n__DAEMON__=||\n',
+    { registry: 'harbor.chencytech.com' });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'daemonProxy');
+  assert.match(r.message, /守护进程没配代理/);
+  // 事实要摆出来,不能只给结论
+  assert.match(r.facts, /shell 连仓库:通\(HTTP 401\)/);
+  assert.match(r.facts, /docker 守护进程代理:未设置/);
+  // 建议里要带上用户实际的代理地址,不是占位符
+  assert.match(r.advice, /HTTPS_PROXY=http:\/\/10\.1\.33\.75:7890/);
+  assert.match(r.advice, /systemctl daemon-reload/);
+  assert.match(r.advice, /掐掉这台机器上所有正在运行的容器/);
+});
+
+test('401 算连通 —— 那是 registry 未认证时的正常应答', () => {
+  for (const code of ['200', '401', '403']) {
+    const r = reg.parseDiagnose(`__SHELL_PROXY__=none\n__CURL__=${code}\n__DAEMON__=http://p:1|http://p:1|`, {});
+    assert.equal(r.ok, true, `HTTP ${code} 不该被当成不通`);
+  }
+});
+
+test('shell 自己就不通时,先说网络别扯 docker', () => {
+  const r = reg.parseDiagnose('__SHELL_PROXY__=none\n__CURL__=000\n__DAEMON__=||', {});
+  assert.equal(r.reason, 'network');
+  assert.match(r.message, /先解决网络/);
+});
+
+test('两边都有代理时不误报', () => {
+  const r = reg.parseDiagnose(
+    '__SHELL_PROXY__=http://p:7890\n__CURL__=401\n__DAEMON__=http://p:7890|http://p:7890|localhost', {});
+  assert.equal(r.ok, true);
+});
+
+test('超时提示要点名守护进程代理这个最常见原因', () => {
+  const r = reg.parseLoginResult('\n[超时] 命令超过 60 秒未返回');
+  assert.match(r.message, /守护进程没配代理/);
+  assert.match(r.message, /curl 通不代表 docker 通/);
+});
+
+test('诊断同样不代改主机配置', () => {
+  const main = read('electron/main.js');
+  assert.ok(!/systemctl daemon-reload/.test(main), '不该代写 systemd 配置');
+  assert.match(read('electron/registry.js'), /systemctl daemon-reload/, '命令给人看即可');
 });

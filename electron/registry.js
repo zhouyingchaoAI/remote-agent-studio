@@ -73,6 +73,93 @@ function buildConfigCommand() {
   return 'cat "${DOCKER_CONFIG:-$HOME/.docker}/config.json" 2>/dev/null || echo "{}"';
 }
 
+/**
+ * 诊断命令:分别验证「shell 能不能连到仓库」与「docker 守护进程有没有代理」。
+ *
+ * 这两件事经常不一致,而且是 Harbor 登录卡死最常见的原因:
+ * curl 用的是 shell 的 https_proxy,而 docker login 的网络请求根本不是 CLI
+ * 发出去的 —— 是 **docker 守护进程** 发的。守护进程读不到你 shell 里的
+ * 环境变量,于是 curl 一切正常、docker login 却永远连不出去。
+ */
+function buildDiagnoseCommand({ registry }) {
+  const { server } = normalizeRegistry(registry);
+  const host = server || 'registry-1.docker.io';
+  return [
+    'echo "__SHELL_PROXY__=${https_proxy:-${HTTPS_PROXY:-none}}"',
+    `echo "__CURL__=$(curl -sS -o /dev/null -m 15 -w '%{http_code}' https://${host}/v2/ 2>&1 | tail -1)"`,
+    // docker info 直接暴露守护进程自己的代理设置,比翻 systemd 文件可靠
+    'echo "__DAEMON__=$(docker info --format \'{{.HTTPSProxy}}|{{.HTTPProxy}}|{{.NoProxy}}\' 2>/dev/null)"'
+  ].join('; ');
+}
+
+/**
+ * 解读诊断结果。
+ * 关键判断:shell 通得了、守护进程没代理 —— 那 docker login 必然连不出去。
+ */
+function parseDiagnose(text, { registry } = {}) {
+  const t = String(text || '');
+  const pick = (k) => (t.match(new RegExp(`__${k}__=(.*)`)) || [, ''])[1].trim();
+  const shellProxy = pick('SHELL_PROXY');
+  const curl = pick('CURL');
+  const daemon = pick('DAEMON');
+  const [dHttps, dHttp] = daemon.split('|');
+
+  const shellOk = /^(200|401|403)$/.test(curl);   // 401 是 registry 未认证时的正常应答
+  const shellUsesProxy = !!shellProxy && shellProxy !== 'none';
+  const daemonHasProxy = !!(dHttps || dHttp);
+
+  const facts = [
+    `shell 代理:${shellUsesProxy ? shellProxy : '未设置'}`,
+    `shell 连仓库:${shellOk ? `通(HTTP ${curl})` : `不通(${curl || '无响应'})`}`,
+    `docker 守护进程代理:${daemonHasProxy ? (dHttps || dHttp) : '未设置'}`
+  ].join('\n');
+
+  if (shellOk && shellUsesProxy && !daemonHasProxy) {
+    return {
+      ok: false, reason: 'daemonProxy', facts,
+      message: 'shell 能连上仓库,但 docker 守护进程没配代理 —— '
+        + 'docker login 的网络请求是守护进程发的,读不到你 shell 里的 https_proxy。',
+      advice: daemonProxyAdvice(shellProxy, registry)
+    };
+  }
+  if (!shellOk) {
+    return {
+      ok: false, reason: 'network', facts,
+      message: '这台主机的 shell 就连不上仓库,先解决网络/代理/DNS,再谈 docker 登录。'
+    };
+  }
+  return { ok: true, facts, message: '网络看起来正常:shell 与守护进程都能连到仓库。' };
+}
+
+/**
+ * 守护进程代理的配置办法。
+ * 同样只给命令不代改 —— 要写 systemd 配置并重启 docker。
+ */
+function daemonProxyAdvice(proxyUrl, registry) {
+  let server = '';
+  try { server = normalizeRegistry(registry).server || 'docker.io'; } catch (_) { server = String(registry || ''); }
+  const p = proxyUrl && proxyUrl !== 'none' ? proxyUrl : 'http://PROXY_HOST:PORT';
+  return [
+    'docker 守护进程要单独配代理(它不读 shell 的环境变量):',
+    '',
+    '  sudo mkdir -p /etc/systemd/system/docker.service.d',
+    '  sudo tee /etc/systemd/system/docker.service.d/http-proxy.conf <<EOF',
+    '  [Service]',
+    `  Environment="HTTP_PROXY=${p}"`,
+    `  Environment="HTTPS_PROXY=${p}"`,
+    '  Environment="NO_PROXY=localhost,127.0.0.1,::1"',
+    '  EOF',
+    '  sudo systemctl daemon-reload',
+    '  sudo systemctl restart docker',
+    '',
+    '  # 注意:重启 docker 会掐掉这台机器上所有正在运行的容器',
+    `  # 验证:docker info | grep -i proxy;之后再登录 ${server}`,
+    '',
+    `另一条路:如果 ${server} 在内网可直连,给这台主机加一条到它的路由/DNS,`,
+    '就不必让守护进程走代理。'
+  ].join('\n');
+}
+
 /* ------------------------------------------------------------ 解析 */
 
 function parseDockerVersion(text) {
@@ -138,8 +225,8 @@ function parseLoginResult(text, { registry } = {}) {
   if (/\[超时\]/.test(t)) {
     return {
       ok: false, reason: 'timeout',
-      message: '登录超时:这台主机连不上该仓库。多为仓库地址/端口不对、'
-        + '主机没配到该仓库的路由或代理,也可能是 docker 卡在证书协商上。'
+      message: '登录超时:docker 连不到该仓库。最常见的原因是 **docker 守护进程没配代理** ——'
+        + '它不读 shell 里的 https_proxy,所以 curl 通不代表 docker 通。点「诊断网络」可以确认。'
     };
   }
   if (/no such host|connection refused|timeout|i\/o timeout/i.test(t)) {
@@ -180,5 +267,6 @@ module.exports = {
   DOCKER_HUB_KEY, DOCKER_HUB_ALIASES,
   normalizeRegistry, safeUsername,
   buildLoginCommand, buildLogoutCommand, buildVersionCommand, buildConfigCommand,
+  buildDiagnoseCommand, parseDiagnose, daemonProxyAdvice,
   parseDockerVersion, parseDockerConfig, parseLoginResult, certAdvice
 };
