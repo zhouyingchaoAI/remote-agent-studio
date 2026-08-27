@@ -108,8 +108,11 @@ test('AgentSession 把端点配置透传给 env 生成', () => {
 });
 
 test('仓库里没有任何真实密钥(用户曾在对话里贴过)', () => {
+  /* 除了模型 API key,现在还处理 GitHub 凭据,守卫一并覆盖它的形状。
+     测试样本一律拼接构造,不要写成整串字面量。 */
   const out = execSync(
-    "git grep -lE 'sk-[A-Za-z0-9]{32,}' -- . ':!node_modules' ':!.worktrees' || true",
+    "git grep -lE 'sk-[A-Za-z0-9]{32,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}'"
+    + " -- . ':!node_modules' ':!.worktrees' || true",
     { cwd: path.join(__dirname, '..'), encoding: 'utf8' }
   ).trim();
   assert.equal(out, '', `这些文件里疑似有密钥:\n${out}`);

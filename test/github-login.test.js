@@ -96,15 +96,26 @@ test('token 不经过我们:代码里没有任何地方读取或转发它', () =
   const ui = stripComments(read('src/components/GithubLogin.jsx'));
   assert.ok(!CODE_USE.test(ui), `登录卡片的代码碰了 token:${ui.match(CODE_USE)?.[0]}`);
 
+  /* 只切设备流那一段。下发(github:syncToRemote)是另一条明确受控的路径,
+     它确实会短暂经手 token —— 那条路径的约束由下面几个用例单独盯着,
+     混进来会让这条断言失去意义。 */
   const main = read('electron/main.js');
   const block = stripComments(
     main.slice(main.indexOf("ipcMain.handle('github:login'"),
-      main.indexOf("ipcMain.handle('github:cancel'")));
-  assert.ok(!CODE_USE.test(block), '主进程不该接手 token');
+      main.indexOf("ipcMain.handle('github:syncToRemote'")));
+  assert.ok(!CODE_USE.test(block), '设备流不该接手 token');
 
-  // 解析器同样不该把 token 抽出来往上传
-  const mod = stripComments(read('electron/github.js'));
-  assert.ok(!CODE_USE.test(mod), '解析器不该把 token 抽出来往上传');
+  /* 解析器改成行为断言:直接喂一段含 token 的真实输出,看它有没有抽出来。
+     模块里现在确实有 buildWithTokenCommand(下发路径要用),按关键字扫会误报;
+     真正要守的是「解析结果里不许出现 token」。 */
+  const leaky = 'gho_' + 'AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHH';
+  for (const out of [
+    gh.parseLoginOutput(`✓ Logged in as someuser\ntoken: ${leaky}`),
+    gh.parseAuthStatus(`✓ Logged in to github.com account someuser\n  - Token: ${leaky}`)
+  ]) {
+    assert.ok(!JSON.stringify(out).includes(leaky),
+      `解析结果里漏出了 token:${JSON.stringify(out)}`);
+  }
 });
 
 test('Linux 装到 ~/.local/bin,不需要 root;macOS 只给建议不代劳', () => {
@@ -117,4 +128,50 @@ test('Linux 装到 ~/.local/bin,不需要 root;macOS 只给建议不代劳', () 
 
   const mac = gh.buildInstallCommand('darwin');
   assert.equal(mac.manual, true, 'brew 会改动全局环境,不该替用户决定');
+});
+
+/* 用户看着**远程主机**那张卡片问「已登录了,我怎么下发到远程」——
+ * 说明卡片没写清它属于哪台主机。环境配置页是按主机分的,但这张卡片夹在
+ * 「下发 Codex 认证到远程」和「本机 Claude Code 认证」之间,不写明白
+ * 就会被当成本机登录。 */
+
+test('卡片标题写明属于哪台主机', () => {
+  const ui = read('src/components/GithubLogin.jsx');
+  assert.match(ui, /GitHub 登录 · \{isLocal \? '本机' : \(hostLabel/);
+  // 主机名要真的传进来,不能只留个占位
+  assert.match(read('src/components/SetupPanel.jsx'), /hostLabel=\{host\?\.name/);
+});
+
+test('下发用的 token 走 stdin,绝不上命令行', () => {
+  const cmd = gh.buildWithTokenCommand({});
+  assert.match(cmd, /--with-token/);
+  // 命令行在 ps 里对同机其他进程完全可见,拼进去等于把凭据贴公告栏
+  assert.ok(!/gh[pousr]_|\$\{token\}|\$token/.test(cmd), '命令里不该出现 token');
+
+  const main = read('electron/main.js');
+  const block = main.slice(main.indexOf("ipcMain.handle('github:syncToRemote'"),
+    main.indexOf("ipcMain.handle('github:cancel'"));
+  assert.match(block, /\{ stdin: `\$\{token\}/);
+});
+
+test('下发不把 token 交给渲染进程,也不写进返回值', () => {
+  const main = read('electron/main.js');
+  const block = main.slice(main.indexOf("ipcMain.handle('github:syncToRemote'"),
+    main.indexOf("ipcMain.handle('github:cancel'"));
+  // 返回值里只该有身份与配置结果
+  const ret = block.slice(block.lastIndexOf('return {'));
+  assert.ok(!/token/i.test(ret), `返回值带上了 token:${ret}`);
+  assert.ok(!/send\('github:progress'[^)]*token/.test(block));
+});
+
+test('本机没登录时给出可操作的提示,而不是一句失败', () => {
+  const main = read('electron/main.js');
+  assert.match(main, /本机没有可用的 GitHub 凭据,请先在「本地\(本机\)」的环境配置里登录/);
+});
+
+test('下发按钮只在远程、且本机已登录时出现', () => {
+  const ui = read('src/components/GithubLogin.jsx');
+  assert.match(ui, /!isLocal && localStatus\?\.loggedIn/);
+  // 本机自己不该出现"下发到本机"
+  assert.match(read('electron/main.js'), /目标就是本机,不需要下发/);
 });

@@ -10,16 +10,22 @@ import React, { useEffect, useState } from 'react';
  * token 全程由主机上的 gh 保管,不经过界面,所以这里也没有任何地方
  * 会显示或存储它。
  */
-export default function GithubLogin({ hostId, isLocal }) {
+export default function GithubLogin({ hostId, isLocal, hostLabel }) {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState('');
   const [progress, setProgress] = useState(null);
   const [note, setNote] = useState('');
+  const [localStatus, setLocalStatus] = useState(null);
 
   const refresh = () => window.api.github.status({ hostId })
     .then(setStatus).catch((e) => setNote(e.message));
 
   useEffect(() => { refresh(); /* eslint-disable-next-line */ }, [hostId]);
+  // 远程主机上要知道本机登没登,才谈得上"从本机下发"
+  useEffect(() => {
+    if (isLocal) return;
+    window.api.github.status({ hostId: 'local' }).then(setLocalStatus).catch(() => {});
+  }, [isLocal, hostId]);
   useEffect(() => window.api.github.onProgress((p) => {
     if (p.hostId !== hostId) return;
     setProgress(p);
@@ -32,6 +38,15 @@ export default function GithubLogin({ hostId, isLocal }) {
       const r = await window.api.github.login({ hostId });
       if (!r.done) setNote(`登录未完成${r.error ? `:${r.error}` : ''}\n${r.output || ''}`);
     } catch (e) { setNote(`登录失败:${e.message}`); }
+    finally { setBusy(''); refresh(); }
+  };
+
+  const syncFromLocal = async () => {
+    setBusy('sync'); setNote('');
+    try {
+      const r = await window.api.github.syncToRemote({ hostId });
+      setNote(r.message);
+    } catch (e) { setNote(`下发失败:${e.message}`); }
     finally { setBusy(''); refresh(); }
   };
 
@@ -51,7 +66,9 @@ export default function GithubLogin({ hostId, isLocal }) {
   return (
     <div className="gh-card">
       <div className="row gap">
-        <b>GitHub 登录</b>
+        {/* 环境配置页是按主机分的,但卡片不写明白就会被当成"本机登录" ——
+            用户问过「已登录了,怎么下发到远程」,而他看的正是远程那张卡片 */}
+        <b>GitHub 登录 · {isLocal ? '本机' : (hostLabel || '这台远程主机')}</b>
         <span className={`dot ${status?.loggedIn ? 'ready' : ''}`} />
         <span className="muted small">
           {!status ? '检测中…'
@@ -65,6 +82,13 @@ export default function GithubLogin({ hostId, isLocal }) {
         {status && !status.installed && (
           <button className="btn small" disabled={!!busy} onClick={install}>
             {busy === 'install' ? '安装中…' : '安装 gh'}
+          </button>
+        )}
+        {/* 本机已登录时,远程可以直接复制过去,不必再走一遍设备流 */}
+        {status?.installed && !isLocal && localStatus?.loggedIn && (
+          <button className="btn small" disabled={!!busy} onClick={syncFromLocal}
+            title={`把本机 ${localStatus.username} 的凭据复制到这台远程主机`}>
+            {busy === 'sync' ? '下发中…' : '从本机下发'}
           </button>
         )}
         {status?.installed && (
@@ -117,8 +141,10 @@ export default function GithubLogin({ hostId, isLocal }) {
 
       {note && <pre className="gh-note muted small">{note}</pre>}
       <p className="muted small">
-        登录走 gh 自己的设备流,{isLocal ? '凭据存在本机' : '凭据存在这台远程主机上'} ——
-        token 不经过本应用,也不会写进日志。
+        {isLocal
+          ? '凭据存在本机。登录后可到各远程主机点「从本机下发」,不用每台都扫一次。'
+          : '凭据存在这台远程主机上,与本机、其他主机互相独立。'}
+        {' '}设备流的 token 不经过本应用;「从本机下发」会经主进程转发一次,同样不落日志。
       </p>
     </div>
   );

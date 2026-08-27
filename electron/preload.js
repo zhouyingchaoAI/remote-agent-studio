@@ -160,6 +160,7 @@ contextBridge.exposeInMainWorld('api', {
     status: invoke('github:status'),
     install: invoke('github:install'),
     login: invoke('github:login'),
+    syncToRemote: invoke('github:syncToRemote'),
     cancel: invoke('github:cancel'),
     onProgress: on('github:progress')
   },

@@ -2097,6 +2097,47 @@ ipcMain.handle('github:login', async (_e, { hostId, hostname } = {}) => {
   });
 });
 
+/**
+ * 把本机已登录的 GitHub 凭据下发到远程主机。
+ *
+ * 与设备流不同,这条路径 token 会短暂经过主进程 —— 所以约束更严:
+ * 只在这个函数的局部变量里存在,走 stdin 送到远端(不能拼进命令行,
+ * `ps` 对同机其他进程可见),不落日志、不进返回值、不给渲染进程。
+ */
+ipcMain.handle('github:syncToRemote', async (_e, { hostId, hostname } = {}) => {
+  if (hostId === LOCAL_ID) throw new Error('目标就是本机,不需要下发');
+  const local = getSession(LOCAL_ID);
+  const remote = getSession(hostId);
+
+  const t = await local.ssh.exec(ghMod.buildTokenCommand({ hostname })).catch(() => ({ stdout: '' }));
+  const token = (t.stdout || '').trim();
+  if (!token) {
+    return { ok: false, message: '本机没有可用的 GitHub 凭据,请先在「本地(本机)」的环境配置里登录' };
+  }
+
+  const env = `${Installer.BIN_PATH} `;
+  const login = await remote.ssh.exec(
+    `${env}${ghMod.buildWithTokenCommand({ hostname })}`, { stdin: `${token}\n` }
+  );
+  if (login.code !== 0) {
+    // 输出可能带 token 片段,交给日志层脱敏后再存;返回值里只给概要
+    return { ok: false, message: `远程登录失败:${ghMod.stripAnsi(login.stdout || '').slice(-200)}` };
+  }
+  const setup = await remote.ssh.exec(`${env}${ghMod.buildSetupGitCommand({ hostname })}`)
+    .catch((e) => ({ code: 1, stdout: e.message }));
+  const st = await remote.ssh.exec(`${env}${ghMod.buildStatusCommand({ hostname })}`)
+    .catch(() => ({ stdout: '' }));
+  const parsed = ghMod.parseAuthStatus(st.stdout || '');
+  return {
+    ok: parsed.loggedIn,
+    username: parsed.username,
+    gitConfigured: setup.code === 0,
+    message: parsed.loggedIn
+      ? `已下发到远程,当前身份 ${parsed.username}`
+      : '下发完成但远程仍显示未登录,请点「重新检测」'
+  };
+});
+
 ipcMain.handle('github:cancel', (_e, { hostId } = {}) => {
   const stream = ghLogins.get(hostId);
   if (!stream) return { ok: false };

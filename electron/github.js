@@ -48,6 +48,24 @@ function buildStatusCommand({ hostname = DEFAULT_HOST } = {}) {
   return `gh auth status --hostname ${safeHostname(hostname)} 2>&1`;
 }
 
+/**
+ * 取本机已登录的 token(用于下发到远程)。
+ * 只在主进程内部短暂持有:不落日志、不进 IPC 返回值、不给渲染进程。
+ */
+function buildTokenCommand({ hostname = DEFAULT_HOST } = {}) {
+  return `gh auth token --hostname ${safeHostname(hostname)} 2>/dev/null`;
+}
+
+/**
+ * 用已有 token 在目标主机上登录。
+ *
+ * token 必须走 **stdin**,绝不能拼进命令行 —— 命令行在 `ps` 里对同机
+ * 其他进程完全可见,那等于把凭据贴在公告栏上。
+ */
+function buildWithTokenCommand({ hostname = DEFAULT_HOST } = {}) {
+  return `gh auth login --hostname ${safeHostname(hostname)} --git-protocol https --with-token 2>&1`;
+}
+
 function buildVersionCommand() {
   return 'command -v gh >/dev/null 2>&1 && gh --version 2>/dev/null | head -1 || echo "__NO_GH__"';
 }
@@ -150,6 +168,7 @@ function parseAuthStatus(text) {
 module.exports = {
   DEFAULT_HOST, safeHostname,
   buildLoginCommand, buildSetupGitCommand, buildStatusCommand,
+  buildTokenCommand, buildWithTokenCommand,
   buildVersionCommand, buildInstallCommand,
   stripAnsi, parseLoginOutput, deviceUrlWithCode, parseAuthStatus
 };
