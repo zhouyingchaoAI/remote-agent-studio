@@ -243,3 +243,53 @@ test('诊断同样不代改主机配置', () => {
   assert.ok(!/systemctl daemon-reload/.test(main), '不该代写 systemd 配置');
   assert.match(read('electron/registry.js'), /systemctl daemon-reload/, '命令给人看即可');
 });
+
+/* 用户说「还是没在远程登陆成功」,但截图里状态明明写着
+ * 「已登录 1 个仓库 · harbor.chencytech.com zhouyc」,下面却是「连不上」——
+ * 界面自相矛盾,他自然看不出到底成没成。 */
+
+test('规范形式必须可回环 —— 存进去再读出来不能变成别的仓库', () => {
+  for (const v of ['https://harbor.x.com/', 'harbor.x.com', '', 'docker.io',
+    'https://index.docker.io/v1/', 'harbor.x.com:8443']) {
+    const once = reg.canonicalRegistry(v);
+    assert.equal(reg.canonicalRegistry(once), once, `${v} 回环后变了`);
+  }
+  /* 不能直接存 configKey:Hub 的 configKey 是 https://index.docker.io/v1/,
+     再解析会被当成一个叫 index.docker.io/v1 的自建仓库,静默指向错的地方 */
+  assert.equal(reg.canonicalRegistry('docker.io'), 'docker.io');
+});
+
+test('Docker Hub 的所有写法互相认得,且不会把 Harbor 误判成 Hub', () => {
+  const forms = ['', 'docker.io', 'index.docker.io', 'https://index.docker.io/v1/', 'registry-1.docker.io'];
+  for (const f of forms) assert.ok(reg.sameRegistry(f, 'docker.io'), `${f} 没被认成 Hub`);
+  assert.ok(!reg.sameRegistry('harbor.chencytech.com', 'docker.io'));
+  assert.ok(reg.sameRegistry('https://harbor.chencytech.com', 'harbor.chencytech.com'));
+});
+
+test('保存凭据时存规范形式,否则永远和 docker 的 config key 对不上', () => {
+  const store = read('electron/registryStore.js');
+  assert.match(store, /canonicalRegistry\(rawReg\)/);
+  // 用户填 https://harbor.x.com,docker 的键是 harbor.x.com
+  assert.match(store, /两边就永远对不上/);
+});
+
+test('状态里带上规范形式,前端不必自己再写一份规则', () => {
+  const main = read('electron/main.js');
+  assert.match(main, /canonical: \(\(\) => \{ try \{ return registry\.canonicalRegistry/);
+  const ui = read('src/components/RegistryLogin.jsx');
+  assert.match(ui, /l\.canonical \|\| canon\(l\.configKey\)/);
+});
+
+test('当前仓库已登录时要明说,别让人对着「已登录N个」自己猜', () => {
+  const ui = read('src/components/RegistryLogin.jsx');
+  assert.match(ui, /currentLogin && \(/);
+  assert.match(ui, /当前已登录/);
+  // 重新登录失败时要讲清原凭据还在用,否则红字会让人以为整个功能没成
+  assert.match(ui, /这次失败的是重新登录,原凭据仍然有效/);
+});
+
+test('网络/超时类失败自动跑诊断,省得用户再点一次', () => {
+  const ui = read('src/components/RegistryLogin.jsx');
+  assert.match(ui, /r\.reason === 'network' \|\| r\.reason === 'timeout'/);
+  assert.match(ui, /—— 诊断 ——/);
+});

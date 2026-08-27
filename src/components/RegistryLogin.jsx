@@ -49,7 +49,24 @@ export default function RegistryLogin({ hostId, isLocal, hostLabel }) {
         registry: form.registry || HUB, username: form.username,
         secret: form.secret || undefined
       });
-      setNote(r.ok ? `✓ ${r.message}(${r.registry || 'Docker Hub'} · ${r.username})` : `✗ ${r.message}`);
+      if (r.ok) {
+        setNote(`✓ ${r.message}(${r.registry || 'Docker Hub'} · ${r.username})`);
+      } else {
+        /* 已经登录过、这次重新登录失败:说清楚"原来那份还在用",
+           否则用户看到红字会以为整个功能都没成 */
+        const stillOk = currentLogin ? `\n(注意:该仓库此前已登录${
+          currentLogin.username ? ` ${currentLogin.username}` : ''},这次失败的是重新登录,原凭据仍然有效)` : '';
+        setNote(`✗ ${r.message}${stillOk}`);
+        // 网络/超时类失败直接顺手跑一次诊断,省得用户再点一次才知道原因
+        if (r.reason === 'network' || r.reason === 'timeout') {
+          const d = await window.api.registry.diagnose({ hostId, registry: form.registry || HUB })
+            .catch(() => null);
+          if (d) {
+            setNote((n) => `${n}\n\n—— 诊断 ——\n${d.facts}\n${d.message}`);
+            if (d.advice) setAdvice(d.advice);
+          }
+        }
+      }
       if (r.advice) setAdvice(r.advice);
       // 密码用完即从界面清掉,不在输入框里长期驻留
       setForm((f) => ({ ...f, id, secret: '' }));
@@ -80,6 +97,20 @@ export default function RegistryLogin({ hostId, isLocal, hostLabel }) {
   };
 
   const dockerBad = status && (!status.installed || status.daemonUp === false);
+
+  /* 把表单里的地址和 docker 实际的登录态对上。
+     用户填 https://harbor.x.com 而 docker 的键是 harbor.x.com,
+     不做这一步界面就会一边显示「已登录 1 个仓库」一边显示「连不上」。
+     规范形式由主进程算好带过来 —— 前端再写一份规则迟早会和后端漂移。 */
+  const HUB_ALIASES = ['', 'docker.io', 'index.docker.io', 'registry-1.docker.io',
+    'https://index.docker.io/v1/'];
+  const canon = (v) => {
+    const t = String(v || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    return HUB_ALIASES.includes(t.toLowerCase()) || t.toLowerCase() === 'index.docker.io/v1'
+      ? 'docker.io' : t;
+  };
+  const currentLogin = (status?.logins || []).find(
+    (l) => (l.canonical || canon(l.configKey)) === canon(form.registry || HUB));
 
   return (
     <div className="gh-card">
@@ -114,6 +145,14 @@ export default function RegistryLogin({ hostId, isLocal, hostLabel }) {
             </div>
           ))}
         </div>
+      )}
+
+      {currentLogin && (
+        <p className="small ok-text">
+          ✓ 这台主机上 <b>{currentLogin.label}</b> 当前已登录
+          {currentLogin.username ? `(${currentLogin.username})` : ''} ——
+          下面只有在需要换账号或凭据失效时才用得上。
+        </p>
       )}
 
       <div className="reg-form">

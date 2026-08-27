@@ -751,3 +751,4 @@ progress { width: 140px; height: 6px; }
 .reg-field { display: flex; align-items: center; gap: 8px; }
 .reg-field > span { flex: 0 0 84px; }
 .reg-field input, .reg-field select { flex: 1; padding: 4px 8px; font-size: 12px; }
+.ok-text { color: var(--ok, #4ade80); }

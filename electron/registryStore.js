@@ -13,6 +13,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { canonicalRegistry } = require('./registry');
 
 let _app = null;
 let _safeStorage = null;
@@ -69,9 +70,15 @@ function save({ id, registry, username, label, secret }) {
   const key = id || `reg_${now}_${Math.random().toString(36).slice(2, 8)}`;
   const idx = items.findIndex((it) => it.id === key);
   const prev = idx >= 0 ? items[idx] : {};
+  /* 存归一化后的地址。用户填 https://harbor.x.com,而 docker 在
+     config.json 里的键是 harbor.x.com —— 原样存下来两边就永远对不上,
+     界面会一边显示「已登录」一边显示「连不上」,自相矛盾。 */
+  const rawReg = registry ?? prev.registry ?? '';
+  let canonReg = rawReg;
+  try { canonReg = canonicalRegistry(rawReg); } catch (_) { /* 非法值留原样,登录时会报错 */ }
   const next = {
     id: key,
-    registry: registry ?? prev.registry ?? '',
+    registry: canonReg,
     username: username ?? prev.username ?? '',
     label: label ?? prev.label ?? '',
     // 没传新密码就保留原来的,避免"改个用户名把密码弄丢"

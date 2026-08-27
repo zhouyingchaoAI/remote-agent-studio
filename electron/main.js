@@ -2160,7 +2160,11 @@ ipcMain.handle('registry:status', async (_e, { hostId } = {}) => {
   const docker = registry.parseDockerVersion(v.stdout || '');
   if (!docker.installed) return { ...docker, logins: [] };
   const c = await s.ssh.exec(`${env}${registry.buildConfigCommand()}`).catch(() => ({ stdout: '{}' }));
-  return { ...docker, logins: registry.parseDockerConfig(c.stdout || '{}') };
+  // 带上规范形式,界面才好把「已登录列表」与用户填的地址对上
+  const logins = registry.parseDockerConfig(c.stdout || '{}').map((l) => ({
+    ...l, canonical: (() => { try { return registry.canonicalRegistry(l.configKey); } catch (_) { return l.configKey; } })()
+  }));
+  return { ...docker, logins };
 });
 
 /** 保存的凭据列表(不含密码) */

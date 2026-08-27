@@ -14,7 +14,11 @@
 
 /** Docker Hub 在 config.json 里的固定键名,与用户输入的 docker.io 不同 */
 const DOCKER_HUB_KEY = 'https://index.docker.io/v1/';
-const DOCKER_HUB_ALIASES = ['', 'docker.io', 'index.docker.io', 'registry-1.docker.io', DOCKER_HUB_KEY];
+/* 注意 'index.docker.io/v1':normalizeRegistry 会先剥掉协议与尾斜杠,
+   docker 写进 config.json 的 https://index.docker.io/v1/ 到这一步正是这个形态。
+   漏了它,Hub 的登录态就永远和用户填的 docker.io 对不上。 */
+const DOCKER_HUB_ALIASES = ['', 'docker.io', 'index.docker.io', 'index.docker.io/v1',
+  'registry-1.docker.io', DOCKER_HUB_KEY];
 
 /**
  * 归一化仓库地址。
@@ -31,6 +35,23 @@ function normalizeRegistry(input) {
     throw new Error(`仓库地址不合法:${input}`);
   }
   return { server: s, configKey: s, label: s, isHub: false };
+}
+
+/**
+ * 可回环的规范形式:存起来、再喂回 normalizeRegistry 结果不变。
+ *
+ * 不能直接存 configKey —— Docker Hub 的 configKey 是
+ * https://index.docker.io/v1/,再解析会被当成一个叫 index.docker.io/v1
+ * 的自建仓库,静默指向错误的地方。
+ */
+function canonicalRegistry(input) {
+  const r = normalizeRegistry(input);
+  return r.isHub ? 'docker.io' : r.server;
+}
+
+/** 两个写法是不是同一个仓库(用于把界面输入与 docker 的 config key 对上) */
+function sameRegistry(a, b) {
+  try { return canonicalRegistry(a) === canonicalRegistry(b); } catch (_) { return false; }
 }
 
 /** 用户名同样会进命令行,同样要挡 */
@@ -265,7 +286,7 @@ function certAdvice(registry, errorText = '') {
 
 module.exports = {
   DOCKER_HUB_KEY, DOCKER_HUB_ALIASES,
-  normalizeRegistry, safeUsername,
+  normalizeRegistry, canonicalRegistry, sameRegistry, safeUsername,
   buildLoginCommand, buildLogoutCommand, buildVersionCommand, buildConfigCommand,
   buildDiagnoseCommand, parseDiagnose, daemonProxyAdvice,
   parseDockerVersion, parseDockerConfig, parseLoginResult, certAdvice
