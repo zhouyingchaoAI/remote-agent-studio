@@ -120,11 +120,54 @@ export default function FilePanel({ hostId }) {
       const r = await window.api.files.setupDirect({
         fromHostId: t.fromHostId, toHostId: t.toHostId
       });
+      /* 进行中的传输在开始时就已经选定了中转,不会中途切换 ——
+         提示紧挨着进度条,不说清楚就会被读成"现在已经是直连了" */
+      const inFlight = !t.done && !t.error;
       setTransfers((ts) => ts.map((x) => x.id === t.id
-        ? { ...x, setupMsg: r.message, setupOk: r.ok } : x));
+        ? {
+          ...x, setupOk: r.ok, canRedirect: r.ok && inFlight,
+          setupMsg: r.ok && inFlight
+            ? '直连已配好 —— 但本次传输仍走中转(开始时就定了),下次才生效'
+            : r.message
+        }
+        : x));
     } catch (e) {
       setTransfers((ts) => ts.map((x) => x.id === t.id ? { ...x, setupMsg: e.message } : x));
     } finally { setSetupBusy(''); }
+  };
+
+  /** 取消当前这次,用刚配好的直连重新发起 —— 1.8G 走中转不值得等完 */
+  const restartDirect = async (t) => {
+    await window.api.files.cancelTransfer({ transferId: t.id }).catch(() => {});
+    setTransfers((ts) => ts.filter((x) => x.id !== t.id));
+    const isUp = t.dir === '↑';
+    await uploadOrCopy({
+      fromHostId: t.fromHostId, toHostId: t.toHostId,
+      srcPath: isUp ? t.localPath : t.remotePath,
+      destPath: isUp ? t.remotePath : t.localPath,
+      name: t.name, isDir: t.isDir, dir: t.dir
+    });
+  };
+
+  /** 远程→远程的统一发起口,重传与首次发起共用 */
+  const uploadOrCopy = async ({ fromHostId, toHostId, srcPath, destPath, name, isDir, dir }) => {
+    const id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    setTransfers((ts) => [...ts, {
+      id, name, dir, transferred: 0, total: 0, isDir,
+      localPath: dir === '↑' ? srcPath : destPath,
+      remotePath: dir === '↑' ? destPath : srcPath,
+      fromHostId, toHostId
+    }]);
+    try {
+      const r = await window.api.files.copyHostToHost({
+        fromHostId, toHostId, srcPath, destPath, name, transferId: id, isDir
+      });
+      setTransfers((ts) => ts.map((x) => x.id === id
+        ? { ...x, done: true, mode: r.mode, relayReason: r.relayReason } : x));
+      loadRemote(remote.path); loadLocal(local.path);
+    } catch (e) {
+      setTransfers((ts) => ts.map((x) => x.id === id ? { ...x, error: e.message } : x));
+    }
   };
 
   /** 直连不可用时,只有「缺密钥」是我们能一键解决的 */
@@ -364,7 +407,13 @@ export default function FilePanel({ hostId }) {
                 </>
               ) : t.phase === 'direct' ? (
                 <>
-                  <span className="muted small">源主机直连传输中(数据不经过本机)…</span>
+                  <span className="muted small">直连中(数据不经过本机)</span>
+                  {/* scp 不报进度,这里的数字来自定时查目标目录大小 ——
+                      会有滞后,所以标出来是估算,不假装精确 */}
+                  <progress value={t.transferred} max={t.total || 1} />
+                  <span className="muted small">
+                    {fmtSize(t.transferred)} / {fmtSize(t.total)}(估算)
+                  </span>
                   <button className="btn small ghost" onClick={() => cancelTransfer(t)}>取消</button>
                 </>
               ) : t.scanning ? (
@@ -392,6 +441,12 @@ export default function FilePanel({ hostId }) {
                   )}
                   {t.setupMsg && (
                     <span className={t.setupOk ? 'ok small' : 'error-text small'}>{t.setupMsg}</span>
+                  )}
+                  {t.canRedirect && (
+                    <button className="btn tiny primary" onClick={() => restartDirect(t)}
+                      title="取消这次中转,改用刚配好的直连重新传">
+                      用直连重传
+                    </button>
                   )}
                   <progress value={t.transferred} max={t.total || 1} />
                   <button className="btn small ghost" disabled={t.cancelling}

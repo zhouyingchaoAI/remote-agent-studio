@@ -206,3 +206,70 @@ test('左栏出错时挡住传输按钮,免得打到错的目标', () => {
   assert.match(ui, /disabled=\{!selLocal \|\| !!leftErr\}/);
   assert.match(ui, /disabled=\{!selRemote \|\| !!leftErr \|\| leftConnecting\}/);
 });
+
+/* 用户在中转进行中点了「配置直连」,配好后看到「直连已配好」紧挨着进度条,
+ * 于是问「现在是直连吗」—— 不是。这次传输在开始时就选定了中转,不会中途
+ * 切换,而提示的位置让它读起来像已经切过去了。 */
+
+test('配好直连时要说清「本次不变」,别让人误以为已经切过去了', () => {
+  const ui = read('src/components/FilePanel.jsx');
+  assert.match(ui, /本次传输仍走中转\(开始时就定了\),下次才生效/);
+  // 只有进行中的传输才需要这句;已完成的说了反而多余
+  assert.match(ui, /const inFlight = !t\.done && !t\.error/);
+});
+
+test('给一条出路:取消中转、用刚配好的直连重传', () => {
+  const ui = read('src/components/FilePanel.jsx');
+  assert.match(ui, /const restartDirect = async \(t\)/);
+  assert.match(ui, /用直连重传/);
+  // 1.8G 走中转不值得等完
+  assert.match(ui, /cancelTransfer\(\{ transferId: t\.id \}\)/);
+  assert.match(ui, /canRedirect: r\.ok && inFlight/);
+});
+
+test('取消要同时中断中转的两段 —— 上传段注册在另一个 id 下', () => {
+  const main = read('electron/main.js');
+  /* 只取消 transferId 的话,取消按钮在上传阶段按下去毫无作用:
+     界面显示"取消中…"而传输照跑,是最糟的那种假象 */
+  assert.match(main, /const ids = \[transferId, `\$\{transferId\}_up`\]/);
+  assert.match(main, /最糟的那种假象/);
+  // 两个都不存在才算"已结束"
+  assert.match(main, /return hit \? \{ ok: true \}/);
+});
+
+/* 用户走上直连后问「直连传输不会有进度条吗」—— 确实没有,而且界面还显示
+ * 一个不动的「0 B / 4.0 KB」,那个分母是选中条目的大小,对目录根本不对。 */
+
+test('直连要自己造进度:先问源总量,再轮询目标已有多大', () => {
+  // scp 只在 stdout 是 tty 时才打进度,非交互执行拿不到任何进度
+  assert.match(h2h.buildSizeCommand('/root/code'), /du -sb '\/root\/code'/);
+  assert.match(h2h.buildDestSizeCommand('/data/code'), /du -sb '\/data\/code'/);
+  // 路径带空格要能正确引用
+  assert.match(h2h.buildSizeCommand('/a/my code'), /'\/a\/my code'/);
+
+  const main = read('electron/main.js');
+  assert.match(main, /setInterval\(async \(\) => \{[\s\S]{0,400}buildDestSizeCommand/);
+  // 轮询要停掉,否则传完还在打扰目标主机
+  assert.match(main, /finally \{\s*\n\s*stopped = true;\s*\n\s*clearInterval\(poll\)/);
+});
+
+test('大小解析:拿不到就当 0,不要把 NaN 送进进度条', () => {
+  assert.equal(h2h.parseSize('1048576\t/root/code'), 1048576);
+  assert.equal(h2h.parseSize('0'), 0);
+  assert.equal(h2h.parseSize(''), 0);
+  assert.equal(h2h.parseSize('du: cannot access'), 0);
+  assert.equal(h2h.parseSize(undefined), 0);
+});
+
+test('直连的进度标明是估算,不假装精确', () => {
+  const ui = read('src/components/FilePanel.jsx');
+  assert.match(ui, /直连中\(数据不经过本机\)/);
+  // 数字来自定时查目录大小,scp 按文件写,必然滞后
+  assert.match(ui, /(估算)/);
+  assert.match(ui, /t\.phase === 'direct' \? \([\s\S]{0,500}<progress/);
+});
+
+test('直连的超时不能按分钟算 —— 大目录传几小时是正常的', () => {
+  const main = read('electron/main.js');
+  assert.match(main, /timeoutMs: 6 \* 60 \* 60 \* 1000/);
+});

@@ -94,6 +94,30 @@ function parseCopyResult(text) {
   };
 }
 
+/**
+ * 量一下源路径有多大(字节)。
+ * scp 不报进度,总量得我们自己先问出来,否则进度条没有分母。
+ */
+function buildSizeCommand(path) {
+  return `du -sb ${shellQuote(path)} 2>/dev/null | cut -f1 || echo 0`;
+}
+
+/**
+ * 量目标路径当前有多大 —— 直连进度靠轮询它算出来。
+ *
+ * scp 只在 stdout 是 tty 时才打进度条,而我们是非交互执行,拿不到任何进度。
+ * 与其让用户对着一个不动的 0 B 干等,不如每隔几秒问一次目标目录的大小:
+ * 数字会有滞后(scp 是按文件写的),但至少是真的在动、且方向正确。
+ */
+function buildDestSizeCommand(path) {
+  return `du -sb ${shellQuote(path)} 2>/dev/null | cut -f1 || echo 0`;
+}
+
+function parseSize(text) {
+  const n = parseInt(String(text || '').trim().split(/\s+/)[0], 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
 /* ------------------------------------------------------- 配置直连(下发公钥) */
 
 /**
@@ -159,5 +183,6 @@ module.exports = {
   buildProbeCommand, parseProbe,
   buildDirectCopyCommand, parseCopyResult,
   buildEnsureKeyCommand, buildInstallKeyCommand,
+  buildSizeCommand, buildDestSizeCommand, parseSize,
   relayTempPath, relayProgress
 };

@@ -1919,11 +1919,19 @@ function throwIfAborted(signal) {
 }
 
 ipcMain.handle('fs:cancelTransfer', (_e, { transferId } = {}) => {
-  const signal = transferSignals.get(transferId);
-  if (!signal) return { ok: false, error: '传输不存在或已结束' };
-  signal.aborted = true;
-  if (signal.onAbort) signal.onAbort();   // 正在传的那个文件立刻断掉
-  return { ok: true };
+  /* 远程→远程的中转是两段,上传段注册在 `${transferId}_up` 下。
+     只取消 transferId 的话,取消按钮在上传阶段按下去毫无作用 ——
+     界面显示"取消中…"而传输照跑,是最糟的那种假象。 */
+  const ids = [transferId, `${transferId}_up`];
+  let hit = false;
+  for (const id of ids) {
+    const signal = transferSignals.get(id);
+    if (!signal) continue;
+    hit = true;
+    signal.aborted = true;
+    if (signal.onAbort) signal.onAbort();   // 正在传的那个文件立刻断掉
+  }
+  return hit ? { ok: true } : { ok: false, error: '传输不存在或已结束' };
 });
 
 /** 上传:文件或整个目录 */
@@ -2291,15 +2299,42 @@ ipcMain.handle('fs:copyHostToHost', async (_e, {
 
   /* 2) 能直连就让源主机自己传 */
   if (probe.direct) {
-    report({ phase: 'direct', scanning: true });
-    const r = await src.ssh.exec(
-      `${Installer.BIN_PATH} ${h2h.buildDirectCopyCommand({
-        srcPath, user: dstHost.username, host: dstHost.host, port: dstHost.port, destPath
-      })}`, { timeoutMs: 30 * 60 * 1000 });
-    const parsed = h2h.parseCopyResult(r.stdout || r.stderr || '');
-    if (parsed.ok) return { ok: true, mode: 'direct' };
-    // 直连探测通过但拷贝失败:如实报出来,不要悄悄退回中转把问题掩盖掉
-    throw new Error(`直连拷贝失败:${parsed.message}`);
+    /* scp 只在 stdout 是 tty 时才打进度,非交互执行拿不到任何进度。
+       所以自己造:先问源路径总量,再定时问目标路径已经有多大。
+       数字有滞后(scp 按文件写),但至少是真在动、方向也对 ——
+       比让用户对着一个永远不动的 0 B 干等强得多。 */
+    const sizeOut = await src.ssh.exec(`${Installer.BIN_PATH} ${h2h.buildSizeCommand(srcPath)}`,
+      { timeoutMs: 60000 }).catch(() => ({ stdout: '0' }));
+    const total = h2h.parseSize(sizeOut.stdout);
+    report({ phase: 'direct', transferred: 0, total, scanning: false });
+
+    const dstSession = getSession(toHostId);
+    let stopped = false;
+    const poll = setInterval(async () => {
+      if (stopped) return;
+      try {
+        const d = await dstSession.ssh.exec(
+          `${Installer.BIN_PATH} ${h2h.buildDestSizeCommand(destPath)}`, { timeoutMs: 15000 });
+        if (!stopped) report({ phase: 'direct', transferred: h2h.parseSize(d.stdout), total });
+      } catch (_) { /* 单次查询失败无所谓,下一轮再来 */ }
+    }, 3000);
+
+    try {
+      const r = await src.ssh.exec(
+        `${Installer.BIN_PATH} ${h2h.buildDirectCopyCommand({
+          srcPath, user: dstHost.username, host: dstHost.host, port: dstHost.port, destPath
+        })}`, { timeoutMs: 6 * 60 * 60 * 1000 });
+      const parsed = h2h.parseCopyResult(r.stdout || r.stderr || '');
+      if (parsed.ok) {
+        report({ phase: 'direct', transferred: total, total });
+        return { ok: true, mode: 'direct' };
+      }
+      // 直连探测通过但拷贝失败:如实报出来,不要悄悄退回中转把问题掩盖掉
+      throw new Error(`直连拷贝失败:${parsed.message}`);
+    } finally {
+      stopped = true;
+      clearInterval(poll);
+    }
   }
 
   /* 3) 退回中转:源 → 本机临时目录 → 目标 */
