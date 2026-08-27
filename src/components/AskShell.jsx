@@ -55,7 +55,21 @@ export default function AskShell({ hostId, termId, getTail, onInsert }) {
   const [err, setErr] = useState('');
   const [withTail, setWithTail] = useState(true);
   const [shot, setShot] = useState(null);   // {path, name}
+  const [partial, setPartial] = useState('');
+  const [elapsed, setElapsed] = useState(0);
+  const askIdRef = useRef('');
   const inputRef = useRef(null);
+
+  /* 「问中…」转到底、既没进度也没出口,是最糟的等待界面。
+     所以边出边显示,并且把已等秒数摆出来。 */
+  useEffect(() => window.api.ask.onProgress(({ askId, partial: p }) => {
+    if (askId === askIdRef.current) setPartial(p || '');
+  }), []);
+  useEffect(() => {
+    if (!busy) { setElapsed(0); return undefined; }
+    const t = window.setInterval(() => setElapsed((n) => n + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [busy]);
 
   // ⌘K / Ctrl+K 唤起 —— 手已经在键盘上,不该逼人去够鼠标
   useEffect(() => {
@@ -73,17 +87,19 @@ export default function AskShell({ hostId, termId, getTail, onInsert }) {
 
   const ask = async () => {
     if (!q.trim() || busy) return;
-    setBusy(true); setErr(''); setResult(null);
+    const askId = `ask_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    askIdRef.current = askId;
+    setBusy(true); setErr(''); setResult(null); setPartial('');
     try {
       const r = await window.api.ask.shell({
-        hostId, question: q,
+        hostId, question: q, askId,
         tail: withTail ? (getTail?.() || '') : '',
         imagePath: shot?.path || '',
         agent: engine.agent, model: engine.model, reasoningEffort: engine.reasoningEffort
       });
       setResult(r);
     } catch (e) { setErr(e.message); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setPartial(''); }
   };
 
   const capture = async () => {
@@ -121,15 +137,24 @@ export default function AskShell({ hostId, termId, getTail, onInsert }) {
           placeholder="例如:怎么看某个容器最近 100 行日志"
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); } }} />
-        <button className="btn small primary" disabled={busy || !q.trim()} onClick={ask}>
-          {busy ? '问中…' : '问'}
-        </button>
+        {busy ? (
+          <button className="btn small ghost" title="停止这次提问"
+            onClick={() => {
+              window.api.ask.cancel({ askId: askIdRef.current });
+              setBusy(false); setErr('已取消');
+            }}>
+            取消 {elapsed}s
+          </button>
+        ) : (
+          <button className="btn small primary" disabled={!q.trim()} onClick={ask}>问</button>
+        )}
       </div>
 
       <div className="row gap ask-opts">
-        <label className="check-row inline" title="终端输出是最好的上下文,发送前已脱敏">
+        <label className="check-row inline"
+          title="终端输出会随问题一起发给模型;发送前会把 key/token 类内容替换成 ***(本地正则,不影响速度)">
           <input type="checkbox" checked={withTail} onChange={(e) => setWithTail(e.target.checked)} />
-          <span className="small">带上终端最近输出(已脱敏)</span>
+          <span className="small">带上终端最近输出</span>
         </label>
         <button className="btn tiny ghost" onClick={capture}>截图</button>
         {shot && (
@@ -140,6 +165,11 @@ export default function AskShell({ hostId, termId, getTail, onInsert }) {
         )}
       </div>
 
+      {busy && (
+        <pre className="ask-answer">
+          {partial || `正在问 ${ENGINE_LABEL[engine.agent] || engine.agent}…(已等 ${elapsed}s)`}
+        </pre>
+      )}
       {err && <p className="error-text small">{err}</p>}
 
       {result && (

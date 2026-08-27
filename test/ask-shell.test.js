@@ -185,3 +185,48 @@ test('导航按使用频次排:对话/终端/文件在最左', () => {
   // 配置类沉到最右
   assert.equal(order[order.length - 1], 'setup');
 });
+
+/* 用户卡在「问中…」不动,并猜是脱敏拖慢的。
+ * 脱敏是对 ≤6000 字符跑一遍正则、发生在网络请求之前,微秒级 —— 不是原因。
+ * 真正的问题是这个调用**既没有超时也没有取消**,可以永远停在那儿。 */
+
+test('必须有超时 —— 没有出口的等待界面是最糟的失败方式', () => {
+  const main = read('electron/main.js');
+  assert.match(main, /const ASK_TIMEOUT_MS = \d+/);
+  assert.match(main, /Promise\.race\(\[/);
+  assert.match(main, /问答超时/);
+  // 超时提示要指向下一步,而不是只说"超时了"
+  assert.match(main, /引擎未登录\/额度不足\/代理不通/);
+});
+
+test('可以取消,且取消要真的中断会话', () => {
+  const main = read('electron/main.js');
+  assert.match(main, /ipcMain\.handle\('ask:cancel'/);
+  assert.match(main, /askSessions\.set\(askId, session\)/);
+  // 结束后要清掉,否则 Map 会一直涨
+  assert.match(main, /askSessions\.delete\(askId\)/);
+  const ui = read('src/components/AskShell.jsx');
+  assert.match(ui, /window\.api\.ask\.cancel\(\{ askId: askIdRef\.current \}\)/);
+});
+
+test('边出边显示 + 已等秒数,而不是一个转到底的「问中…」', () => {
+  const main = read('electron/main.js');
+  assert.match(main, /send\('ask:progress', \{ askId, partial: answer \}\)/);
+  const ui = read('src/components/AskShell.jsx');
+  assert.match(ui, /ask\.onProgress/);
+  assert.match(ui, /已等 \$\{elapsed\}s/);
+  // 只认自己这次的 askId,否则连着问两次会串
+  assert.match(ui, /askId === askIdRef\.current/);
+});
+
+test('引擎返回空内容要报错,不能静默成功', () => {
+  const main = read('electron/main.js');
+  /* dsh 那次已经栽过一模一样的:退 0 而无输出,界面一片空白,
+     用户完全不知道发生了什么 */
+  assert.match(main, /引擎没有返回任何内容/);
+});
+
+test('脱敏是本地正则,与快慢无关 —— 提示不该让人误会', () => {
+  const ui = read('src/components/AskShell.jsx');
+  assert.match(ui, /本地正则,不影响速度/);
+});

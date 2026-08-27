@@ -2408,8 +2408,21 @@ const askShell = require('./askShell');
  * 不开会话、不改文件(只读沙箱),问完即弃。终端输出在送进模型前统一脱敏 ——
  * 那里面 export XXX_KEY=… 之类太常见了,不能指望调用方记得洗。
  */
+/** 进行中的问答:askId -> session,供「取消」用 */
+const askSessions = new Map();
+/** 顺手问一句而已,超过这个时间基本就是哪里不对了 */
+const ASK_TIMEOUT_MS = 120000;
+
+ipcMain.handle('ask:cancel', (_e, { askId } = {}) => {
+  const session = askSessions.get(askId);
+  if (!session) return { ok: false };
+  try { session.cancel(); } catch (_) {}
+  askSessions.delete(askId);
+  return { ok: true };
+});
+
 ipcMain.handle('ask:shell', async (_e, {
-  hostId, question, tail = '', imagePath = '',
+  hostId, question, tail = '', imagePath = '', askId = '',
   agent = 'codex', model = '', reasoningEffort = ''
 } = {}) => {
   const s = getSession(hostId);
@@ -2434,19 +2447,45 @@ ipcMain.handle('ask:shell', async (_e, {
     reasoningEffort: agent === 'codex' ? reasoningEffort : '',
     permissionMode: 'workspace'   // 只读沙箱:问一句而已,不该动任何文件
   });
+  askSessions.set(askId, session);
+
   let answer = '';
   session.on('message', (msg) => {
     if (msg.kind === 'text' || msg.kind === 'result') answer += `\n${msg.text || ''}`;
-    else if (msg.kind === 'text_delta') answer += msg.text || '';
+    else if (msg.kind === 'text_delta') {
+      answer += msg.text || '';
+      // 边出边推:一个「问中…」转到底,用户根本不知道是在想还是挂了
+      send('ask:progress', { askId, partial: answer });
+    }
   });
+
+  /* 必须有超时。这是个「顺手问一句」的功能,而模型调用可能因为认证、
+     代理、额度等原因永远不返回 —— 没有出口的等待界面是最糟的失败方式。 */
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(
+      `问答超时(${Math.round(ASK_TIMEOUT_MS / 1000)} 秒未返回)。`
+      + '多为引擎未登录/额度不足/代理不通 —— 到「环境配置」页点一次「测试」能看到确切原因。'
+    )), ASK_TIMEOUT_MS);
+  });
+
   try {
-    await session.send(prompt, imagePath
-      ? { attachments: [{ kind: 'image', remotePath: imagePath, name: 'screenshot.png' }] }
-      : {});
+    await Promise.race([
+      session.send(prompt, imagePath
+        ? { attachments: [{ kind: 'image', remotePath: imagePath, name: 'screenshot.png' }] }
+        : {}),
+      timeout
+    ]);
   } finally {
+    if (timer) clearTimeout(timer);
+    askSessions.delete(askId);
     try { session.cancel(); } catch (_) { /* 已经结束了 */ }
   }
   const text = answer.trim();
+  if (!text) {
+    // 退 0 却没输出:静默是最糟的失败方式,上一轮在 dsh 上已经栽过一次
+    throw new Error('引擎没有返回任何内容。到「环境配置」页点一次「测试」确认该引擎当前可用。');
+  }
   return { answer: text, commands: askShell.extractCommands(text), env };
 });
 
