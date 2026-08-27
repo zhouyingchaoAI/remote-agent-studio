@@ -10,6 +10,11 @@ function fmtSize(n) {
 }
 
 export default function FilePanel({ hostId }) {
+  /* 左栏原来写死是本机。选成另一台远程主机后就变成「远程 → 远程」,
+     由主进程决定走直连还是经本机中转。 */
+  const [leftHostId, setLeftHostId] = useState('local');
+  const [hosts, setHosts] = useState([]);
+  const leftIsLocal = leftHostId === 'local';
   const [local, setLocal] = useState({ path: '', entries: [] });
   const [remote, setRemote] = useState({ path: '', entries: [] });
   const [selLocal, setSelLocal] = useState(null);
@@ -20,10 +25,18 @@ export default function FilePanel({ hostId }) {
   const [newDirName, setNewDirName] = useState(null); // null=隐藏, ''=输入中
   const [preview, setPreview] = useState(null); // {hostId, path, name}
 
+  useEffect(() => { window.api.hosts.list().then(setHosts).catch(() => {}); }, []);
+
+  /* 左栏的列目录:本机走 listLocal,选了远程主机就走 listRemote。
+     两个接口返回同样的形状,所以下面的渲染不用分叉。 */
   const loadLocal = useCallback(async (p) => {
-    try { setLocal(await window.api.files.listLocal(p || null)); setSelLocal(null); }
-    catch (e) { setErr(e.message); }
-  }, []);
+    try {
+      setLocal(leftIsLocal
+        ? await window.api.files.listLocal(p || null)
+        : await window.api.files.listRemote({ hostId: leftHostId, dirPath: p || '~' }));
+      setSelLocal(null);
+    } catch (e) { setErr(e.message); }
+  }, [leftHostId, leftIsLocal]);
   const loadRemote = useCallback(async (p) => {
     try { setRemote(await window.api.files.listRemote({ hostId, dirPath: p || '~' })); setSelRemote(null); }
     catch (e) { setErr(e.message); }
@@ -32,16 +45,20 @@ export default function FilePanel({ hostId }) {
   useEffect(() => { loadLocal(); loadRemote(); }, [loadLocal, loadRemote]);
 
   useEffect(() => window.api.files.onProgress((p) => {
-    if (p.hostId !== hostId) return;
+    /* 远程→远程时进度带的是源主机 id,不一定等于当前页面的 hostId。
+       按 transferId 认更稳 —— id 本来就是我们自己生成的。 */
+    if (p.hostId !== hostId && p.hostId !== leftHostId) return;
     setTransfers((ts) => ts.map((t) => t.id === p.transferId ? {
       ...t,
       transferred: p.transferred ?? t.transferred,
       total: p.total ?? t.total,
       doneFiles: p.doneFiles ?? t.doneFiles,
       totalFiles: p.totalFiles ?? t.totalFiles,
-      scanning: p.scanning ?? false
+      scanning: p.scanning ?? false,
+      phase: p.phase ?? t.phase,
+      relayReason: p.relayReason ?? t.relayReason
     } : t));
-  }), [hostId]);
+  }), [hostId, leftHostId]);
 
   /** 中断:大目录/大文件传错了不用干等 */
   const cancelTransfer = async (t) => {
@@ -53,16 +70,28 @@ export default function FilePanel({ hostId }) {
 
   const joinPath = (dir, name, sep = '/') =>
     dir.endsWith(sep) ? dir + name : dir + sep + name;
-  const localSep = local.path.includes('\\') ? '\\' : '/';
+  // 远程一律 posix 分隔符,只有本机可能是 Windows 风格
+  const localSep = leftIsLocal && local.path.includes('\\') ? '\\' : '/';
 
   /** 上传本地文件或目录到当前远程目录(点击上传/拖拽/重试共用) */
   const uploadOne = async (localPath, name, size, isDir = false) => {
     const id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const remotePath = joinPath(remote.path, name);
     setTransfers((ts) => [...ts, {
-      id, name, dir: '↑', transferred: 0, total: size || 0, localPath, remotePath, isDir
+      id, name, dir: '↑', transferred: 0, total: size || 0, localPath, remotePath, isDir,
+      fromHostId: leftHostId, toHostId: hostId
     }]);
     try {
+      if (!leftIsLocal) {
+        const r = await window.api.files.copyHostToHost({
+          fromHostId: leftHostId, toHostId: hostId,
+          srcPath: localPath, destPath: remotePath, name, transferId: id, isDir
+        });
+        setTransfers((ts) => ts.map((t) => t.id === id
+          ? { ...t, done: true, mode: r.mode, relayReason: r.relayReason } : t));
+        loadRemote(remote.path);
+        return;
+      }
       await window.api.files.upload({ hostId, localPath, remotePath, transferId: id, isDir });
       setTransfers((ts) => ts.map((t) => t.id === id ? { ...t, done: true } : t));
       loadRemote(remote.path);
@@ -116,11 +145,21 @@ export default function FilePanel({ hostId }) {
     const localPath = joinPath(local.path, selRemote.name, localSep);
     setTransfers((ts) => [...ts, {
       id, name: selRemote.name, dir: '↓', transferred: 0,
-      total: selRemote.size || 0, localPath, remotePath, isDir
+      total: selRemote.size || 0, localPath, remotePath, isDir,
+      fromHostId: hostId, toHostId: leftHostId
     }]);
     try {
-      await window.api.files.download({ hostId, remotePath, localPath, transferId: id, isDir });
-      setTransfers((ts) => ts.map((t) => t.id === id ? { ...t, done: true } : t));
+      if (!leftIsLocal) {
+        const r = await window.api.files.copyHostToHost({
+          fromHostId: hostId, toHostId: leftHostId,
+          srcPath: remotePath, destPath: localPath, name: selRemote.name, transferId: id, isDir
+        });
+        setTransfers((ts) => ts.map((t) => t.id === id
+          ? { ...t, done: true, mode: r.mode, relayReason: r.relayReason } : t));
+      } else {
+        await window.api.files.download({ hostId, remotePath, localPath, transferId: id, isDir });
+        setTransfers((ts) => ts.map((t) => t.id === id ? { ...t, done: true } : t));
+      }
       loadLocal(local.path);
     } catch (e) {
       const cancelled = /已取消/.test(e.message);
@@ -156,7 +195,21 @@ export default function FilePanel({ hostId }) {
   return (
     <div className="file-panel">
       <div className="file-panes">
-        <Pane title={`本机 ${local.path}`} data={local} sel={selLocal}
+        <Pane
+          title={
+            <span className="pane-title-row">
+              <select className="pane-host-select" value={leftHostId}
+                onChange={(e) => { setLeftHostId(e.target.value); setSelLocal(null); }}
+                title="选另一台远程主机即可远程→远程传输">
+                <option value="local">本机</option>
+                {hosts.filter((h) => h.id !== hostId).map((h) => (
+                  <option key={h.id} value={h.id}>{h.name || h.host}</option>
+                ))}
+              </select>
+              <span className="muted small">{local.path}</span>
+            </span>
+          }
+          data={local} sel={selLocal}
           onUp={() => loadLocal(parentOf(local.path, localSep))}
           onOpen={(e) => e.isDir
             ? loadLocal(joinPath(local.path, e.name, localSep))
@@ -216,8 +269,26 @@ export default function FilePanel({ hostId }) {
                 </>
               ) : t.done ? (
                 <>
-                  <span className="ok">完成</span>
+                  {/* 直连和中转的代价差很多,做完告诉用户走的哪条 */}
+                  <span className="ok">
+                    完成{t.mode === 'direct' ? '(源主机直连)' : t.mode === 'relay' ? '(经本机中转)' : ''}
+                  </span>
+                  {t.relayReason && (
+                    <span className="muted small" title="下次想走直连就解决这个">
+                      直连不可用:{t.relayReason}
+                    </span>
+                  )}
                   <button className="btn small ghost" onClick={() => dropTransfer(t.id)}>移除</button>
+                </>
+              ) : t.phase === 'probe' ? (
+                <>
+                  <span className="muted small">正在探测源主机能否直连目标…</span>
+                  <button className="btn small ghost" onClick={() => cancelTransfer(t)}>取消</button>
+                </>
+              ) : t.phase === 'direct' ? (
+                <>
+                  <span className="muted small">源主机直连传输中(数据不经过本机)…</span>
+                  <button className="btn small ghost" onClick={() => cancelTransfer(t)}>取消</button>
                 </>
               ) : t.scanning ? (
                 <>
@@ -226,6 +297,9 @@ export default function FilePanel({ hostId }) {
                 </>
               ) : (
                 <>
+                  {/* 中转是两段,不标出来的话进度条会先冲到 100 再跳回 0 */}
+                  {t.phase === 'download' && <span className="muted small">中转 1/2 下载</span>}
+                  {t.phase === 'upload' && <span className="muted small">中转 2/2 上传</span>}
                   <progress value={t.transferred} max={t.total || 1} />
                   <button className="btn small ghost" disabled={t.cancelling}
                     onClick={() => cancelTransfer(t)}>{t.cancelling ? '取消中…' : '取消'}</button>

@@ -1927,16 +1927,19 @@ ipcMain.handle('fs:cancelTransfer', (_e, { transferId } = {}) => {
 });
 
 /** 上传:文件或整个目录 */
-ipcMain.handle('fs:upload', async (_e, { hostId, localPath, remotePath, transferId, isDir }) => {
-  const s = getSession(hostId);
-  const signal = newSignal(transferId);
-  const report = (p) => send('transfer:progress', { hostId, transferId, ...p });
-  try {
-    if (!isDir) {
-      await s.ssh.upload(localPath, remotePath, report, signal);
-      return { files: 1 };
-    }
-
+/**
+ * 上传(文件或整个目录)。
+ *
+ * 抽成函数是因为「远程→远程」的中转段也要用它 —— 目录遍历、建目录、
+ * 分片进度这套逻辑只该有一份实现,复制一份迟早会有一处漏改。
+ */
+async function doUpload({ ssh, localPath, remotePath, isDir, signal, report }) {
+  if (!isDir) {
+    await ssh.upload(localPath, remotePath, report, signal);
+    return { files: 1 };
+  }
+  const s = { ssh };   // 下面沿用原来的写法,少改几行
+  {
     const plan = transferMod.walkLocalDir(localPath);
     report({ transferred: 0, total: plan.totalBytes, totalFiles: plan.files.length, doneFiles: 0, scanning: false });
     // 先把目录结构建好,免得逐个文件 mkdir 反复往返
@@ -1960,6 +1963,15 @@ ipcMain.handle('fs:upload', async (_e, { hostId, localPath, remotePath, transfer
       doneFiles += 1;
     }
     return { files: plan.files.length, skipped: plan.skipped.length };
+  }
+}
+
+ipcMain.handle('fs:upload', async (_e, { hostId, localPath, remotePath, transferId, isDir }) => {
+  const s = getSession(hostId);
+  const signal = newSignal(transferId);
+  const report = (p) => send('transfer:progress', { hostId, transferId, ...p });
+  try {
+    return await doUpload({ ssh: s.ssh, localPath, remotePath, isDir, signal, report });
   } finally {
     transferSignals.delete(transferId);
   }
@@ -2242,16 +2254,87 @@ ipcMain.handle('registry:loginMany', async (_e, { hostIds = [], id } = {}) => {
   return { results };
 });
 
-/** 下载:文件或整个目录 */
-ipcMain.handle('fs:download', async (_e, { hostId, remotePath, localPath, transferId, isDir }) => {
-  const s = getSession(hostId);
-  const signal = newSignal(transferId);
-  const report = (p) => send('transfer:progress', { hostId, transferId, ...p });
+/* ---------------------------------------------------------------- 远程 → 远程 */
+
+const h2h = require('./ssh/hostToHost');
+
+/**
+ * 两台远程主机之间传文件。
+ *
+ * 先探测源主机能否直连目标(数据不经过本机,快得多),不行再经本机中转。
+ * 探测这一步不能省:scp 没有密钥时会**卡在密码提示上等输入**,而我们是
+ * 非交互执行 —— 那就是一次无限期挂起,表现为界面永远转圈。
+ */
+ipcMain.handle('fs:copyHostToHost', async (_e, {
+  fromHostId, toHostId, srcPath, destPath, name, transferId, isDir
+} = {}) => {
+  if (!fromHostId || !toHostId) throw new Error('缺少源主机或目标主机');
+  if (fromHostId === toHostId) throw new Error('源和目标是同一台主机');
+  const src = getSession(fromHostId);
+  const dstHost = (loadHosts() || []).find((x) => x.id === toHostId);
+  if (!dstHost) throw new Error('目标主机不存在');
+
+  const report = (p) => send('transfer:progress', { hostId: fromHostId, transferId, ...p });
+
+  /* 1) 探测直连 */
+  report({ phase: 'probe', scanning: true });
+  let probe = { direct: false, reason: 'noProbe' };
   try {
-    if (!isDir) {
-      await s.ssh.download(remotePath, localPath, report, signal);
-      return { files: 1 };
-    }
+    const r = await src.ssh.exec(
+      `${Installer.BIN_PATH} ${h2h.buildProbeCommand({
+        user: dstHost.username, host: dstHost.host, port: dstHost.port
+      })}`, { timeoutMs: 20000 });
+    probe = h2h.parseProbe(r.stdout || r.stderr || '');
+  } catch (e) {
+    probe = { direct: false, reason: 'probeFailed', message: e.message };
+  }
+
+  /* 2) 能直连就让源主机自己传 */
+  if (probe.direct) {
+    report({ phase: 'direct', scanning: true });
+    const r = await src.ssh.exec(
+      `${Installer.BIN_PATH} ${h2h.buildDirectCopyCommand({
+        srcPath, user: dstHost.username, host: dstHost.host, port: dstHost.port, destPath
+      })}`, { timeoutMs: 30 * 60 * 1000 });
+    const parsed = h2h.parseCopyResult(r.stdout || r.stderr || '');
+    if (parsed.ok) return { ok: true, mode: 'direct' };
+    // 直连探测通过但拷贝失败:如实报出来,不要悄悄退回中转把问题掩盖掉
+    throw new Error(`直连拷贝失败:${parsed.message}`);
+  }
+
+  /* 3) 退回中转:源 → 本机临时目录 → 目标 */
+  const tmp = h2h.relayTempPath(app.getPath('temp'), transferId || `t${Date.now()}`, name || 'file');
+  await fs.promises.mkdir(path.dirname(tmp), { recursive: true });
+  const dst = getSession(toHostId);
+  try {
+    report({ phase: 'download', relayReason: probe.message || probe.reason });
+    await doDownload({
+      ssh: src.ssh, remotePath: srcPath, localPath: tmp, isDir,
+      signal: newSignal(transferId),
+      report: (p) => report({ ...p, ...h2h.relayProgress({ phase: 'download', ...p }) })
+    });
+    report({ phase: 'upload' });
+    await doUpload({
+      ssh: dst.ssh, localPath: tmp, remotePath: destPath, isDir,
+      signal: newSignal(`${transferId}_up`),
+      report: (p) => report({ ...p, ...h2h.relayProgress({ phase: 'upload', ...p }) })
+    });
+    return { ok: true, mode: 'relay', relayReason: probe.message || '' };
+  } finally {
+    // 临时文件必须清,否则中转几个大镜像就把本机磁盘吃满了
+    await fs.promises.rm(path.dirname(tmp), { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+/** 下载:文件或整个目录 */
+/** 下载(文件或整个目录)。与 doUpload 同理,中转段要复用。 */
+async function doDownload({ ssh, remotePath, localPath, isDir, signal, report }) {
+  if (!isDir) {
+    await ssh.download(remotePath, localPath, report, signal);
+    return { files: 1 };
+  }
+  const s = { ssh };
+  {
 
     // 扫描大目录可能要几秒,先告诉界面在扫描,不然看着像卡死
     report({ transferred: 0, total: 0, scanning: true });
@@ -2281,6 +2364,15 @@ ipcMain.handle('fs:download', async (_e, { hostId, remotePath, localPath, transf
       doneFiles += 1;
     }
     return { files: plan.files.length };
+  }
+}
+
+ipcMain.handle('fs:download', async (_e, { hostId, remotePath, localPath, transferId, isDir }) => {
+  const s = getSession(hostId);
+  const signal = newSignal(transferId);
+  const report = (p) => send('transfer:progress', { hostId, transferId, ...p });
+  try {
+    return await doDownload({ ssh: s.ssh, remotePath, localPath, isDir, signal, report });
   } finally {
     transferSignals.delete(transferId);
   }

@@ -752,3 +752,8 @@ progress { width: 140px; height: 6px; }
 .reg-field > span { flex: 0 0 84px; }
 .reg-field input, .reg-field select { flex: 1; padding: 4px 8px; font-size: 12px; }
 .ok-text { color: var(--ok, #4ade80); }
+/* 传输页左栏主机选择 */
+.pane-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pane-host-select { padding: 2px 6px; font-size: 12px; border-radius: 4px;
+  background: var(--panel); color: var(--fg); border: 1px solid var(--border); }
+.pane-title-row .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
