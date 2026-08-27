@@ -17,6 +17,10 @@ function normalizeConversation(conv) {
   };
 }
 
+/* 同时最多 4 个面板:再多一屏就小到看不清了,而且每个对话各占一条
+   SSH 通道,开太多会把远端的 MaxSessions 吃光,表现为「新对话打不开」。 */
+export const MAX_PANES = 4;
+
 export const useStore = create((set, get) => ({
   hosts: [],
   activeHostId: null,
@@ -30,6 +34,10 @@ export const useStore = create((set, get) => ({
   //         claudeSessionId, codexStarted, createdAt, updatedAt}
   conversations: {},
   activeConvByHost: {}, // hostId -> convId(null 表示停留在会话列表)
+  /* hostId -> [convId] 额外分屏的对话。主面板仍是 activeConvByHost,
+     这里只放"再多开的那几个" —— 这样所有读 activeConvByHost 的地方
+     行为不变,不必为了分屏去改一堆无关代码。 */
+  extraConvByHost: {},
   agentRunning: {},     // convId -> bool
   queued: {},           // convId -> [{id,text,files}] 排队待发送的消息
   setupLogs: {},        // hostId -> string
@@ -65,8 +73,47 @@ export const useStore = create((set, get) => ({
       statusDetails: { ...s.statusDetails, [hostId]: detail || '' }
     })),
 
+  /** 追加一个分屏面板 */
+  addSplit: (hostId, convId) => {
+    set((s) => {
+      const cur = s.extraConvByHost[hostId] || [];
+      const primary = s.activeConvByHost[hostId];
+      /* 已经在屏上就不重复加 —— 同一个对话渲染两次会各自 agent:start,
+         而主进程 agent:start 会 cancel 掉同 convId 的现有会话,
+         等于两个面板互相把对方掐死。 */
+      if (!convId || convId === primary || cur.includes(convId)) return {};
+      // 主面板 + 已有分屏 + 这一个,不能超过上限
+      if (1 + cur.length + 1 > MAX_PANES) return {};
+      return { extraConvByHost: { ...s.extraConvByHost, [hostId]: [...cur, convId] } };
+    });
+    persist();
+  },
+
+  /** 关掉一个分屏面板;关主面板时把第一个分屏顶上来 */
+  closeSplit: (hostId, convId) => {
+    set((s) => {
+      const cur = s.extraConvByHost[hostId] || [];
+      if (s.activeConvByHost[hostId] === convId) {
+        const [next, ...rest] = cur;
+        return {
+          activeConvByHost: { ...s.activeConvByHost, [hostId]: next || null },
+          extraConvByHost: { ...s.extraConvByHost, [hostId]: rest }
+        };
+      }
+      return {
+        extraConvByHost: { ...s.extraConvByHost, [hostId]: cur.filter((x) => x !== convId) }
+      };
+    });
+    persist();
+  },
+
   setActiveConv: (hostId, convId) =>
-    set((s) => ({ activeConvByHost: { ...s.activeConvByHost, [hostId]: convId } })),
+    set((s) => ({
+      activeConvByHost: { ...s.activeConvByHost, [hostId]: convId },
+      /* 换主对话时清掉分屏:否则点开另一个对话,旁边还挂着上一组的面板,
+         看着像是同一批,极易对错窗口发消息。 */
+      extraConvByHost: { ...s.extraConvByHost, [hostId]: [] }
+    })),
 
   /**
    * 接纳一个由主进程创建的对话(手机端发起的任务)。
@@ -342,8 +389,11 @@ export const useStore = create((set, get) => ({
       const rest = { ...s.conversations };
       delete rest[convId];
       const active = { ...s.activeConvByHost };
+      // 删掉的对话若还挂在分屏里,会渲染成一个空壳
+      const extras = Object.fromEntries(Object.entries(s.extraConvByHost || {})
+        .map(([h, ids]) => [h, (ids || []).filter((x) => x !== convId)]));
       if (conv && active[conv.hostId] === convId) active[conv.hostId] = null;
-      return { conversations: rest, activeConvByHost: active };
+      return { conversations: rest, activeConvByHost: active, extraConvByHost: extras };
     });
     persist();
   },

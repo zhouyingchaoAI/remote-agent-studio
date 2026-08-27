@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { useStore, sendToAgent, isAwaitingConfirm } from '../store.js';
+import { useStore, sendToAgent, isAwaitingConfirm, MAX_PANES } from '../store.js';
 import { useVoiceInput } from '../useVoiceInput.js';
 import { buildPromptHistory, stepPromptHistory } from '../promptHistory.js';
 import { extractOptions } from '../quickReplies.js';
@@ -61,10 +61,27 @@ function formatTokens(n) {
 export default function ChatPanel({ hostId }) {
   const activeConvId = useStore((s) => s.activeConvByHost[hostId]);
   const conv = useStore((s) => (activeConvId ? s.conversations[activeConvId] : null));
+  const extras = useStore((s) => s.extraConvByHost[hostId]);
+  const conversations = useStore((s) => s.conversations);
 
   // 未选中对话 -> 显示会话列表 / 新建
   if (!activeConvId || !conv) return <ConversationHome hostId={hostId} />;
-  return <ChatView key={conv.id} hostId={hostId} conv={conv} />;
+
+  /* 分屏:同一台主机上并排跑多个对话。
+     后端本来就按 convId 分开、切走也照跑,这里只是让它们同时可见。 */
+  const paneConvs = [conv, ...(extras || []).map((id) => conversations[id]).filter(Boolean)];
+  if (paneConvs.length === 1) {
+    return <ChatView key={conv.id} hostId={hostId} conv={conv} />;
+  }
+  return (
+    <div className={`chat-split panes-${Math.min(paneConvs.length, MAX_PANES)}`}>
+      {paneConvs.map((c) => (
+        <div key={c.id} className="chat-pane">
+          <ChatView hostId={hostId} conv={c} split />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /* ---------------- 会话列表(历史记录) ---------------- */
@@ -165,6 +182,8 @@ function ConvCard({ conv }) {
           <span className="conv-title">{conv.title}</span>
         )}
         <span className="flex1" />
+        <button className="icon-btn" title="并排打开(与当前对话同屏)"
+          onClick={(e) => { e.stopPropagation(); useStore.getState().addSplit(conv.hostId, conv.id); }}>⊞</button>
         <button className="icon-btn" title="重命名"
           onClick={(e) => { e.stopPropagation(); setDraftTitle(conv.title); setEditing(true); }}>✎</button>
         <button className="icon-btn danger" title="删除"
@@ -179,6 +198,60 @@ function ConvCard({ conv }) {
       {last && <div className="conv-card-last muted small">最近: {last.text.slice(0, 60)}</div>}
       <div className="conv-card-meta muted small">{conv.messages.length} 条消息 · {when}</div>
     </div>
+  );
+}
+
+/**
+ * 分屏控制:再开一个面板 / 关掉本面板。
+ *
+ * 只列同主机的其他对话 —— 跨主机并排看没有意义,cwd 与引擎都对不上,
+ * 而且很容易对着错的机器发指令。
+ */
+function SplitControls({ hostId, conv, split }) {
+  const [open, setOpen] = useState(false);
+  const conversations = useStore((s) => s.conversations);
+  const activeId = useStore((s) => s.activeConvByHost[hostId]);
+  const extras = useStore((s) => s.extraConvByHost[hostId]);
+  const onScreen = new Set([activeId, ...(extras || [])]);
+  const full = 1 + (extras?.length || 0) >= MAX_PANES;
+
+  const candidates = Object.values(conversations)
+    .filter((c) => c.hostId === hostId && !onScreen.has(c.id))
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .slice(0, 12);
+
+  return (
+    <span className="split-controls">
+      <button className="btn small ghost" title={full ? `最多同时开 ${MAX_PANES} 个` : '再开一个对话并排显示'}
+        disabled={full} onClick={() => setOpen((v) => !v)}>⊞ 分屏</button>
+      {split && (
+        <button className="btn small ghost" title="关掉这一屏(对话本身不会删除,后台照常跑)"
+          onClick={() => useStore.getState().closeSplit(hostId, conv.id)}>✕ 本屏</button>
+      )}
+      {open && (
+        <>
+          <div className="engine-pop-backdrop" onClick={() => setOpen(false)} />
+          <div className="engine-pop">
+            <div className="engine-pop-head">
+              <b>并排打开</b>
+              <button className="icon-btn" onClick={() => setOpen(false)}>✕</button>
+            </div>
+            {candidates.length === 0
+              ? <p className="muted small">这台主机没有其他对话了,先新建一个。</p>
+              : candidates.map((c) => (
+                <button key={c.id} className="btn small ghost block-btn"
+                  onClick={() => { useStore.getState().addSplit(hostId, c.id); setOpen(false); }}>
+                  {c.title || c.id} · {c.cwd || '~'}
+                </button>
+              ))}
+            <p className="muted small">
+              各面板独立跑各自的引擎与目录;最多 {MAX_PANES} 个 ——
+              每个对话占一条 SSH 通道,开太多会把远端的连接数吃光。
+            </p>
+          </div>
+        </>
+      )}
+    </span>
   );
 }
 
@@ -201,7 +274,7 @@ export function dshHistoryFrom(messages = [], maxItems = 12) {
   return out.slice(-maxItems);
 }
 
-function ChatView({ hostId, conv }) {
+function ChatView({ hostId, conv, split = false }) {
   const running = useStore((s) => s.agentRunning[conv.id] || false);
   // 主机名给 GitHub 徽标用:弹层里要写清是给哪台主机登录
   const ghFromChat = useRef(false);
@@ -574,6 +647,7 @@ function ChatView({ hostId, conv }) {
     <div className="chat-panel">
       <div className="chat-header">
         <button className="btn small ghost" onClick={() => setActiveConv(hostId, null)}>← 记录</button>
+        <SplitControls hostId={hostId} conv={conv} split={split} />
         <select className={`agent-select ${conv.agent}`} value={conv.agent} disabled={running}
           title="切换引擎(同一对话内共用上下文,切换后首条消息自动携带对话摘要)"
           onChange={(e) => { setStarted(false); updateConversationAgent(conv.id, e.target.value); }}>

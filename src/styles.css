@@ -777,3 +777,13 @@ progress { width: 140px; height: 6px; }
 .ask-cmd pre { margin: 0 0 6px 0; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
 .ask-answer { font-size: 12px; white-space: pre-wrap; max-height: 220px; overflow: auto;
   color: var(--muted); margin: 8px 0 4px 0; }
+/* 对话分屏 */
+.chat-split { display: grid; gap: 1px; height: 100%; min-height: 0; background: var(--border); }
+.chat-split.panes-2 { grid-template-columns: 1fr 1fr; }
+.chat-split.panes-3 { grid-template-columns: 1fr 1fr 1fr; }
+.chat-split.panes-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.chat-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  overflow: hidden; background: var(--bg); }
+/* 分屏时顶栏元素多、空间小,允许换行而不是挤成一条 */
+.chat-pane .chat-header { flex-wrap: wrap; padding: 6px 10px; }
+.split-controls { position: relative; display: inline-flex; gap: 4px; }
