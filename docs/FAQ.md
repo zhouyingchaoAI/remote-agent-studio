@@ -143,3 +143,27 @@ IPC、日志或异常日志里。
 远程主机没装 gh 时,卡片上的「安装 gh」会把官方 tarball 装到
 `~/.local/bin`(不需要 root,ARM 机器也支持)。macOS 本机只给出
 `brew install gh` 的建议而不代劳 —— brew 会改动全局环境,不该替你决定。
+
+## 镜像仓库登录(Harbor / Docker Hub)
+
+「环境配置」页的 **镜像仓库** 卡片。地址留空即 Docker Hub,Harbor 填
+`harbor.example.com`(带端口、带项目路径都行)。Harbor 的机器人账号名字形如
+`robot$ci`,直接填即可。
+
+**密码走 stdin 直达 docker**(`--password-stdin`),不拼进命令行 —— 命令行在
+`ps` 里对同机所有进程可见,还会进 shell history。docker 自己也会为 `-p` 打警告。
+
+**勾了「记住」才会保存**,用系统钥匙串加密存在本机。**系统加密不可用时会
+明确拒绝保存**,不会退回明文 base64:base64 不是加密,而用户会以为它是 ——
+一个存密码的功能悄悄降级,比不提供这个功能更糟。此时仍可每次手动输入登录。
+
+保存后可以「登录到所有主机」,一次把本机与全部远程主机都登上。
+
+**Harbor 自签证书 / HTTP 仓库**是最常见的失败原因。登录失败时会识别出来并
+给出两条处置命令:装 CA 证书到 `/etc/docker/certs.d/<host>/ca.crt`(推荐,
+不降低安全级别、也不用重启 docker),或把它写进 `daemon.json` 的
+`insecure-registries`。**应用不代改** —— 那是主机级安全配置,而且改完要重启
+docker,重启会掐掉那台机器上所有正在运行的容器,不该由一个登录按钮顺手做掉。
+
+界面上已登录列表只显示仓库地址与用户名。`~/.docker/config.json` 里的 `auth`
+是 base64 的 `user:pass`,应用只取冒号前的用户名,密码到此为止不再传递。

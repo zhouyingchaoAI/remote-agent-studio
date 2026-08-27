@@ -164,6 +164,15 @@ contextBridge.exposeInMainWorld('api', {
     cancel: invoke('github:cancel'),
     onProgress: on('github:progress')
   },
+  registry: {
+    status: invoke('registry:status'),
+    list: invoke('registry:list'),
+    save: invoke('registry:save'),
+    remove: invoke('registry:remove'),
+    login: invoke('registry:login'),
+    logout: invoke('registry:logout'),
+    loginMany: invoke('registry:loginMany')
+  },
   errors: {
     list: invoke('errors:list'),
     clear: invoke('errors:clear'),

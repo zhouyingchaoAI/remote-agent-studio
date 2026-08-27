@@ -1,4 +1,5 @@
 import GithubLogin from './GithubLogin.jsx';
+import RegistryLogin from './RegistryLogin.jsx';
 import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../store.js';
 import DeepseekEndpoint from './DeepseekEndpoint.jsx';
@@ -178,6 +179,9 @@ export default function SetupPanel({ hostId, host }) {
 
           <h3 style={{ marginTop: 18 }}>GitHub</h3>
           <GithubLogin hostId={hostId} isLocal={isLocal} hostLabel={host?.name || host?.host} />
+
+          <h3 style={{ marginTop: 18 }}>镜像仓库(Harbor / Docker Hub)</h3>
+          <RegistryLogin hostId={hostId} isLocal={isLocal} hostLabel={host?.name || host?.host} />
 
           <h3 style={{ marginTop: 18 }}>本机 Claude Code 认证</h3>
           <LocalClaudeCard isLocal={isLocal} busy={busy}

@@ -205,6 +205,7 @@ app.whenReady().then(() => {
   obsidian.init(app, safeStorage);
   autoCapture.init(app, { runDigest: runDailyDigest });
   mobileService.init(app, safeStorage);
+  registryStore.init(app, safeStorage);
   // 上次开着就自动拉起,否则每次重启都要手动开一遍,手机端就"时灵时不灵"
   if (mobileService.getConfig().enabled) startMobileGateway().catch(() => {});
   autoCapture.start();
@@ -2144,6 +2145,84 @@ ipcMain.handle('github:cancel', (_e, { hostId } = {}) => {
   try { stream.close?.() || stream.signal?.('INT'); } catch (_) {}
   ghLogins.delete(hostId);
   return { ok: true };
+});
+
+/* ---------------------------------------------------------------- 镜像仓库登录 */
+
+const registry = require('./registry');
+const registryStore = require('./registryStore');
+
+ipcMain.handle('registry:status', async (_e, { hostId } = {}) => {
+  const s = getSession(hostId);
+  const env = hostId === LOCAL_ID ? '' : `${Installer.BIN_PATH} `;
+  const v = await s.ssh.exec(`${env}${registry.buildVersionCommand()}`)
+    .catch(() => ({ stdout: '__NO_DOCKER__' }));
+  const docker = registry.parseDockerVersion(v.stdout || '');
+  if (!docker.installed) return { ...docker, logins: [] };
+  const c = await s.ssh.exec(`${env}${registry.buildConfigCommand()}`).catch(() => ({ stdout: '{}' }));
+  return { ...docker, logins: registry.parseDockerConfig(c.stdout || '{}') };
+});
+
+/** 保存的凭据列表(不含密码) */
+ipcMain.handle('registry:list', () => ({
+  items: registryStore.list(),
+  encryptionAvailable: registryStore.encryptionAvailable()
+}));
+ipcMain.handle('registry:save', (_e, payload = {}) => registryStore.save(payload));
+ipcMain.handle('registry:remove', (_e, { id } = {}) => registryStore.remove(id));
+
+/**
+ * 登录。
+ *
+ * 密码只在这个函数里以明文存在,并且只走 stdin —— 绝不拼进命令行:
+ * docker 自己都会为 `-p` 打警告,因为命令行在 `ps` 里对同机所有进程可见,
+ * 还会进 shell history。返回值与日志里也一律不带它。
+ */
+ipcMain.handle('registry:login', async (_e, { hostId, id, registry: reg, username, secret } = {}) => {
+  const s = getSession(hostId);
+  const env = hostId === LOCAL_ID ? '' : `${Installer.BIN_PATH} `;
+
+  const saved = id ? registryStore.get(id) : null;
+  const target = reg ?? saved?.registry ?? '';
+  const user = username ?? saved?.username ?? '';
+  // 优先用本次传入的密码;没传就取存下来的
+  const password = secret || (id ? registryStore.revealSecret(id) : '');
+  if (!password) return { ok: false, reason: 'nosecret', message: '没有密码可用:请填写密码,或先保存一份凭据' };
+
+  const cmd = `${env}${registry.buildLoginCommand({ registry: target, username: user })}`;
+  const r = await s.ssh.exec(cmd, { stdin: `${password}\n` });
+  const parsed = registry.parseLoginResult(r.stdout || r.stderr || '', { registry: target });
+  return { ...parsed, registry: target, username: user };
+});
+
+ipcMain.handle('registry:logout', async (_e, { hostId, registry: reg } = {}) => {
+  const s = getSession(hostId);
+  const env = hostId === LOCAL_ID ? '' : `${Installer.BIN_PATH} `;
+  const r = await s.ssh.exec(`${env}${registry.buildLogoutCommand({ registry: reg })}`);
+  return { ok: r.code === 0, output: (r.stdout || '').slice(-200) };
+});
+
+/** 把一条已保存的凭据登录到多台主机 */
+ipcMain.handle('registry:loginMany', async (_e, { hostIds = [], id } = {}) => {
+  const saved = registryStore.get(id);
+  if (!saved) throw new Error('凭据不存在');
+  const password = registryStore.revealSecret(id);
+  if (!password) throw new Error('这条凭据没有保存密码');
+  const results = [];
+  for (const hostId of hostIds) {
+    try {
+      const s = getSession(hostId);
+      const env = hostId === LOCAL_ID ? '' : `${Installer.BIN_PATH} `;
+      const cmd = `${env}${registry.buildLoginCommand({ registry: saved.registry, username: saved.username })}`;
+      // eslint-disable-next-line no-await-in-loop
+      const r = await s.ssh.exec(cmd, { stdin: `${password}\n` });
+      const parsed = registry.parseLoginResult(r.stdout || '', { registry: saved.registry });
+      results.push({ hostId, ...parsed });
+    } catch (e) {
+      results.push({ hostId, ok: false, reason: 'host', message: e.message });
+    }
+  }
+  return { results };
 });
 
 /** 下载:文件或整个目录 */

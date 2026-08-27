@@ -742,3 +742,12 @@ progress { width: 140px; height: 6px; }
 /* 顶栏弹层里塞的是整张卡片,比引擎那个宽一些 */
 .engine-pop.wide { width: 460px; max-width: 92vw; }
 .engine-pop.wide .gh-card { border: none; background: transparent; padding: 0; margin: 0; }
+/* 镜像仓库登录 */
+.reg-list { margin: 8px 0; }
+.reg-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 6px; margin-bottom: 4px; background: var(--bg); }
+.reg-name { font-weight: 600; }
+.reg-form { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.reg-field { display: flex; align-items: center; gap: 8px; }
+.reg-field > span { flex: 0 0 84px; }
+.reg-field input, .reg-field select { flex: 1; padding: 4px 8px; font-size: 12px; }
