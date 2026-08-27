@@ -175,3 +175,50 @@ test('下发按钮只在远程、且本机已登录时出现', () => {
   // 本机自己不该出现"下发到本机"
   assert.match(read('electron/main.js'), /目标就是本机,不需要下发/);
 });
+
+/* 用户:「对话界面也要这种快捷登录」。要 push 的时候人在对话页,
+ * 发现没登录还得切到环境配置、登完再切回来。 */
+
+test('对话顶栏有 GitHub 徽标,和引擎徽标同一个形态', () => {
+  const chat = read('src/components/ChatPanel.jsx');
+  assert.match(chat, /<GithubBadge hostId=\{hostId\}/);
+  // 主机名要传进去:弹层里得写清是给哪台主机登录(上一轮就栽在这)
+  assert.match(chat, /hostLabel=\{hostName\}/);
+  assert.match(chat, /const hostName = useStore/);
+});
+
+test('弹层复用环境配置那张卡片,登录流程只有一份实现', () => {
+  const badge = read('src/components/GithubBadge.jsx');
+  assert.match(badge, /import GithubLogin from '\.\/GithubLogin\.jsx'/);
+  assert.match(badge, /<GithubLogin hostId=\{hostId\}/);
+  // 两处行为不该漂移,所以徽标里不能再写一遍登录逻辑
+  assert.ok(!/github\.login\(/.test(badge), '徽标不该自己实现登录');
+});
+
+test('弹层里登录成功后徽标要自己刷新', () => {
+  const badge = read('src/components/GithubBadge.jsx');
+  assert.match(badge, /onProgress\(\(p\) => \{[\s\S]{0,120}p\.finished\) refresh\(\)/);
+});
+
+test('/github 支持 status / login / sync', () => {
+  const cmds = read('src/slashCommands.js');
+  assert.match(cmds, /name: 'github'/);
+  const chat = read('src/components/ChatPanel.jsx');
+  for (const sub of ['status', 'login', 'sync']) {
+    assert.match(chat, new RegExp(`sub === '${sub}'`), `缺 /github ${sub}`);
+  }
+  // 本机不该出现"下发到本机"
+  assert.match(chat, /当前就是本机,无需下发/);
+});
+
+test('一次性码是异步事件,从聊天发起时要贴回对话', () => {
+  const chat = read('src/components/ChatPanel.jsx');
+  /* login 的 IPC 要到流程结束才 resolve,码走的是 github:progress。
+     不订阅的话「正在申请一次性码…」之后就再无下文。 */
+  assert.match(chat, /ghFromChat\.current = true/);
+  assert.match(chat, /GitHub 一次性码:\$\{p\.code\}/);
+  // 从顶栏徽标登录的人正看着弹层,再往对话插一条是噪音
+  assert.match(chat, /!ghFromChat\.current\) return/);
+  // 结束后要把标记清掉,否则下次从徽标登录也会往对话里插
+  assert.match(chat, /ghFromChat\.current = false/);
+});

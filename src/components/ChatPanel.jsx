@@ -11,6 +11,7 @@ import {
 import { createTeam, engineLabel, TEAM_PRESETS } from '../teamMode.js';
 import FilePreview from './FilePreview.jsx';
 import EngineStatus from './EngineStatus.jsx';
+import GithubBadge from './GithubBadge.jsx';
 import Markdown from './Markdown.jsx';
 import { fileKind } from '../fileKind.js';
 import { REASONING_EFFORTS } from '../reasoningEfforts.js';
@@ -202,6 +203,12 @@ export function dshHistoryFrom(messages = [], maxItems = 12) {
 
 function ChatView({ hostId, conv }) {
   const running = useStore((s) => s.agentRunning[conv.id] || false);
+  // 主机名给 GitHub 徽标用:弹层里要写清是给哪台主机登录
+  const ghFromChat = useRef(false);
+  const hostName = useStore((s) => {
+    const h = (s.hosts || []).find((x) => x.id === hostId);
+    return h?.name || h?.host || '';
+  });
   const setActiveConv = useStore((s) => s.setActiveConv);
   const updateConversationPermission = useStore((s) => s.updateConversationPermission);
   const updateConversationModel = useStore((s) => s.updateConversationModel);
@@ -217,6 +224,16 @@ function ChatView({ hostId, conv }) {
   const [visibleCount, setVisibleCount] = useState(200); // 长对话窗口化渲染
   const [slashIndex, setSlashIndex] = useState(0);       // 斜杠命令菜单选中项
   const permissionMode = conv.permissionMode || (conv.autoApprove ? 'system' : 'workspace');
+
+  /* /github login 的一次性码是异步推过来的。只有从聊天里发起时才贴进对话 ——
+     从顶栏徽标登录的人正看着弹层,再往对话里插一条纯属噪音。 */
+  useEffect(() => window.api.github.onProgress((p) => {
+    if (p.hostId !== hostId || !ghFromChat.current) return;
+    if (p.code && !p.done) {
+      localNote(`GitHub 一次性码:${p.code}\n在这里授权(码已填好):${p.openUrl}`);
+    }
+    // eslint-disable-next-line
+  }), [hostId]);
 
   // 进入对话/切换模型或权限时,在主进程(重新)初始化 agent 会话(带 resume 状态续聊)
   useEffect(() => {
@@ -262,6 +279,42 @@ function ChatView({ hostId, conv }) {
         window.api.files.saveText({
           defaultName: `${conv.title || '对话'}.md`, content: conversationToMarkdown(conv)
         }).then((r) => { if (r?.saved) localNote(`已导出到 ${r.path}`); }).catch(() => {});
+        return true;
+      }
+      case 'github': {
+        const sub = (args.trim() || 'status').toLowerCase();
+        if (sub === 'status') {
+          window.api.github.status({ hostId }).then((r) => localNote(
+            r.loggedIn
+              ? `GitHub(${hostId === 'local' ? '本机' : hostName || '当前主机'}):已登录 ${r.username}`
+                + `${r.scopes ? ` · ${r.scopes}` : ''}`
+              : r.installed ? 'GitHub:已装 gh 但未登录,用 /github login 登录'
+                : 'GitHub:这台主机没装 gh,到「环境配置」页点「安装 gh」'
+          )).catch((e) => localNote(`查询失败:${e.message}`));
+          return true;
+        }
+        if (sub === 'login') {
+          // 一次性码是异步事件推过来的,这里先挂个标记,收到再贴进对话
+          ghFromChat.current = true;
+          localNote('正在申请一次性码…');
+          window.api.github.login({ hostId })
+            .then((r) => {
+              ghFromChat.current = false;
+              localNote(r.done
+                ? `✓ 已登录 ${r.username}${r.gitConfigured ? ' · git push 免密已配好' : ''}`
+                : `登录未完成${r.error ? `:${r.error}` : ''}`);
+            })
+            .catch((e) => { ghFromChat.current = false; localNote(`登录失败:${e.message}`); });
+          return true;
+        }
+        if (sub === 'sync') {
+          if (hostId === 'local') { localNote('当前就是本机,无需下发'); return true; }
+          window.api.github.syncToRemote({ hostId })
+            .then((r) => localNote(r.message))
+            .catch((e) => localNote(`下发失败:${e.message}`));
+          return true;
+        }
+        localNote('用法:/github status | login | sync');
         return true;
       }
       case 'team': {
@@ -531,6 +584,8 @@ function ChatView({ hostId, conv }) {
         </select>
         {/* 就在干活的地方看到引擎是否可用,并原地安装/下发认证,不用切页 */}
         <EngineStatus hostId={hostId} engine={conv.agent} />
+        {/* 同理:要 push 的时候人在这里,没登录不该逼人切去环境配置 */}
+        <GithubBadge hostId={hostId} isLocal={hostId === 'local'} hostLabel={hostName} />
         <b className="conv-title">{conv.title}</b>
         <span className="muted small">{conv.cwd || '~'}</span>
         <ModelPicker

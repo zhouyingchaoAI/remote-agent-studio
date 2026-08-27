@@ -739,3 +739,6 @@ progress { width: 140px; height: 6px; }
   letter-spacing: 4px; padding: 8px 0 12px 0; cursor: pointer; user-select: all; }
 .gh-device .row { justify-content: center; }
 .gh-note { white-space: pre-wrap; max-height: 140px; overflow: auto; margin: 6px 0 0 0; }
+/* 顶栏弹层里塞的是整张卡片,比引擎那个宽一些 */
+.engine-pop.wide { width: 460px; max-width: 92vw; }
+.engine-pop.wide .gh-card { border: none; background: transparent; padding: 0; margin: 0; }

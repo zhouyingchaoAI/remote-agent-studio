@@ -14,6 +14,8 @@ export const COMMANDS = [
   { name: 'model', args: '<模型名>', desc: '切换模型,留空恢复默认' },
   { name: 'mode', args: 'workspace | system', desc: '切换权限模式' },
   { name: 'auto', args: 'on | off', desc: '开关全自动(自动确认)' },
+  { name: 'github', args: 'status | login | sync',
+    desc: 'GitHub 登录:查看状态 / 设备流登录 / 把本机凭据下发到当前远程主机' },
   { name: 'skill', args: '', desc: '打开技能管理(内置技能库 / 主机已装 / 技能市场)' },
   { name: 'new', args: '', desc: '新建对话' },
   { name: 'export', args: '', desc: '导出当前对话为 Markdown' },
