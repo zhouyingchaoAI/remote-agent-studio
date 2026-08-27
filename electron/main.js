@@ -2022,6 +2022,89 @@ ipcMain.handle('errors:report', (_e, payload = {}) => logError({
   ...payload, source: payload.source || 'renderer'
 }));
 
+/* ---------------------------------------------------------------- GitHub 登录 */
+
+const ghMod = require('./github');
+/** 正在进行的登录:hostId -> stream(用于取消) */
+const ghLogins = new Map();
+
+ipcMain.handle('github:status', async (_e, { hostId } = {}) => {
+  const s = getSession(hostId);
+  const env = hostId === LOCAL_ID ? '' : `${Installer.BIN_PATH} `;
+  const v = await s.ssh.exec(`${env}${ghMod.buildVersionCommand()}`).catch(() => ({ stdout: '__NO_GH__' }));
+  if (/__NO_GH__/.test(v.stdout || '')) {
+    return { installed: false, loggedIn: false, message: '主机上没有 gh 命令' };
+  }
+  const r = await s.ssh.exec(`${env}${ghMod.buildStatusCommand()}`).catch((e) => ({ stdout: e.message }));
+  return { ...ghMod.parseAuthStatus(r.stdout || ''), version: (v.stdout || '').trim() };
+});
+
+ipcMain.handle('github:install', async (_e, { hostId } = {}) => {
+  const s = getSession(hostId);
+  const isMac = hostId === LOCAL_ID && process.platform === 'darwin';
+  const plan = ghMod.buildInstallCommand(isMac ? 'darwin' : 'linux');
+  if (plan.manual) return { ok: false, manual: true, command: plan.command, note: plan.note };
+  const r = await s.ssh.exec(`${Installer.BIN_PATH} ${plan.command}`);
+  return { ok: r.code === 0, output: (r.stdout || '').slice(-800) };
+});
+
+/**
+ * 启动设备流登录。
+ *
+ * 必须用 execStream 而不是 exec:一次性码要在进行中就推给界面,
+ * 等命令跑完再取就晚了 —— 那时码早过期了。
+ */
+ipcMain.handle('github:login', async (_e, { hostId, hostname } = {}) => {
+  const s = getSession(hostId);
+  if (ghLogins.has(hostId)) throw new Error('该主机已有登录流程在进行中');
+  const env = hostId === LOCAL_ID ? '' : `${Installer.BIN_PATH} `;
+  const stream = await s.ssh.execStream(`${env}${ghMod.buildLoginCommand({ hostname })}`);
+  ghLogins.set(hostId, stream);
+
+  let acc = {};
+  let raw = '';
+  const feed = (chunk) => {
+    raw = (raw + chunk).slice(-8000);
+    const got = ghMod.parseLoginOutput(chunk);
+    if (Object.keys(got).length) {
+      acc = { ...acc, ...got };
+      send('github:progress', {
+        hostId, ...acc,
+        openUrl: ghMod.deviceUrlWithCode(acc.url, acc.code)
+      });
+    }
+  };
+  stream.on('data', (d) => feed(d.toString()));
+  stream.stderr?.on('data', (d) => feed(d.toString()));
+
+  return await new Promise((resolve) => {
+    stream.on('close', async (code) => {
+      ghLogins.delete(hostId);
+      if (acc.done) {
+        // 非交互模式下 gh 不会配 git 凭据助手,push 免密要我们自己补这一步
+        const setup = await s.ssh.exec(`${env}${ghMod.buildSetupGitCommand({ hostname })}`)
+          .catch((e) => ({ code: 1, stdout: e.message }));
+        acc.gitConfigured = setup.code === 0;
+        acc.gitMessage = (setup.stdout || '').trim().slice(-300);
+      }
+      send('github:progress', { hostId, ...acc, finished: true });
+      resolve({
+        ...acc, exitCode: code,
+        // 失败时把尾部输出给出去便于排查;gh 不会把 token 打到 stdout
+        output: acc.done ? '' : ghMod.stripAnsi(raw).slice(-1200)
+      });
+    });
+  });
+});
+
+ipcMain.handle('github:cancel', (_e, { hostId } = {}) => {
+  const stream = ghLogins.get(hostId);
+  if (!stream) return { ok: false };
+  try { stream.close?.() || stream.signal?.('INT'); } catch (_) {}
+  ghLogins.delete(hostId);
+  return { ok: true };
+});
+
 /** 下载:文件或整个目录 */
 ipcMain.handle('fs:download', async (_e, { hostId, remotePath, localPath, transferId, isDir }) => {
   const s = getSession(hostId);

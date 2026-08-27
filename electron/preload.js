@@ -156,6 +156,13 @@ contextBridge.exposeInMainWorld('api', {
     pickKeyFile: invoke('dialog:pickKeyFile'),
     pathForDroppedFile: (file) => webUtils.getPathForFile(file)
   },
+  github: {
+    status: invoke('github:status'),
+    install: invoke('github:install'),
+    login: invoke('github:login'),
+    cancel: invoke('github:cancel'),
+    onProgress: on('github:progress')
+  },
   errors: {
     list: invoke('errors:list'),
     clear: invoke('errors:clear'),

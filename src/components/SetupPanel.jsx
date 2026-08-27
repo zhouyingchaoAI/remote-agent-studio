@@ -1,3 +1,4 @@
+import GithubLogin from './GithubLogin.jsx';
 import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../store.js';
 import DeepseekEndpoint from './DeepseekEndpoint.jsx';
@@ -174,6 +175,9 @@ export default function SetupPanel({ hostId, host }) {
             </button>
           </div>}
           {!isLocal && <p className="muted small">把本机已登录的 ~/.codex/auth.json(+config.toml)复制到远程同路径,远程免登录直接使用。下发后会自动测试远程可用性。</p>}
+
+          <h3 style={{ marginTop: 18 }}>GitHub</h3>
+          <GithubLogin hostId={hostId} isLocal={isLocal} />
 
           <h3 style={{ marginTop: 18 }}>本机 Claude Code 认证</h3>
           <LocalClaudeCard isLocal={isLocal} busy={busy}

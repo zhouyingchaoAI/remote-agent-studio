@@ -727,3 +727,15 @@ progress { width: 140px; height: 6px; }
 .errlog-text.dim { color: var(--muted); }
 /* 收尾元信息(正文与上一条重复时只剩这行) */
 .msg-meta.standalone { padding: 2px 0 8px 4px; }
+/* GitHub 快捷登录 */
+.gh-card { padding: 10px 12px; margin: 6px 0; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px; }
+.gh-card .row { margin-bottom: 6px; }
+.gh-device { margin: 10px 0; padding: 12px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 8px; text-align: center; }
+.gh-code-label { margin-bottom: 6px; }
+/* 一次性码是整个流程里唯一要人动手的东西,给足字号 */
+.gh-code { font-family: Menlo, monospace; font-size: 30px; font-weight: 700;
+  letter-spacing: 4px; padding: 8px 0 12px 0; cursor: pointer; user-select: all; }
+.gh-device .row { justify-content: center; }
+.gh-note { white-space: pre-wrap; max-height: 140px; overflow: auto; margin: 6px 0 0 0; }
