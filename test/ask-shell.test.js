@@ -102,3 +102,86 @@ test('⌘K 唤起 —— 手已经在键盘上,不该逼人去够鼠标', () => 
   assert.match(panel, /key\.toLowerCase\(\) === 'k'/);
   assert.match(panel, /e\.key === 'Escape'/);
 });
+
+/* 用户:「使用对话的模型」。原来写死 codex + 默认模型 —— 用户在对话里
+ * 特意选了引擎(换 DeepSeek 省钱、或调到 gpt-5.6-terra),问一句命令却跑去
+ * 用另一个,既不符合预期,账单也记在别处。 */
+
+/** 从组件里取出纯函数(JSX 没法直接 require) */
+function loadPick() {
+  const src = read('src/components/AskShell.jsx');
+  const body = src.slice(src.indexOf('export function pickAskEngine')).replace('export function', 'function');
+  return new Function(`${body.slice(0, body.indexOf('\n}') + 2)}; return pickAskEngine;`)();
+}
+
+test('跟当前活跃对话用同一个引擎与模型', () => {
+  const pick = loadPick();
+  const st = {
+    conversations: { a: { id: 'a', hostId: 'h1', agent: 'deepseek', model: 'deepseek-v4-pro', updatedAt: 1 } },
+    activeConvByHost: { h1: 'a' }
+  };
+  const r = pick(st, 'h1');
+  assert.equal(r.agent, 'deepseek');
+  assert.equal(r.model, 'deepseek-v4-pro');
+  assert.equal(r.source, 'active');
+});
+
+test('没有活跃对话就沿用该主机最近用过的那个', () => {
+  const pick = loadPick();
+  const st = {
+    conversations: {
+      a: { id: 'a', hostId: 'h1', agent: 'claude', model: 'opus', updatedAt: 100 },
+      b: { id: 'b', hostId: 'h1', agent: 'codex', model: 'gpt-5.6-terra', reasoningEffort: 'xhigh', updatedAt: 200 }
+    },
+    activeConvByHost: {}
+  };
+  const r = pick(st, 'h1');
+  assert.equal(r.model, 'gpt-5.6-terra', '应取 updatedAt 最大的那条');
+  assert.equal(r.reasoningEffort, 'xhigh');
+  assert.equal(r.source, 'recent');
+});
+
+test('推理强度只对 codex 传,其他引擎没这个开关', () => {
+  const pick = loadPick();
+  const st = {
+    conversations: { a: { id: 'a', hostId: 'h1', agent: 'claude', reasoningEffort: 'xhigh', updatedAt: 1 } },
+    activeConvByHost: { h1: 'a' }
+  };
+  assert.equal(pick(st, 'h1').reasoningEffort, '');
+});
+
+test('这台主机一条对话都没有才用默认', () => {
+  const pick = loadPick();
+  const r = pick({ conversations: {}, activeConvByHost: {} }, 'h9');
+  assert.equal(r.agent, 'codex');
+  assert.equal(r.source, 'default');
+});
+
+test('选择器不能每次返回新对象 —— React 18 下会每次 store 变动都重渲', () => {
+  const ui = read('src/components/AskShell.jsx');
+  // 选原始值再 useMemo,而不是在 selector 里现算对象
+  assert.match(ui, /const conversations = useStore\(\(st\) => st\.conversations\)/);
+  assert.match(ui, /useMemo\(\s*\n?\s*\(\) => pickAskEngine/);
+  assert.match(ui, /getSnapshot 没缓存/);
+});
+
+test('面板上标出用的是哪个引擎/模型 —— 关系到费用,不该藏着', () => {
+  const ui = read('src/components/AskShell.jsx');
+  assert.match(ui, /ENGINE_LABEL\[engine\.agent\]/);
+  assert.match(ui, /沿用最近对话/);
+});
+
+test('主进程按传入的引擎配置建会话,包括 deepseek 端点', () => {
+  const main = read('electron/main.js');
+  const block = main.slice(main.indexOf("ipcMain.handle('ask:shell'"));
+  assert.match(block, /deepseekEndpoint: loadSettings\(\)\.deepseekEndpoint/);
+  assert.match(block, /reasoningEffort: agent === 'codex' \? reasoningEffort : ''/);
+});
+
+test('导航按使用频次排:对话/终端/文件在最左', () => {
+  const app = read('src/App.jsx');
+  const order = [...app.matchAll(/\{ key: '(\w+)', label: '([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual(order.slice(0, 3), ['chat', 'terminal', 'files']);
+  // 配置类沉到最右
+  assert.equal(order[order.length - 1], 'setup');
+});

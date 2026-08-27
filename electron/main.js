@@ -2409,7 +2409,8 @@ const askShell = require('./askShell');
  * 那里面 export XXX_KEY=… 之类太常见了,不能指望调用方记得洗。
  */
 ipcMain.handle('ask:shell', async (_e, {
-  hostId, question, tail = '', imagePath = '', agent = 'codex', model = ''
+  hostId, question, tail = '', imagePath = '',
+  agent = 'codex', model = '', reasoningEffort = ''
 } = {}) => {
   const s = getSession(hostId);
 
@@ -2427,6 +2428,10 @@ ipcMain.handle('ask:shell', async (_e, {
 
   const session = new AgentSession(s.ssh, s.proxy, {
     agent, cwd: env.cwd || '', model,
+    // 跟对话用同一套配置,包括 deepseek 端点与 codex 推理强度
+    deepseekEndpoint: loadSettings().deepseekEndpoint,
+    dshConfig: loadSettings().dshConfig,
+    reasoningEffort: agent === 'codex' ? reasoningEffort : '',
     permissionMode: 'workspace'   // 只读沙箱:问一句而已,不该动任何文件
   });
   let answer = '';

@@ -41,12 +41,14 @@ import BrowserPanel from './components/BrowserPanel.jsx';
 import ErrorLogPanel from './components/ErrorLogPanel.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 
+/* 按使用频次排:对话、终端、文件是日常主力,放最左边(离鼠标最近、
+   也最先被眼睛扫到);速览/图谱/技能是偶尔用;配置类沉到最右。 */
 const TABS = [
   { key: 'chat', label: '对话', icon: '💬' },
+  { key: 'terminal', label: '终端', icon: '⌨️' },
+  { key: 'files', label: '文件', icon: '📁' },
   { key: 'brief', label: '速览', icon: '🗞️' },
   { key: 'graph', label: '图谱', icon: '🕸️' },
-  { key: 'files', label: '文件', icon: '📁' },
-  { key: 'terminal', label: '终端', icon: '⌨️' },
   { key: 'skills', label: '技能', icon: '🧩' },
   { key: 'browser', label: '浏览', icon: '🌐' },
   { key: 'mobile', label: '移动接入', icon: '📱' },
