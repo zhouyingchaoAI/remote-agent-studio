@@ -2,27 +2,40 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useStore } from '../store.js';
 
 /**
- * 用哪个模型回答:跟当前主机正在用的对话走。
+ * 各引擎里最快的那个模型。
  *
- * 写死 codex 是不对的 —— 用户在对话里特意选了引擎和模型(比如换成
- * DeepSeek 省钱、或调到 gpt-5.6-terra),问一句命令却跑去用另一个,
- * 既不符合预期,账单也记在别处。
+ * 这个面板的全部价值是「快」—— 你是在终端里卡住了、想立刻拿回一条命令。
+ * 等 20 秒的深度推理不如自己去搜,那时这个功能就不如不存在。
  *
- * 没有活跃对话时退到该主机最近用过的那个;一个都没有才用默认。
+ * 所以对话里选的是什么模型不重要,**引擎**才重要:引擎决定用哪套凭据、
+ * 账单记在哪、装没装。引擎跟着对话走,模型固定挑最快的。
  */
+const FASTEST_MODEL = {
+  codex: 'gpt-5',
+  claude: 'haiku',
+  deepseek: 'deepseek-v4-flash',
+  // dsh 没有 --model 开关,模型由它自己的 profile 决定,给了也没用
+  dsh: ''
+};
+
 export function pickAskEngine(state, hostId) {
   const convs = Object.values(state.conversations || {}).filter((c) => c.hostId === hostId);
   const activeId = state.activeConvByHost?.[hostId];
   const conv = (activeId && state.conversations[activeId])
     || convs.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
-  if (!conv) return { agent: 'codex', model: '', reasoningEffort: '', source: 'default' };
+  const agent = conv?.agent || 'codex';
   return {
-    agent: conv.agent || 'codex',
-    model: conv.model || '',
-    // 只有 codex 有推理强度这个开关
-    reasoningEffort: conv.agent === 'codex' ? (conv.reasoningEffort || '') : '',
-    source: activeId && state.conversations[activeId] ? 'active' : 'recent',
-    title: conv.title || ''
+    agent,
+    /* 固定用最快的模型,不跟对话走。
+       引擎仍跟着对话 —— 换引擎意味着换凭据和账单,那个必须一致。 */
+    model: FASTEST_MODEL[agent] ?? '',
+    /* 推理强度压到最低。这是延迟差别最大的一个开关:
+       同一个模型 minimal 和 high 能差好几倍,而"某某命令怎么写"
+       根本不需要推理 —— 它是回忆,不是解题。 */
+    reasoningEffort: agent === 'codex' ? 'minimal' : '',
+    fast: true,
+    source: conv ? (activeId && state.conversations[activeId] ? 'active' : 'recent') : 'default',
+    title: conv?.title || ''
   };
 }
 
@@ -38,7 +51,7 @@ export function pickAskEngine(state, hostId) {
 const ENGINE_LABEL = { codex: 'Codex', claude: 'Claude', deepseek: 'DeepSeek', dsh: 'DeepSeek Harness' };
 
 export default function AskShell({ hostId, termId, getTail, onInsert }) {
-  /* 跟当前对话用同一个引擎与模型。
+  /* 引擎跟当前对话走,模型固定挑最快的(见 pickAskEngine)。
      必须选原始值再 memo:选择器里直接返回新对象的话,每次 store 变动
      (任何一条传输进度、任何一条消息)都会让这个组件重渲,
      React 18 的 useSyncExternalStore 还会报 getSnapshot 没缓存。 */
@@ -122,10 +135,11 @@ export default function AskShell({ hostId, termId, getTail, onInsert }) {
       <div className="row gap ask-head">
         <b>快速问一下</b>
         {/* 标出用的是哪个引擎/模型 —— 这关系到费用和答案风格,不该藏着 */}
-        <span className="muted small">
+        <span className="muted small"
+          title="固定用最快的模型、最低推理强度 —— 这里要的是立刻拿回一条命令。引擎跟着当前对话走(凭据和账单要一致)">
           {ENGINE_LABEL[engine.agent] || engine.agent}
           {engine.model ? ` · ${engine.model}` : ''}
-          {engine.source === 'recent' ? '(沿用最近对话)' : ''}
+          {engine.fast ? ' · 极速' : ''}
         </span>
         <span className="muted small">⌘K · Esc</span>
         <span className="flex1" />

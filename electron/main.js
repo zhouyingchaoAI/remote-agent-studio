@@ -474,6 +474,8 @@ ipcMain.handle('ssh:connect', async (_e, hostConfig) => {
 ipcMain.handle('ssh:disconnect', (_e, hostId) => {
   const s = sessions.get(hostId);
   if (s) { s.ssh.disconnect(); sessions.delete(hostId); }
+  // 环境缓存跟着失效:重连往往意味着机器换了或刚装完东西,旧结论可能已经不对
+  askEnvCache.delete(hostId);
   return true;
 });
 
@@ -2434,6 +2436,9 @@ const askShell = require('./askShell');
  */
 /** 进行中的问答:askId -> session,供「取消」用 */
 const askSessions = new Map();
+/* 主机环境探测结果的缓存。断开连接时清掉 —— 重连往往意味着机器换了、
+   或者刚装完东西,那时旧结论可能已经不对了。 */
+const askEnvCache = new Map();
 /** 顺手问一句而已,超过这个时间基本就是哪里不对了 */
 const ASK_TIMEOUT_MS = 120000;
 
@@ -2451,13 +2456,22 @@ ipcMain.handle('ask:shell', async (_e, {
 } = {}) => {
   const s = getSession(hostId);
 
-  // 环境信息:免得给 apt 命令而机器是 yum
-  let env = {};
-  try {
-    const r = await s.ssh.exec(`${hostId === LOCAL_ID ? '' : Installer.BIN_PATH + ' '}${askShell.buildEnvCommand()}`,
-      { timeoutMs: 15000 });
-    env = askShell.parseEnv(r.stdout || '');
-  } catch (_) { /* 拿不到就不带,不影响提问 */ }
+  /* 环境信息:免得给 apt 命令而机器是 yum。
+   *
+   * **带缓存**,因为这是一次完整的 SSH 往返,而且发生在问模型**之前** ——
+   * 纯串行地加在每次提问的延迟上。而这些信息(发行版、shell、用户)
+   * 一台机器上基本不会变,每次重新探一遍纯属浪费。
+   * 只有 cwd 会变,但对"这条命令怎么写"的影响很小,值得用它换几秒。
+   */
+  let env = askEnvCache.get(hostId);
+  if (!env) {
+    try {
+      const r = await s.ssh.exec(`${hostId === LOCAL_ID ? '' : Installer.BIN_PATH + ' '}${askShell.buildEnvCommand()}`,
+        { timeoutMs: 15000 });
+      env = askShell.parseEnv(r.stdout || '');
+      askEnvCache.set(hostId, env);
+    } catch (_) { env = {}; /* 拿不到就不带,不影响提问 */ }
+  }
 
   const prompt = askShell.buildAskPrompt({
     question, tail: askShell.sanitizeTail(tail), env, hasImage: !!imagePath

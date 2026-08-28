@@ -300,7 +300,12 @@ progress { width: 140px; height: 6px; }
 /* terminal */
 .terminal-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
 .terminal-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
-.terminal-box { flex: 1; min-height: 0; background: var(--bg); padding: 6px; }
+/* 底部留白比顶部大。
+   终端最后一行原来是紧贴窗口底边的 —— 只要窗口下沿压着 Dock 或任务栏,
+   那一行就被吃掉一半,而它恰恰是当前提示符,最需要看清的一行。
+   FitAddon 按父元素的内容高度算行数,所以这里的 padding 会被正确扣掉,
+   加大它只会少一行、不会造成裁切。 */
+.terminal-box { flex: 1; min-height: 0; background: var(--bg); padding: 6px 6px 14px; }
 .terminal-context-menu {
   position: absolute; z-index: 50; display: grid; min-width: 120px; padding: 4px;
   border: 1px solid var(--border); border-radius: 6px; background: var(--bg2);
@@ -772,11 +777,13 @@ progress { width: 140px; height: 6px; }
 .pane-title-row .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pane-error { padding: 16px; }
 /* 终端里的快速问答 */
-.ask-fab { position: absolute; right: 16px; bottom: 16px; z-index: 5;
+/* 抬高一点并半透明:原来正好压在最后一行(提示符)上,
+   光标走到行尾时被按钮遮住。鼠标靠近才完全显形。 */
+.ask-fab { position: absolute; right: 16px; bottom: 42px; z-index: 5; opacity: .72;
   padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer;
   background: var(--panel); color: var(--fg); border: 1px solid var(--border);
   box-shadow: 0 2px 10px rgba(0,0,0,.35); }
-.ask-fab:hover { border-color: #93b4ff; }
+.ask-fab:hover { border-color: var(--accent); opacity: 1; }
 .ask-panel { position: absolute; right: 16px; bottom: 16px; z-index: 6; width: 520px;
   max-width: calc(100% - 32px); max-height: 70%; overflow: auto;
   padding: 12px; border-radius: 10px; background: var(--panel);

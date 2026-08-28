@@ -39,8 +39,8 @@ test('提示词要求先给命令、且放进代码块(界面靠它切按钮)', 
   const p = ask.buildAskPrompt({ question: '怎么看容器日志' });
   assert.match(p, /\*\*先给命令\*\*/);
   assert.match(p, /```bash/);
-  // 用户是在终端里急着用
-  assert.match(p, /简短/);
+  // 用户是在终端里急着用 —— 现在直接给了硬性行数上限
+  assert.match(p, /最多 5 行/);
   // 不确定就说不确定,别编一条看起来对的
   assert.match(p, /不要编一条看起来对的/);
   assert.throws(() => ask.buildAskPrompt({ question: '  ' }), /不能为空/);
@@ -110,19 +110,25 @@ test('⌘K 唤起 —— 手已经在键盘上,不该逼人去够鼠标', () => 
 /** 从组件里取出纯函数(JSX 没法直接 require) */
 function loadPick() {
   const src = read('src/components/AskShell.jsx');
+  // pickAskEngine 现在依赖 FASTEST_MODEL,得把那张表一起抠出来
+  const table = src.slice(src.indexOf('const FASTEST_MODEL'), src.indexOf('};', src.indexOf('const FASTEST_MODEL')) + 2);
   const body = src.slice(src.indexOf('export function pickAskEngine')).replace('export function', 'function');
-  return new Function(`${body.slice(0, body.indexOf('\n}') + 2)}; return pickAskEngine;`)();
+  return new Function(`${table}\n${body.slice(0, body.indexOf('\n}') + 2)}; return pickAskEngine;`)();
 }
 
-test('跟当前活跃对话用同一个引擎与模型', () => {
+test('引擎跟当前活跃对话走,模型换成该引擎最快的那个', () => {
+  /* 契约变了:用户明确要「最快的模型、不要深度思考」。
+     引擎仍然跟着对话 —— 它决定用哪套凭据、账单记在哪,不能替人换;
+     模型则固定挑最快的,因为这个面板的全部价值就是快。 */
   const pick = loadPick();
   const st = {
-    conversations: { a: { id: 'a', hostId: 'h1', agent: 'deepseek', model: 'deepseek-v4-pro', updatedAt: 1 } },
+    conversations: { a: { id: 'a', hostId: 'h1', agent: 'deepseek', model: 'deepseek-v4-pro[1m]', updatedAt: 1 } },
     activeConvByHost: { h1: 'a' }
   };
   const r = pick(st, 'h1');
-  assert.equal(r.agent, 'deepseek');
-  assert.equal(r.model, 'deepseek-v4-pro');
+  assert.equal(r.agent, 'deepseek', '引擎必须跟着对话');
+  assert.equal(r.model, 'deepseek-v4-flash', '模型应换成最快的,而不是对话里那个');
+  assert.equal(r.fast, true);
   assert.equal(r.source, 'active');
 });
 
@@ -136,18 +142,24 @@ test('没有活跃对话就沿用该主机最近用过的那个', () => {
     activeConvByHost: {}
   };
   const r = pick(st, 'h1');
-  assert.equal(r.model, 'gpt-5.6-terra', '应取 updatedAt 最大的那条');
-  assert.equal(r.reasoningEffort, 'xhigh');
+  // 断言的是「引擎取自哪条对话」;模型不再跟对话走(固定挑最快的)
+  assert.equal(r.agent, 'codex', '应取 updatedAt 最大的那条');
+  assert.equal(r.model, 'gpt-5');
+  assert.equal(r.reasoningEffort, 'minimal', '不沿用对话里的 xhigh');
   assert.equal(r.source, 'recent');
 });
 
-test('推理强度只对 codex 传,其他引擎没这个开关', () => {
+test('codex 固定最低推理强度,其他引擎没这个开关', () => {
+  /* 推理强度是延迟差别最大的一个开关,同一个模型 minimal 和 high 能差好几倍。
+     而「某某命令怎么写」是回忆,不是解题,不需要推理。 */
   const pick = loadPick();
-  const st = {
-    conversations: { a: { id: 'a', hostId: 'h1', agent: 'claude', reasoningEffort: 'xhigh', updatedAt: 1 } },
+  const mk = (agent) => ({
+    conversations: { a: { id: 'a', hostId: 'h1', agent, reasoningEffort: 'xhigh', updatedAt: 1 } },
     activeConvByHost: { h1: 'a' }
-  };
-  assert.equal(pick(st, 'h1').reasoningEffort, '');
+  });
+  assert.equal(pick(mk('codex'), 'h1').reasoningEffort, 'minimal', '不该沿用对话里的 xhigh');
+  assert.equal(pick(mk('claude'), 'h1').reasoningEffort, '');
+  assert.equal(pick(mk('deepseek'), 'h1').reasoningEffort, '');
 });
 
 test('这台主机一条对话都没有才用默认', () => {
@@ -168,7 +180,10 @@ test('选择器不能每次返回新对象 —— React 18 下会每次 store �
 test('面板上标出用的是哪个引擎/模型 —— 关系到费用,不该藏着', () => {
   const ui = read('src/components/AskShell.jsx');
   assert.match(ui, /ENGINE_LABEL\[engine\.agent\]/);
-  assert.match(ui, /沿用最近对话/);
+  assert.match(ui, /engine\.model/);
+  /* 还要标出"极速":模型被替换成了最快的那个,和对话里选的不一样,
+     不说清楚会让人以为面板在偷偷用别的东西。 */
+  assert.match(ui, /极速/);
 });
 
 test('主进程按传入的引擎配置建会话,包括 deepseek 端点', () => {
@@ -229,4 +244,42 @@ test('引擎返回空内容要报错,不能静默成功', () => {
 test('脱敏是本地正则,与快慢无关 —— 提示不该让人误会', () => {
   const ui = read('src/components/AskShell.jsx');
   assert.match(ui, /本地正则,不影响速度/);
+});
+
+/* ------------------------------------------------ 快:这个面板的全部价值 */
+
+test('固定用最快的模型和最低推理强度', () => {
+  /* 用户:「用最快的模型,不需要深度思考,需要最快反应」。
+     这个面板的全部价值就是快 —— 等 20 秒不如自己去搜,那它不如不存在。 */
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'src/components/AskShell.jsx'), 'utf8');
+  assert.match(ui, /const FASTEST_MODEL = \{/);
+  assert.match(ui, /claude: 'haiku'/);
+  assert.match(ui, /deepseek: 'deepseek-v4-flash'/);
+  // 推理强度是延迟差别最大的开关,而"命令怎么写"是回忆不是解题
+  assert.match(ui, /reasoningEffort: agent === 'codex' \? 'minimal' : ''/);
+});
+
+test('引擎仍跟着对话走 —— 换引擎等于换凭据和账单', () => {
+  /* 模型可以替用户挑,引擎不行:引擎决定用哪套凭据、账单记在哪、装没装。
+     悄悄换引擎会让人在别处看到不认识的账单。 */
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'src/components/AskShell.jsx'), 'utf8');
+  assert.match(ui, /const agent = conv\?\.agent \|\| 'codex';/);
+  assert.match(ui, /model: FASTEST_MODEL\[agent\]/);
+});
+
+test('提示词要求极简,不许展开思考过程', () => {
+  // 同一个问题,啰嗦的答案光是吐字就能多花好几秒
+  const p = ask.buildAskPrompt({ question: '怎么看容器日志' });
+  assert.match(p, /最多 5 行/);
+  assert.match(p, /不要解释你的思考过程/);
+});
+
+test('主机环境探测有缓存 —— 它是串在提问前面的一次完整 SSH 往返', () => {
+  /* 这一步纯串行地加在每次提问的延迟上,而发行版/shell/用户
+     在一台机器上基本不变,每次重新探一遍纯属浪费。 */
+  const main = fs.readFileSync(path.join(__dirname, '..', 'electron/main.js'), 'utf8');
+  assert.match(main, /const askEnvCache = new Map\(\);/);
+  assert.match(main, /let env = askEnvCache\.get\(hostId\);/);
+  // 断开时必须失效:重连往往意味着机器换了或刚装完东西
+  assert.match(main, /askEnvCache\.delete\(hostId\);/);
 });

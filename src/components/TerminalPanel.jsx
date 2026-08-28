@@ -26,6 +26,19 @@ function xtermTheme() {
   };
 }
 
+/**
+ * 视图是不是已经贴在最底部。
+ *
+ * viewportY 是可视区顶端在缓冲区里的行号,baseY 是"滚到底时"该有的值。
+ * 留 1 行容差:窗口高度不是行高整数倍时,这两个数会差个零点几行,
+ * 严格相等会让判断在"其实就在底部"的情况下失手。
+ */
+function isAtBottom(term) {
+  const b = term?.buffer?.active;
+  if (!b) return true;
+  return b.viewportY >= b.baseY - 1;
+}
+
 /** 终端页:多标签,每个标签一个独立远程 shell */
 export default function TerminalPanel({ hostId, active }) {
   const [tabs, setTabs] = useState([{ id: 't1', title: '终端 1' }]);
@@ -148,9 +161,29 @@ function TermView({ hostId, termId, active }) {
       .catch((e) => term.write(`\x1b[31m${e.message}\x1b[0m\r\n`));
 
     const disp = term.onData((data) => window.api.term.write({ hostId, termId, data }));
-    const onResize = () => {
+    /**
+     * 重排。
+     *
+     * 两个容易被忽略的点:
+     *
+     * · **fit 之后要滚到底。** 变小时 xterm 保持原来的滚动位置,最后一行
+     *   很容易被留在可视区之外 —— 表现就是"最后一行看不全"。
+     * · **ResizeObserver 要防抖。** fit() 本身会改变元素尺寸,可能把 RO 再触发一次;
+     *   连锁抖动的中间态里,滚动位置会停在一个错的地方。
+     */
+    let resizeTimer = null;
+    const applyFit = () => {
+      /* 只在"本来就在底部"时才滚回底部。
+         无条件滚会把正在翻历史的人一把拽到最后 —— 而调整窗口大小
+         恰恰是翻历史时最常做的事(想看清一点)。 */
+      const atBottom = isAtBottom(term);
       fit.fit();
+      if (atBottom) term.scrollToBottom();
       window.api.term.resize({ hostId, termId, cols: term.cols, rows: term.rows }).catch(() => {});
+    };
+    const onResize = () => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(applyFit, 60);
     };
     window.addEventListener('resize', onResize);
     const ro = new ResizeObserver(onResize);
@@ -158,6 +191,7 @@ function TermView({ hostId, termId, active }) {
 
     return () => {
       offData(); offClosed(); offTheme(); disp.dispose(); ro.disconnect();
+      window.clearTimeout(resizeTimer);
       window.removeEventListener('resize', onResize);
       term.dispose();
     };
@@ -170,6 +204,8 @@ function TermView({ hostId, termId, active }) {
       const fit = fitRef.current;
       if (!term || !fit) return;
       fit.fit();
+      // 标签页隐藏时高度为 0,重新显示后必须滚到底,否则停在旧位置、看不到当前提示符
+      term.scrollToBottom();
       window.api.term.resize({ hostId, termId, cols: term.cols, rows: term.rows }).catch(() => {});
       term.focus();
     });
