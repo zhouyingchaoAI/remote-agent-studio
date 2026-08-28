@@ -50,6 +50,10 @@ const KINDS = [
   { id: 'curl', re: /\bcurl\b.*(-O|--remote-name|-o\s|--output)/, label: '下载文件' },
   /* 下载之外的长跑活儿。同样是"起了就看不见"的一类,而且失败得更安静 ——
      编译挂了往往只在几百行输出的中间留一行。 */
+  /* 服务包装脚本。它自己不下载,但**它是那次下载的门面** ——
+     进度在它的 journal 里,子进程才是真正在拉的那个。
+     放在最后:任何更具体的类型都优先。 */
+  { id: 'script', re: /^\/?(usr\/)?(bin|sbin|local\/bin)?\/?(ba)?sh\s+\S*\.sh\b|\bbash\s+-c\b/, label: '脚本' },
   { id: 'compile', re: /\b(make|cmake|ninja|cargo\s+(build|install)|go\s+build|mvn|gradle)\b/, label: '编译' },
   { id: 'train', re: /\b(torchrun|deepspeed|accelerate\s+launch)\b|python[\d.]*\s+\S*train\S*\.py/, label: '训练' }
 ];
@@ -82,6 +86,10 @@ function buildScanCommand({ watchPaths = [], extraUnits = [] } = {}) {
   return [
     `# kinds: ${pattern}`,
     'LC_ALL=C ps -eo pid=,ppid=,etimes=,args= 2>/dev/null | while read -r p pp e a; do',
+    /* 先取"它属于哪个 systemd 单元"—— cgroup 路径里就写着。
+       这一步必须在分类之前:一个进程**属于某个服务**本身就说明它是后台任务,
+       下面的兜底分支要靠它判断。 */
+    `  u=$(sed -n 's/.*\\/\\([A-Za-z0-9@._-]*\\.service\\).*/\\1/p' /proc/$p/cgroup 2>/dev/null | head -1)`,
     '  case "$a" in',
     '    *grep*) continue ;;',
     '    *"docker "*pull*|*"docker "*load*|*ollama*pull*|*huggingface-cli*download*'
@@ -90,7 +98,11 @@ function buildScanCommand({ watchPaths = [], extraUnits = [] } = {}) {
       + '|*rsync*|*scp*|*wget*|*curl*-O*|*curl*-o*'
       + '|*"docker "*build*|*make*|*cmake*|*ninja*|*cargo*build*|*"go "*build*'
       + '|*mvn*|*gradle*|*torchrun*|*deepspeed*|*accelerate*launch*'
-      + '|*"docker "*run*|*"docker "*create*|*docker-compose*up*|*"docker "*compose*up*) long=0 ;;',
+      + '|*"docker "*run*|*"docker "*create*|*docker-compose*up*|*"docker "*compose*up*'
+      /* compose 的 pull 之前完全没放行:`docker-compose ... pull` 只匹配到
+         *compose*up*(要求有 up),于是掉进"其他长跑进程"那个默认隐藏的桶里。
+         而截图里正在下的就是它。 */
+      + '|*docker-compose*pull*|*"docker "*compose*pull*|*git-lfs*|*lfs*smudge*) long=0 ;;',
     /* 没匹配上的:只要跑够久,也留一条(打 LONG 标记,界面默认不显示)。
        KINDS 是一份**人工列举**,一定会漏 —— 智能体完全可能起一个我没想到的
        长命令。漏掉的那个恰恰最需要被看见,因为你连它叫什么都不知道。
@@ -99,14 +111,23 @@ function buildScanCommand({ watchPaths = [], extraUnits = [] } = {}) {
     /* 常驻守护进程排除掉:它们永远在跑,列出来只会把真正的任务淹没。
        模式里不放引号和反斜杠 —— case 的 glob 里它们的转义规则很绕,
        写错了不会报错,只会静默地不匹配。 */
+    /* 只排交互式登录 shell,**不能排所有 bash**。
+       之前写的是 *bash*,结果把 `/bin/bash /usr/local/bin/xxx-bootstrap.sh`
+       也吃掉了 —— 而那个包装脚本正是拥有整个下载的进程,
+       它一被丢掉,整个任务就从面板上消失了(截图里面板全空就是这么来的)。 */
+    '         -bash|-sh|-zsh|bash|sh|zsh|/bin/bash|/bin/sh|/usr/bin/bash|/usr/bin/zsh) continue ;;',
     '         *sshd*|*systemd*|*agetty*|*crond*|*cron*|*rsyslog*|*dbus*|*polkit*'
       + '|*NetworkManager*|*containerd-shim*|*docker-proxy*|*chronyd*|*ntpd*'
-      + '|*auditd*|*irqbalance*|*udev*|*login*|*bash*|*-zsh*) continue ;;',
+      + '|*auditd*|*irqbalance*|*udev*|*"login "*) continue ;;',
     '       esac',
-    /* 跑够 5 分钟才算"后台任务"。短命进程每轮扫描都在变,
-       列出来是一片闪烁的噪音,而且它们本来也不需要盯。 */
-    '       [ "${e:-0}" -ge 300 ] 2>/dev/null || continue',
-    '       long=1 ;;',
+    /* **属于某个 systemd 服务、且跑了一分钟以上的,直接算正经任务。**
+       服务就是"有人特意让它在后台跑"的意思,不该被折叠进"其他长跑进程"。
+       截图里那个 ragflow-bootstrap.sh 就是这种:它自己不下载,
+       但它是整次下载的门面,进度都在它的 journal 里。 */
+    '       if [ -n "${u:-}" ] && [ "${e:-0}" -ge 60 ] 2>/dev/null; then long=0;',
+    /* 不属于任何服务的,还是按"跑够 5 分钟"收进隐藏桶。
+       短命进程每轮扫描都在变,列出来是一片闪烁的噪音。 */
+    '       else [ "${e:-0}" -ge 300 ] 2>/dev/null || continue; long=1; fi ;;',
     '  esac',
     `  w=$(awk '/^write_bytes:/{print $2}' /proc/$p/io 2>/dev/null || echo -1)`,
     `  r=$(awk '/^rchar:/{print $2}' /proc/$p/io 2>/dev/null || echo -1)`,
@@ -114,7 +135,6 @@ function buildScanCommand({ watchPaths = [], extraUnits = [] } = {}) {
        靠它才能把进程和"它的服务日志"对上:截图里那条 docker compose pull
        的分层进度只存在于 ragflow-bootstrap.service 的 journal 里,
        而那个单元名不含 pull/download,按名字过滤根本扫不到。 */
-    `  u=$(sed -n 's/.*\\/\\([A-Za-z0-9@._-]*\\.service\\).*/\\1/p' /proc/$p/cgroup 2>/dev/null | head -1)`,
     `  printf 'TASK%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\\n' "\x1f" "$p" "\x1f" "\${pp:-0}" "\x1f" "$e" "\x1f" "\${w:--1}" "\x1f" "\${r:--1}" "\x1f" "\${long:-0}" "\x1f" "\${u:-}" "\x1f$a"`,
     'done',
     /* 全机进程的父子关系 + 写入量,各来一遍。

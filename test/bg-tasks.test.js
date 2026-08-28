@@ -640,3 +640,55 @@ test('界面优先用日志解析出来的进度画条', () => {
   // 有日志进度时就不该再说"没有百分比"
   assert.match(ui, /!task\.progressFromLog && \(/);
 });
+
+/* --------------------------- 面板整个空掉的那次:进程根本没被扫到 */
+
+/** 把扫描命令里那段 case 抠出来单独跑 —— 这段是纯 shell,只能用真 bash 验 */
+function classifyInShell(args, unit = '') {
+  const { execFileSync } = require('child_process');
+  const L = bg.buildScanCommand().split('\n');
+  const s = L.findIndex((l) => l.includes('u=$(sed'));
+  const e = L.indexOf('  esac');
+  const script = ['for a in "$@"; do', 'e=999; long=; u="$U"',
+    ...L.slice(s + 1, e + 1), 'echo "$long|$a"', 'done'].join('\n');
+  return execFileSync('bash', ['-c', script, '_', ...args], { env: { ...process.env, U: unit } })
+    .toString().trim().split('\n').filter(Boolean);
+}
+
+test('服务的包装脚本必须被扫到 —— 它是整次下载的门面', () => {
+  /* 之前排除规则写的是 *bash*,把 `/bin/bash /usr/local/bin/xxx-bootstrap.sh`
+     整个吃掉了。而进度全在它的 journal 里,它一被丢,面板就整个空了。
+     这段逻辑是纯 shell,只有真跑一遍才验得了 —— 靠读正则推理正是上次出错的原因。 */
+  const out = classifyInShell(['/bin/bash /usr/local/bin/ragflow-bootstrap.sh'], 'ragflow-bootstrap.service');
+  assert.equal(out.length, 1, '被整条丢弃了');
+  assert.ok(out[0].startsWith('0|'), '应算正经任务而不是塞进隐藏桶');
+});
+
+test('docker compose pull 也要放行', () => {
+  // 之前只匹配 *compose*up*(要求有 up),而截图里正在下的恰恰是 pull
+  const out = classifyInShell(['docker-compose -p ragflow -f docker-compose.yml pull'], 'x.service');
+  assert.ok(out[0].startsWith('0|'));
+  assert.equal(bg.classifyKind('docker compose pull'), 'docker-pull');
+});
+
+test('git-lfs 也要放行 —— 拉权重时干活的就是它', () => {
+  const out = classifyInShell(['/usr/bin/git-lfs filter-process'], 'dl.service');
+  assert.ok(out[0].startsWith('0|'));
+});
+
+test('交互式登录 shell 仍然排除', () => {
+  // 放宽 bash 规则不能把 ssh 会话本身也列进来
+  assert.equal(classifyInShell(['-bash', 'bash', '/bin/bash', 'sshd: root@pts/0']).length, 0);
+});
+
+test('不属于服务的脚本仍进隐藏桶', () => {
+  /* "属于某个 systemd 服务"才是"有人特意让它在后台跑"的证据。
+     否则一台机器上随便一个跑了很久的脚本都会挤到前面。 */
+  const out = classifyInShell(['/bin/bash /home/me/random.sh'], '');
+  assert.ok(out[0].startsWith('1|'));
+});
+
+test('服务里的进程只要跑够一分钟就算任务,不用等五分钟', () => {
+  const cmd = bg.buildScanCommand();
+  assert.match(cmd, /\[ -n "\$\{u:-\}" \] && \[ "\$\{e:-0\}" -ge 60 \]/);
+});
