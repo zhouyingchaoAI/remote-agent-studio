@@ -76,7 +76,7 @@ function buildScanCommand() {
   const pattern = KINDS.map((k) => k.id).join('|');   // 仅用于注释,真正的匹配在下面
   return [
     `# kinds: ${pattern}`,
-    'LC_ALL=C ps -eo pid=,etimes=,args= 2>/dev/null | while read -r p e a; do',
+    'LC_ALL=C ps -eo pid=,ppid=,etimes=,args= 2>/dev/null | while read -r p pp e a; do',
     '  case "$a" in',
     '    *grep*) continue ;;',
     '    *"docker "*pull*|*"docker "*load*|*ollama*pull*|*huggingface-cli*download*'
@@ -105,8 +105,21 @@ function buildScanCommand() {
     '  esac',
     `  w=$(awk '/^write_bytes:/{print $2}' /proc/$p/io 2>/dev/null || echo -1)`,
     `  r=$(awk '/^rchar:/{print $2}' /proc/$p/io 2>/dev/null || echo -1)`,
-    `  printf 'TASK%s%s%s%s%s%s%s%s%s%s%s\\n' "\x1f" "$p" "\x1f" "$e" "\x1f" "\${w:--1}" "\x1f" "\${r:--1}" "\x1f" "\${long:-0}" "\x1f$a"`,
+    `  printf 'TASK%s%s%s%s%s%s%s%s%s%s%s%s%s\\n' "\x1f" "$p" "\x1f" "\${pp:-0}" "\x1f" "$e" "\x1f" "\${w:--1}" "\x1f" "\${r:--1}" "\x1f" "\${long:-0}" "\x1f$a"`,
     'done',
+    /* 全机进程的父子关系 + 写入量,各来一遍。
+     *
+     * 为什么需要:很多下载器**自己不写盘,写盘的是它 fork 出来的子进程**。
+     * `git clone` 拉大仓库时真正干活的是 git-remote-https 和 git-lfs;
+     * 截图里那个用 git-lfs 拉权重的服务就是这样,父进程 io 恒为 0。
+     * 只看被匹配到的那个 pid,会得出"一直 0 B"的错误结论。
+     *
+     * 用一次 awk 读完所有 /proc/<pid>/io —— 逐个起子 shell 去读会慢到不可用。
+     */
+    'LC_ALL=C ps -eo pid=,ppid= 2>/dev/null'
+      + ` | awk '{printf "PPID\x1f%s\x1f%s\\n", $1, $2}'`,
+    `awk 'FNR==1{split(FILENAME,a,"/"); pid=a[3]} /^write_bytes:/{printf "IO\x1f%s\x1f%s\\n", pid, $2}'`
+      + ' /proc/[0-9]*/io 2>/dev/null',
     // 守护进程的写入量:docker pull 的真实进度只能从这里看
     'for d in dockerd containerd; do',
     '  dp=$(pgrep -x "$d" 2>/dev/null | head -1)',
@@ -160,29 +173,36 @@ function parseScan(text) {
   const daemons = {};
   const disks = [];
   const units = [];
+  const ppids = new Map();   // pid -> ppid
+  const io = new Map();      // pid -> write_bytes
   for (const line of String(text || '').split('\n')) {
     const parts = line.split(FIELD);
-    // TASK ␟ pid ␟ etimes ␟ write_bytes ␟ rchar ␟ long ␟ 完整命令行
-    if (parts[0] === 'TASK' && parts.length >= 7) {
+    // TASK ␟ pid ␟ ppid ␟ etimes ␟ write_bytes ␟ rchar ␟ long ␟ 完整命令行
+    if (parts[0] === 'TASK' && parts.length >= 8) {
       const pid = Number(parts[1]);
       if (!Number.isInteger(pid) || pid <= 0) continue;
-      const command = redact(parts.slice(6).join(FIELD).trim());
+      const command = redact(parts.slice(7).join(FIELD).trim());
       const kind = classifyKind(command);
       tasks.push({
         pid,
-        elapsedSec: Math.max(0, Number(parts[2]) || 0),
+        ppid: Number(parts[2]) || 0,
+        elapsedSec: Math.max(0, Number(parts[3]) || 0),
         /* 没匹配上任何已知类型、只是"跑得久"而被捞进来的。
            界面默认不显示这一类 —— KINDS 是人工列举的,一定会漏,
            但把所有长跑进程都摊开又会淹掉真正的任务。 */
-        longRunning: parts[5] === '1',
+        longRunning: parts[6] === '1',
         /* -1 表示读不到 /proc/<pid>/io(不是同一个用户,或内核没开)。
            必须和"读到了 0"区分开:前者是测不了,后者是真没写盘。 */
-        writeBytes: Number(parts[3]),
-        readChars: Number(parts[4]),
+        writeBytes: Number(parts[4]),
+        readChars: Number(parts[5]),
         command,
         kind,
         label: kindLabel(kind)
       });
+    } else if (parts[0] === 'PPID' && parts.length >= 3) {
+      ppids.set(Number(parts[1]), Number(parts[2]));
+    } else if (parts[0] === 'IO' && parts.length >= 3) {
+      io.set(Number(parts[1]), Number(parts[2]));
     } else if (parts[0] === 'DAEMON' && parts.length >= 3) {
       daemons[parts[1]] = Number(parts[2]);
     // UNIT ␟ 单元名 ␟ ActiveState ␟ SubState ␟ 启动时刻(单调,微秒) ␟ 最后一行日志
@@ -204,7 +224,7 @@ function parseScan(text) {
       });
     }
   }
-  return { tasks, daemons, disks, units };
+  return { tasks, daemons, disks, units, ppids, io };
 }
 
 /* ------------------------------------------------- systemd 单元 → 任务 */
@@ -305,6 +325,42 @@ const DOCKER_KINDS = new Set(['docker-pull', 'docker-run', 'docker-build']);
  * 关键规则:**测不到就说测不到**。progress === 'unknown' 的任务永远不会被标成停滞 ——
  * 把"我没量到"显示成"它卡住了",会让人去排查一个不存在的故障,比不显示更糟。
  */
+/**
+ * 一个进程连同它所有后代的写入量。
+ *
+ * 存在的理由:**很多下载器自己不写盘,写盘的是它 fork 出来的子进程。**
+ * `git clone` 拉大仓库时干活的是 git-remote-https / git-lfs;
+ * 只看父进程会得出"一直 0 B"的错误结论,而那正是最误导人的一种显示 ——
+ * 它和"真的卡住了"长得一模一样。
+ *
+ * 有 cap 是因为进程表可能有环(理论上不该有,但 ppid 是异步采样的两份数据
+ * 拼起来的,不能假设它一定是棵树)—— 没有上限的话这里会死循环,
+ * 表现是整个扫描永远不返回。
+ */
+function subtreeWriteBytes(pid, { ppids, io }, { maxNodes = 4000 } = {}) {
+  if (!ppids || !io) return io?.get(pid) ?? -1;
+  // 先把 ppid 反向索引成 parent -> children,否则每层都要全表扫一遍
+  const children = new Map();
+  for (const [child, parent] of ppids) {
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent).push(child);
+  }
+  let sum = 0;
+  let sawAny = false;
+  const seen = new Set();
+  const stack = [pid];
+  while (stack.length && seen.size < maxNodes) {
+    const p = stack.pop();
+    if (seen.has(p)) continue;
+    seen.add(p);
+    const w = io.get(p);
+    if (typeof w === 'number' && w >= 0) { sum += w; sawAny = true; }
+    for (const c of children.get(p) || []) stack.push(c);
+  }
+  // 一个都没读到就是"测不到",不是"写了 0 字节" —— 这两者绝不能混
+  return sawAny ? sum : -1;
+}
+
 function mergeTasks(prev, scan, nowMs) {
   const byPid = new Map((prev || []).map((t) => [t.pid, t]));
   const dockerBytes = pickDaemonBytes(scan.daemons);
@@ -321,7 +377,10 @@ function mergeTasks(prev, scan, nowMs) {
        只有恰好一个拉取在跑时才能归到它头上 —— 有多个时无法区分是谁下的,
        与其平摊出一个假数字,不如老实说进度未知。 */
     const useDaemon = DOCKER_KINDS.has(t.kind) && dockerTasks.length === 1 && dockerBytes >= 0;
-    const bytes = useDaemon ? dockerBytes : t.writeBytes;
+    /* 非 docker 的一律按**进程树**求和,而不是只看这一个 pid ——
+       git/wget/pip 真正写盘的往往是子进程。 */
+    const treeBytes = useDaemon ? -1 : subtreeWriteBytes(t.pid, scan);
+    const bytes = useDaemon ? dockerBytes : (treeBytes >= 0 ? treeBytes : t.writeBytes);
     const measurable = bytes >= 0;
 
     const base = {
@@ -329,7 +388,7 @@ function mergeTasks(prev, scan, nowMs) {
       title: taskTitle(t),
       startedAtMs: old?.startedAtMs ?? (nowMs - t.elapsedSec * 1000),
       bytes: measurable ? bytes : null,
-      bytesSource: useDaemon ? 'daemon' : 'process',
+      bytesSource: useDaemon ? 'daemon' : (treeBytes >= 0 ? 'tree' : 'process'),
       sampledAtMs: nowMs
     };
 
@@ -398,7 +457,14 @@ function taskTitle(task) {
   switch (task.kind) {
     case 'docker-pull': target = pick(/\b(?:pull|load)\s+(?:-\S+\s+)*(\S+)/); break;
     case 'ollama': target = pick(/\bollama\s+\w+\s+(\S+)/); break;
-    case 'git-clone': target = pick(/\bclone\s+(?:-\S+\s+)*(\S+)/); break;
+    /* git clone 的参数里常混着 -c key=value、--depth 1、--branch x。
+       之前只跳过 `-开头` 的词,于是 `--depth 1` 的那个 `1` 被当成了目标 ——
+       界面上就出现了没有任何信息量的「克隆仓库 1」。
+       改成直接找 URL,找不到再退到最后一个非选项参数(本地路径的情况)。 */
+    case 'git-clone':
+      target = pick(/((?:https?|git|ssh):\/\/\S+|\S+@\S+:\S+)/)
+        || (cmd.split(/\s+/).filter((w) => !w.startsWith('-') && !/^\d+$/.test(w)).pop() || '');
+      break;
     case 'wget':
     case 'curl': target = pick(/(https?:\/\/\S+)/); break;
     default: target = '';
@@ -436,6 +502,7 @@ module.exports = {
   KINDS, STALL_AFTER_MS, STALL_KINDS, DOCKER_KINDS, FIELD,
   classifyKind, kindLabel,
   buildScanCommand, parseScan, mergeTasks, pickDaemonBytes, unitTask, parseSizeProgress,
+  subtreeWriteBytes,
   formatBytes, formatDuration, taskTitle,
   buildStopCommand, diskWarning
 };

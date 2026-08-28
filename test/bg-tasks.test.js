@@ -8,7 +8,8 @@ const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 const F = bg.FIELD;
 /* 第 6 列是 long 标记:没匹配上已知类型、只是跑得久而被捞进来的进程。
    默认传 0(= 认得出的任务),需要时单独传。 */
-const taskLine = (pid, et, w, r, cmd, long = 0) => ['TASK', pid, et, w, r, long, cmd].join(F);
+const taskLine = (pid, et, w, r, cmd, long = 0, ppid = 1) =>
+  ['TASK', pid, ppid, et, w, r, long, cmd].join(F);
 
 /* ------------------------------------------------------------ 分隔符 */
 
@@ -446,4 +447,59 @@ test('进度条标出这是什么的百分比', () => {
   assert.match(ui, /<ProgressBar p=\{task\.progress\} note=\{task\.progressNote\} \/>/);
   // 光有百分比不够,得同时看到"下了多少 / 一共多少"
   assert.match(ui, /fmtBytes\(p\.transferred\)\} \/ \{fmtBytes\(p\.total\)/);
+});
+
+/* ------------------------------------------- 写盘的是子进程,不是它本人 */
+
+test('按进程树求和,而不是只看被匹配到的那个 pid', () => {
+  /* git clone 拉大仓库时真正干活的是 git-remote-https / git-lfs;
+     截图里那个用 git-lfs 拉权重的服务就是这样,父进程 io 恒为 0。
+     只看父进程会得出"一直 0 B"—— 而那和"真的卡住了"长得一模一样。 */
+  const scan = {
+    ppids: new Map([[100, 1], [101, 100], [102, 101], [999, 1]]),
+    io: new Map([[100, 0], [101, 50e6], [102, 150e6], [999, 7e9]])
+  };
+  assert.equal(bg.subtreeWriteBytes(100, scan), 200e6, '应含子孙,且不含无关的 999');
+});
+
+test('一个都读不到时返回 -1,不是 0', () => {
+  // "测不到"和"写了 0 字节"绝不能混:前者不该被判停滞,后者该
+  assert.equal(bg.subtreeWriteBytes(5, { ppids: new Map(), io: new Map() }), -1);
+});
+
+test('进程表有环也能返回,不死循环', () => {
+  /* ppid 和 io 是两次采样拼起来的,不能假设它一定是棵树。
+     没有上限的话这里会死循环 —— 表现是整个扫描永远不返回。 */
+  const cyc = { ppids: new Map([[1, 2], [2, 1]]), io: new Map([[1, 5], [2, 5]]) };
+  assert.equal(bg.subtreeWriteBytes(1, cyc), 10);
+});
+
+test('mergeTasks 用进程树的数字,并标明来源', () => {
+  const gt = t({ pid: 100, kind: 'git-clone', command: 'git clone https://x/y', writeBytes: 0 });
+  const mk = (childBytes) => ({
+    tasks: [gt], daemons: {}, disks: [],
+    ppids: new Map([[100, 1], [101, 100]]),
+    io: new Map([[100, 0], [101, childBytes]])
+  });
+  let s = bg.mergeTasks([], mk(0), 0);
+  s = bg.mergeTasks(s, mk(100 * 1024 * 1024), 10000);
+  assert.equal(s[0].bytesSource, 'tree');
+  assert.equal(s[0].bytesPerSec, 10 * 1024 * 1024);
+});
+
+test('扫描一次性读回全机的 ppid 和 write_bytes', () => {
+  // 逐个起子 shell 去读 /proc/<pid>/io 会慢到不可用
+  const cmd = bg.buildScanCommand();
+  assert.match(cmd, /PPID/);
+  assert.match(cmd, /\/proc\/\[0-9\]\*\/io/);
+});
+
+test('git clone 的标题不再是没有信息量的数字', () => {
+  /* 之前只跳过 `-开头` 的词,于是 `--depth 1` 的那个 `1` 被当成了目标,
+     界面上出现「克隆仓库 1」。 */
+  const mk = (command) => bg.taskTitle({ kind: 'git-clone', label: '克隆仓库', command });
+  assert.match(mk('git -c x=y clone --depth 1 https://hf.co/Qwen/Q3 /home/models/q'), /hf\.co\/Qwen\/Q3/);
+  assert.match(mk('git clone --branch main git@github.com:a/b.git'), /github\.com:a\/b\.git/);
+  // 本地路径克隆:退到最后一个非选项、非纯数字的参数
+  assert.match(mk('git clone --depth 1 /srv/mirror/repo /home/x'), /\/home\/x/);
 });
