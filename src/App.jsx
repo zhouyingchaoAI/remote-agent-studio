@@ -40,6 +40,7 @@ import MobilePanel from './components/MobilePanel.jsx';
 import BrowserPanel from './components/BrowserPanel.jsx';
 import ErrorLogPanel from './components/ErrorLogPanel.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
+import BgTasksDrawer, { BgTasksBadge } from './components/BgTasksDrawer.jsx';
 
 /* 按使用频次排:对话、终端、文件是日常主力,放最左边(离鼠标最近、
    也最先被眼睛扫到);速览/图谱/技能是偶尔用;配置类沉到最右。 */
@@ -60,6 +61,7 @@ export default function App() {
   const { activeHostId, tab, setTab, editingHost, statuses, hosts } = useStore();
   const activeHost = hosts.find((h) => h.id === activeHostId);
   const status = statuses[activeHostId] || 'disconnected';
+  const [bgOpen, setBgOpen] = useState(false);
 
   useEffect(() => {
     loadSettings();
@@ -253,6 +255,8 @@ export default function App() {
     <div className="app">
       <ErrorBoundary>
       <SettingsModal />
+      <BgTasksDrawer open={bgOpen} onClose={() => setBgOpen(false)}
+        hostName={(id) => (hosts.find((h) => h.id === id) || {}).name || id} />
       <Sidebar />
       <div className="main">
         {editingHost !== null ? (
@@ -286,6 +290,9 @@ export default function App() {
                     {t.icon} {t.label}
                   </button>
                 ))}
+                {/* 后台下载任务:放角标而不是占一个标签页 ——
+                    导航栏的位置要留给对话/终端/文件这三个最常用的 */}
+                <BgTasksBadge onClick={() => setBgOpen(true)} />
               </div>
             </div>
             <div className="content">

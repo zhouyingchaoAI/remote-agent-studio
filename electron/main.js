@@ -2687,3 +2687,108 @@ ipcMain.handle('term:close', (_e, { hostId, termId = 'default' }) => {
 });
 ipcMain.handle('term:write', (_e, { hostId, termId = 'default', data }) => { getSession(hostId).ssh.writeShell(termId, data); return true; });
 ipcMain.handle('term:resize', (_e, { hostId, termId = 'default', cols, rows }) => { getSession(hostId).ssh.resizeShell(termId, cols, rows); return true; });
+
+/* ---------------- 后台下载任务 ---------------- */
+/*
+ * 智能体在对话里起的后台活儿(docker pull、wget 权重、pip install)会随着对话
+ * 往下滚而消失在视野里。这里定期扫一遍已连接主机上正在跑什么,把它们汇总出来。
+ *
+ * 两个刻意的限制:
+ *
+ *  · **只在面板打开时扫。** 每次扫描要占一条 SSH 通道,而远端 sshd 的 MaxSessions
+ *    是有限的 —— 后台常驻轮询会在用户毫无察觉的情况下把通道吃光,表现为
+ *    "新对话打不开"。面板关了就停。
+ *  · **每台主机同时只允许一次扫描在飞。** 网络慢时上一次还没回来就发下一次,
+ *    会越积越多,最后同样是通道耗尽。
+ */
+const bgTasks = require('./bgTasks');
+
+const bgState = new Map();      // hostId -> { tasks, disks, at, scanning }
+let bgTimer = null;
+let bgFast = false;
+/* 两档频率。慢档是为了顶栏角标 —— 面板不打开时也得让人知道"有东西在下",
+   否则这个功能只有主动去看才有用,而人恰恰是想不起来看才需要它。
+   30 秒一次的代价可以接受;6 秒一次只在面板真正打开时才用。 */
+const BG_SLOW_MS = 30000;
+const BG_FAST_MS = 6000;
+
+async function bgScanHost(hostId) {
+  const st = bgState.get(hostId) || { tasks: [] };
+  if (st.scanning) return st;   // 上一次还没回来,跳过这轮
+  st.scanning = true;
+  bgState.set(hostId, st);
+  try {
+    const s = getSession(hostId);
+    const r = await s.ssh.exec(bgTasks.buildScanCommand(), { timeoutMs: 12000 });
+    const scan = bgTasks.parseScan(r.stdout || '');
+    const now = Date.now();
+    st.tasks = bgTasks.mergeTasks(st.tasks, scan, now);
+    st.disks = scan.disks;
+    st.warning = bgTasks.diskWarning(scan.disks);
+    st.at = now;
+    st.error = '';
+  } catch (e) {
+    /* 扫不动不清空已有列表:主机临时抖一下就把面板清空,
+       会让人以为任务都结束了。标记出错、保留上次结果更接近事实。 */
+    st.error = e.message;
+  } finally {
+    st.scanning = false;
+    bgState.set(hostId, st);
+  }
+  return st;
+}
+
+function bgSnapshot() {
+  const hosts = [];
+  let running = 0;
+  let stalled = 0;
+  for (const [hostId, st] of bgState) {
+    hosts.push({
+      hostId,
+      tasks: st.tasks || [],
+      warning: st.warning || null,
+      at: st.at || 0,
+      error: st.error || ''
+    });
+    running += (st.tasks || []).length;
+    stalled += (st.tasks || []).filter((t) => t.stalled).length;
+  }
+  return { hosts, running, stalled };
+}
+
+ipcMain.handle('bg:start', (_e, { fast = false } = {}) => {
+  // 已经在按需要的频率跑了就不动,避免频繁重建定时器把采样间隔打乱
+  if (bgTimer && bgFast === !!fast) return true;
+  if (bgTimer) clearInterval(bgTimer);
+  bgFast = !!fast;
+  const tick = async () => {
+    // 只扫已连接的主机;本机会话是懒创建的,没建就不主动建
+    const ids = [...sessions.keys()];
+    await Promise.all(ids.map((id) => bgScanHost(id).catch(() => {})));
+    const snap = bgSnapshot();
+    for (const w of BrowserWindow.getAllWindows()) w.webContents.send('bg:update', snap);
+  };
+  tick();
+  bgTimer = setInterval(tick, bgFast ? BG_FAST_MS : BG_SLOW_MS);
+  return true;
+});
+
+ipcMain.handle('bg:stop', () => {
+  if (bgTimer) clearInterval(bgTimer);
+  bgTimer = null;
+  bgFast = false;
+  return true;
+});
+
+ipcMain.handle('bg:snapshot', () => bgSnapshot());
+
+ipcMain.handle('bg:stop-task', async (_e, { hostId, pid } = {}) => {
+  /* 停止是破坏性的,而任务是靠进程特征匹配出来的 —— 理论上可能认错进程。
+     所以命令在这里构造(PID 会被校验),确认在界面上做,两边都不省。 */
+  const s = getSession(hostId);
+  const r = await s.ssh.exec(bgTasks.buildStopCommand(pid), { timeoutMs: 10000 });
+  const ok = /__STOP_SENT__/.test(r.stdout || '');
+  // 停掉后立刻重扫一次,免得面板上还挂着一个已经没了的任务
+  await bgScanHost(hostId).catch(() => {});
+  return { ok, output: (r.stdout || '').replace('__STOP_SENT__', '').trim() };
+});

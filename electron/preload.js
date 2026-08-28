@@ -32,6 +32,15 @@ contextBridge.exposeInMainWorld('api', {
     cancel: invoke('ask:cancel'),
     onProgress: on('ask:progress')
   },
+  /* 后台下载任务。start/stop 是显式的:轮询占 SSH 通道,
+     面板不看时必须停,否则会悄悄把远端 MaxSessions 吃光。 */
+  bg: {
+    start: invoke('bg:start'),
+    stop: invoke('bg:stop'),
+    snapshot: invoke('bg:snapshot'),
+    stopTask: invoke('bg:stop-task'),
+    onUpdate: on('bg:update')
+  },
   screenshot: {
     capture: invoke('screenshot:capture'),
     shortcutStatus: invoke('screenshot:shortcutStatus'),
