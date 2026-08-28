@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { tmpDir } = require('./helpers/tmp');
 
 const {
   walkLocalDir, buildRemoteWalkCommand, parseRemoteWalk,
@@ -10,7 +10,7 @@ const {
 } = require('../electron/ssh/transfer');
 
 function makeTree() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-xfer-'));
+  const root = tmpDir('ras-xfer-');
   fs.mkdirSync(path.join(root, 'src'));
   fs.mkdirSync(path.join(root, 'src', 'deep'));
   fs.mkdirSync(path.join(root, 'node_modules'));

@@ -10,6 +10,9 @@ const { EventEmitter } = require('events');
 const path = require('path');
 const { shellQuote } = require('./SSHManager');
 const { extractImagePaths, isDangerousCommand } = require('../chat/attachments');
+/* 输出截断留头也留尾:命令输出里最要紧的东西(报错、退出码、结论)几乎总在最后,
+   只 slice(0, N) 恰好把要看的那半截扔掉。 */
+const { clipOutput } = require('./outputClip');
 const { deepseekEnvPosix, deepseekEnvPowershell, resolveDeepseekModel } = require('./deepseek');
 const {
   dshEnvPosix, dshEnvPowershell, dshArgs, withHistory, describeExit, explainSilence
@@ -431,9 +434,14 @@ class AgentSession extends EventEmitter {
         if (it === 'agent_message') return this._emitMsg({ kind: 'text', text: item.text || '' });
         if (it === 'reasoning') return this._emitMsg({ kind: 'reasoning', text: item.text || '' });
         if (it === 'command_execution') {
-          const output = (item.aggregated_output || '').slice(0, 4000);
+          const output = clipOutput(item.aggregated_output || '');
           this._maybeEmitPermissionHint(output);
-          return this._emitMsg({ kind: 'tool', name: '执行命令', detail: item.command, output, dangerous: isDangerousCommand(item.command) });
+          return this._emitMsg({
+            kind: 'tool', name: '执行命令', detail: item.command, output,
+            // 退出码是确定事实,有它就不用靠关键词猜命令成没成
+            exitCode: item.exit_code ?? item.exitCode ?? null,
+            dangerous: isDangerousCommand(item.command)
+          });
         }
         if (it === 'file_change' || it === 'patch')
           return this._emitMsg({ kind: 'tool', name: '修改文件', detail: (item.changes || []).map(c => `${c.kind || ''} ${c.path || ''}`).join('\n') || item.path });
@@ -459,9 +467,9 @@ class AgentSession extends EventEmitter {
         return this._emitMsg({ kind: 'tool', name: '执行命令', detail: cmd, dangerous: isDangerousCommand(cmd) });
       }
       case 'exec_command_end': {
-        const output = (msg.aggregated_output || '').slice(0, 4000);
+        const output = clipOutput(msg.aggregated_output || '');
         this._maybeEmitPermissionHint(output);
-        return this._emitMsg({ kind: 'tool_output', output });
+        return this._emitMsg({ kind: 'tool_output', output, exitCode: msg.exit_code ?? null });
       }
       case 'patch_apply_begin':
         return this._emitMsg({ kind: 'tool', name: '修改文件', detail: Object.keys(msg.changes || {}).join('\n') });
@@ -524,7 +532,14 @@ class AgentSession extends EventEmitter {
             const text = typeof b.content === 'string' ? b.content
               : (b.content || []).map((c) => c.text || '').join('\n');
             this._maybeEmitPermissionHint(text);
-            if (text.trim()) this._emitMsg({ kind: 'tool_output', output: text.slice(0, 4000) });
+            if (text.trim()) {
+              this._emitMsg({
+                kind: 'tool_output',
+                output: clipOutput(text),
+                // claude 用 is_error 标记工具失败,比猜关键词准
+                exitCode: b.is_error ? 1 : null
+              });
+            }
           }
         }
         return;

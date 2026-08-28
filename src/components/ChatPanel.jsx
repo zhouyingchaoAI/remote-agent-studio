@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { outputSummary, looksFailed } from '../toolOutput.js';
 import { useStore, sendToAgent, isAwaitingConfirm, MAX_PANES } from '../store.js';
 import { useVoiceInput } from '../useVoiceInput.js';
 import { buildPromptHistory, stepPromptHistory } from '../promptHistory.js';
@@ -18,6 +19,72 @@ import { REASONING_EFFORTS } from '../reasoningEfforts.js';
 import { normalizePastedPath, looksLikePath } from '../pastePath.js';
 
 /* 统一 diff(unified diff)红绿渲染 */
+/**
+ * 命令输出。
+ *
+ * 之前这里是整个"看不到中间过程"的根源:codex 新格式把输出挂在 tool 消息的
+ * output 字段上,而渲染器只画命令、**根本不看 output** —— 于是对话里只剩
+ * 一行命令和一段结论,你没法验证结论对不对。
+ *
+ * 折叠但给一行摘要:全展开会把对话冲垮,全折起来等于没有中间过程。
+ * 失败的默认展开 —— 那正是你想看的那种。
+ */
+function ToolOutput({ output = '', exitCode }) {
+  const failed = looksFailed(output, exitCode);
+  const [open, setOpen] = useState(failed);
+  const { lines, preview } = outputSummary(output);
+  if (!String(output).trim()) return null;
+  return (
+    <div className={`tool-output${failed ? ' failed' : ''}`}>
+      <button className="tool-output-head" onClick={() => setOpen(!open)}>
+        <span className="chip">{failed ? '⚠' : '📄'} 输出 {open ? '▾' : '▸'}</span>
+        <span className="muted small">{lines} 行</span>
+        {exitCode != null && (
+          <span className={`small ${Number(exitCode) === 0 ? 'muted' : 'exit-bad'}`}>退出码 {exitCode}</span>
+        )}
+        {/* 折叠时也让人看见点东西:取最后一行非空输出 —— 结论在末尾,不在开头 */}
+        {!open && preview && <code className="tool-output-preview">{preview}</code>}
+      </button>
+      {open && (
+        <>
+          <pre className="dim tool-output-body">{output}</pre>
+          <button className="btn tiny ghost" onClick={() => window.api.clipboard.writeText(output)}>
+            复制输出
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** 一次工具调用:命令 + 它的输出 */
+function ToolCall({ m }) {
+  const [showFull, setShowFull] = useState(false);
+  const detail = String(m.detail || '');
+  // 200 字符经常正好把命令切在关键参数上,所以留一个"看全"的出口
+  const long = detail.length > 200;
+  return (
+    <div className={`msg thin ${m.dangerous ? 'tool-dangerous' : ''}`}>
+      <div className="row gap tool-head">
+        <span className={`chip tool ${m.dangerous ? 'danger' : ''}`}>{m.dangerous ? '⚠️' : '🔧'} {m.name}</span>
+        {m.dangerous && <span className="danger-tag">危险操作</span>}
+        {detail && (
+          <code className="tool-detail" onClick={() => long && setShowFull(!showFull)}
+            title={long ? '点击展开完整命令' : ''}>
+            {showFull || !long ? detail : `${detail.slice(0, 200)}…`}
+          </code>
+        )}
+        {long && (
+          <button className="btn tiny ghost" onClick={() => window.api.clipboard.writeText(detail)}>复制</button>
+        )}
+      </div>
+      {m.diff && <EditDiff diff={m.diff} />}
+      {/* 这一行是这次修复的核心:输出本来就传过来了,只是从没被画出来 */}
+      <ToolOutput output={m.output} exitCode={m.exitCode} />
+    </div>
+  );
+}
+
 function DiffView({ text = '' }) {
   return (
     <pre className="diff-view">
@@ -1113,14 +1180,7 @@ function Message({ m, hostId, convId, onEnableSystemMode, isLast, running, onQui
         </div>
       );
     case 'tool':
-      return (
-        <div className={`msg thin ${m.dangerous ? 'tool-dangerous' : ''}`}>
-          <span className={`chip tool ${m.dangerous ? 'danger' : ''}`}>{m.dangerous ? '⚠️' : '🔧'} {m.name}</span>
-          {m.dangerous && <span className="danger-tag">危险操作</span>}
-          {m.detail && <code className="tool-detail">{String(m.detail).slice(0, 200)}</code>}
-          {m.diff && <EditDiff diff={m.diff} />}
-        </div>
-      );
+      return <ToolCall m={m} />;
     case 'diff':
       return (
         <div className="msg thin" onClick={() => setOpen(!open)}>
@@ -1129,12 +1189,7 @@ function Message({ m, hostId, convId, onEnableSystemMode, isLast, running, onQui
         </div>
       );
     case 'tool_output':
-      return (
-        <div className="msg thin" onClick={() => setOpen(!open)}>
-          <span className="chip">📄 输出 {open ? '▾' : '▸'}</span>
-          {open && <pre className="dim">{m.output}</pre>}
-        </div>
-      );
+      return <ToolOutput output={m.output} exitCode={m.exitCode} />;
     case 'error':
       return <div className="msg error-msg"><pre>{m.text}</pre></div>;
     case 'stderr':

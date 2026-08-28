@@ -85,12 +85,27 @@ function buildScanCommand() {
       + '|*rsync*|*scp*|*wget*|*curl*-O*|*curl*-o*'
       + '|*"docker "*build*|*make*|*cmake*|*ninja*|*cargo*build*|*"go "*build*'
       + '|*mvn*|*gradle*|*torchrun*|*deepspeed*|*accelerate*launch*'
-      + '|*"docker "*run*|*"docker "*create*|*docker-compose*up*|*"docker "*compose*up*) ;;',
-    '    *) continue ;;',
+      + '|*"docker "*run*|*"docker "*create*|*docker-compose*up*|*"docker "*compose*up*) long=0 ;;',
+    /* 没匹配上的:只要跑够久,也留一条(打 LONG 标记,界面默认不显示)。
+       KINDS 是一份**人工列举**,一定会漏 —— 智能体完全可能起一个我没想到的
+       长命令。漏掉的那个恰恰最需要被看见,因为你连它叫什么都不知道。
+       但默认全列会被 sshd/agetty 这类常驻守护进程淹没,所以做成开关。 */
+    '    *) case "$a" in',
+    /* 常驻守护进程排除掉:它们永远在跑,列出来只会把真正的任务淹没。
+       模式里不放引号和反斜杠 —— case 的 glob 里它们的转义规则很绕,
+       写错了不会报错,只会静默地不匹配。 */
+    '         *sshd*|*systemd*|*agetty*|*crond*|*cron*|*rsyslog*|*dbus*|*polkit*'
+      + '|*NetworkManager*|*containerd-shim*|*docker-proxy*|*chronyd*|*ntpd*'
+      + '|*auditd*|*irqbalance*|*udev*|*login*|*bash*|*-zsh*) continue ;;',
+    '       esac',
+    /* 跑够 5 分钟才算"后台任务"。短命进程每轮扫描都在变,
+       列出来是一片闪烁的噪音,而且它们本来也不需要盯。 */
+    '       [ "${e:-0}" -ge 300 ] 2>/dev/null || continue',
+    '       long=1 ;;',
     '  esac',
     `  w=$(awk '/^write_bytes:/{print $2}' /proc/$p/io 2>/dev/null || echo -1)`,
     `  r=$(awk '/^rchar:/{print $2}' /proc/$p/io 2>/dev/null || echo -1)`,
-    `  printf 'TASK%s%s%s%s%s%s%s%s%s\\n' "\x1f" "$p" "\x1f" "$e" "\x1f" "\${w:--1}" "\x1f" "\${r:--1}" "\x1f$a"`,
+    `  printf 'TASK%s%s%s%s%s%s%s%s%s%s%s\\n' "\x1f" "$p" "\x1f" "$e" "\x1f" "\${w:--1}" "\x1f" "\${r:--1}" "\x1f" "\${long:-0}" "\x1f$a"`,
     'done',
     // 守护进程的写入量:docker pull 的真实进度只能从这里看
     'for d in dockerd containerd; do',
@@ -144,16 +159,19 @@ function parseScan(text) {
   const units = [];
   for (const line of String(text || '').split('\n')) {
     const parts = line.split(FIELD);
-    // TASK ␟ pid ␟ etimes ␟ write_bytes ␟ rchar ␟ 完整命令行
-    if (parts[0] === 'TASK' && parts.length >= 6) {
+    // TASK ␟ pid ␟ etimes ␟ write_bytes ␟ rchar ␟ long ␟ 完整命令行
+    if (parts[0] === 'TASK' && parts.length >= 7) {
       const pid = Number(parts[1]);
       if (!Number.isInteger(pid) || pid <= 0) continue;
-      // 命令行本身可能含分隔符?不会,但 slice+join 比 parts[5] 更稳
-      const command = redact(parts.slice(5).join(FIELD).trim());
+      const command = redact(parts.slice(6).join(FIELD).trim());
       const kind = classifyKind(command);
       tasks.push({
         pid,
         elapsedSec: Math.max(0, Number(parts[2]) || 0),
+        /* 没匹配上任何已知类型、只是"跑得久"而被捞进来的。
+           界面默认不显示这一类 —— KINDS 是人工列举的,一定会漏,
+           但把所有长跑进程都摊开又会淹掉真正的任务。 */
+        longRunning: parts[5] === '1',
         /* -1 表示读不到 /proc/<pid>/io(不是同一个用户,或内核没开)。
            必须和"读到了 0"区分开:前者是测不了,后者是真没写盘。 */
         writeBytes: Number(parts[3]),

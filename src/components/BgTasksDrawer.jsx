@@ -174,6 +174,11 @@ function TaskRow({ task, hostName }) {
 export default function BgTasksDrawer({ open, onClose, hostName }) {
   const [snap, setSnap] = useState({ tasks: [], warnings: [], running: 0, stalled: 0, failed: 0 });
   const [showDone, setShowDone] = useState(true);
+  /* 「其他长跑进程」默认关。
+     认得出的类型是一份人工列举,一定会漏 —— 所以扫描顺带把跑了 5 分钟以上、
+     又不是常驻守护进程的都捞了回来。但默认摊开会淹掉真正的任务,
+     所以做成开关:平时清爽,找不到东西时一键看全。 */
+  const [showOther, setShowOther] = useState(false);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -187,8 +192,10 @@ export default function BgTasksDrawer({ open, onClose, hostName }) {
 
   if (!open) return null;
 
-  const tasks = (snap.tasks || []).filter((t) =>
-    showDone || t.state === 'running' || t.state === 'stalled');
+  const tasks = (snap.tasks || [])
+    .filter((t) => showOther || !t.longRunning)
+    .filter((t) => showDone || t.state === 'running' || t.state === 'stalled');
+  const otherCount = (snap.tasks || []).filter((t) => t.longRunning).length;
   const finishedCount = (snap.tasks || []).length - (snap.tasks || [])
     .filter((t) => t.state === 'running' || t.state === 'stalled').length;
 
@@ -204,6 +211,13 @@ export default function BgTasksDrawer({ open, onClose, hostName }) {
             {snap.failed ? ` · ${snap.failed} 失败` : ''}
           </span>
           <span className="flex1" />
+          {otherCount > 0 && (
+            <label className="check-row inline"
+              title="跑了 5 分钟以上、但不属于已知类型的进程。已排除 sshd/systemd 这类常驻守护进程">
+              <input type="checkbox" checked={showOther} onChange={(e) => setShowOther(e.target.checked)} />
+              <span className="small">其他长跑进程 {otherCount}</span>
+            </label>
+          )}
           {finishedCount > 0 && (
             <label className="check-row inline" title="刚跑完的任务会保留 10 分钟">
               <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} />

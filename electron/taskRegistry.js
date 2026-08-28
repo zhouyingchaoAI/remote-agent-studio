@@ -208,6 +208,7 @@ function mergeHostTasks(prevHost, scanned, hostId, { now = Date.now(), retainMs 
       bytes: t.bytes,
       bytesPerSec: t.bytesPerSec,
       bytesSource: t.bytesSource,
+      longRunning: !!t.longRunning,
       wasStalled: t.stalled || (prevHost || []).find((p) => p.pid === t.pid)?.wasStalled || false
     });
   }

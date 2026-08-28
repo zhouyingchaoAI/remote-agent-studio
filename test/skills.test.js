@@ -1,7 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
@@ -12,6 +11,7 @@ const {
   listBuiltin, writeFileCommands, writeFileCommandsWindows, BUILTIN_DIR
 } = require('../electron/skillsService');
 const { extractSkillEntries, parseRepoSpec } = require('../electron/skillsMarket');
+const { tmpDir } = require('./helpers/tmp');
 
 /* ------------------------------------------------------------ 解析 */
 
@@ -126,7 +126,7 @@ printf '%s\\n' 'it'"'"'s tricky'
 
 结尾中文。
 `;
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-skill-'));
+  const tmp = tmpDir('ras-skill-');
   const target = path.join(tmp, 'sub', 'SKILL.md');
   const cmd = writeFileCommands(target, nasty).join(' && ');
 

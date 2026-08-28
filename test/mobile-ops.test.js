@@ -2,7 +2,6 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { execFileSync } = require('child_process');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
 const {
@@ -12,6 +11,7 @@ const {
 const { route } = require('../electron/mobileGateway');
 const mobileService = require('../electron/mobileService');
 const { lintSkill } = require('../electron/skills');
+const { tmpDir } = require('./helpers/tmp');
 
 /* ------------------------------------------------------------ 项目发现 */
 
@@ -77,7 +77,7 @@ test('查看类型是白名单,任意命令进不来', () => {
 
 test('目录名里的 shell 元字符被正确转义(真跑一遍)', () => {
   // 真实会遇到:目录带空格、带单引号
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-proj-'));
+  const tmp = tmpDir('ras-proj-');
   const weird = path.join(tmp, "my project's dir");
   fs.mkdirSync(weird);
   fs.writeFileSync(path.join(weird, 'note.txt'), '第一行\n第二行\n第三行\n');

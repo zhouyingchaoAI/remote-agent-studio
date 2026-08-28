@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
+const { tmpDir } = require('./helpers/tmp');
 
 const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 
@@ -64,9 +65,8 @@ test('按扩展名给出类型标签与配色,Word 与 Excel 要能一眼区分'
 });
 
 test('端到端:真实 docx 落在产物目录里能被发现并标为 file', async () => {
-  const os = require('os');
   const { AttachmentService } = require('../electron/chat/AttachmentService');
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-artifact-doc-'));
+  const home = tmpDir('ras-artifact-doc-');
   const service = new AttachmentService({}, { homeDir: home });
   const dir = await service.ensureArtifactDir({ convId: 'c1', messageId: 'm1', isLocal: true });
 

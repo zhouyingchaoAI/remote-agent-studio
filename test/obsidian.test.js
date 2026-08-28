@@ -1,13 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const {
   sanitizeNoteName, renderFrontmatter, normalizeTags, renderNote,
   mergeMoc, MOC_BEGIN, MOC_END, parseNotesJson, normalizeNotes, renderBriefNote
 } = require('../electron/obsidianNotes');
 const { notePath, sanitizeRelFolder, assertInsideVault } = require('../electron/obsidian');
+const { tmpDir } = require('./helpers/tmp');
 
 test('文件名净化:挡住路径穿越与非法字符', () => {
   assert.equal(sanitizeNoteName('../../etc/passwd'), 'etc passwd');
@@ -25,7 +24,7 @@ test('相对目录净化不允许逃出 vault', () => {
 });
 
 test('assertInsideVault 拒绝 vault 之外的目标', () => {
-  const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'vault-'));
+  const vault = tmpDir('vault-');
   assert.doesNotThrow(() => assertInsideVault(vault, path.join(vault, 'a/b.md')));
   assert.throws(() => assertInsideVault(vault, path.join(vault, '../evil.md')), /vault 之外/);
 });

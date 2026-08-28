@@ -926,3 +926,30 @@ progress { width: 140px; height: 6px; }
   white-space: pre-wrap; word-break: break-all;
   max-height: 52px; overflow: hidden;
 }
+
+/* ---------------------------------------------- 命令输出(对话里的中间过程) */
+.tool-head { flex-wrap: wrap; }
+.tool-detail { cursor: default; word-break: break-all; }
+.tool-detail[title] { cursor: pointer; }
+
+.tool-output { margin-top: 6px; }
+.tool-output-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: none; border: none; padding: 2px 0; cursor: pointer;
+  text-align: left; color: inherit; min-width: 0;
+}
+.tool-output-head:hover .chip { border-color: var(--accent); }
+/* 折叠时的一行摘要:取最后一行非空输出 —— 结论在末尾,不在开头 */
+.tool-output-preview {
+  font-size: 11px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1;
+}
+.tool-output-body {
+  max-height: 340px; overflow: auto;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px; margin: 5px 0; font-size: 12px; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-all;
+}
+/* 失败的输出默认展开,并且看一眼就知道 */
+.tool-output.failed .tool-output-body { border-color: var(--red); }
+.exit-bad { color: var(--red); }

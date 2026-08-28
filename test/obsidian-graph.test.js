@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { tmpDir } = require('./helpers/tmp');
 const {
   extractLinks, extractTags, extractTitle, buildGraph, scanVault
 } = require('../electron/obsidianGraph');
@@ -82,7 +82,7 @@ test('标签统计按出现次数降序', () => {
 });
 
 test('扫描真实目录:跳过 .obsidian,统计正确', () => {
-  const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'vault-graph-'));
+  const vault = tmpDir('vault-graph-');
   fs.mkdirSync(path.join(vault, '.obsidian'), { recursive: true });
   fs.writeFileSync(path.join(vault, '.obsidian', 'app.json'), '{}');
   fs.mkdirSync(path.join(vault, 'RAS'), { recursive: true });

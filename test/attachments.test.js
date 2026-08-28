@@ -13,6 +13,7 @@ const {
   extractImagePaths
 } = require('../electron/chat/attachments');
 const { AttachmentService } = require('../electron/chat/AttachmentService');
+const { tmpDir, sparseFile } = require('./helpers/tmp');
 
 test('validates the 20 MB limit and required metadata', () => {
   assert.doesNotThrow(() => validateFiles([{ path: '/tmp/a', name: 'a.png', size: MAX_ATTACHMENT_BYTES }]));
@@ -50,7 +51,7 @@ test('extracts and deduplicates nested local image paths while ignoring URLs', (
 });
 
 test('prepare creates a remote message directory before uploading files', async () => {
-  const localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-upload-'));
+  const localDir = tmpDir('ras-upload-');
   const localPath = path.join(localDir, 'note.md');
   fs.writeFileSync(localPath, 'note');
   const calls = [];
@@ -75,7 +76,7 @@ test('prepare creates a remote message directory before uploading files', async 
 });
 
 test('local preparation copies into the conversation cache and image resolution returns a data URL', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-attachment-'));
+  const dir = tmpDir('ras-attachment-');
   const imagePath = path.join(dir, 'tiny.png');
   fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   const ssh = { exec: async () => { throw new Error('must not execute'); } };
@@ -96,9 +97,12 @@ test('local preparation copies into the conversation cache and image resolution 
 });
 
 test('local preparation enforces the actual file size instead of renderer metadata', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-size-'));
+  const dir = tmpDir('ras-size-');
   const largePath = path.join(dir, 'large.bin');
-  fs.writeFileSync(largePath, Buffer.alloc(MAX_ATTACHMENT_BYTES + 1));
+  /* 稀疏文件:stat().size 就是这个数,但几乎不占磁盘也不耗时。
+     这里只验证「按实际大小拒绝」,真写 200 MB 没有意义 ——
+     以前就是这一行把测试机的 /tmp 一次次撑满的。 */
+  sparseFile(largePath, MAX_ATTACHMENT_BYTES + 1);
   const service = new AttachmentService({}, { homeDir: dir });
   await assert.rejects(() => service.prepare({
     hostId: 'local', convId: 'c1', messageId: 'm1', isLocal: true,
@@ -108,7 +112,7 @@ test('local preparation enforces the actual file size instead of renderer metada
 });
 
 test('image resolution rejects paths outside the conversation cache', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-scope-'));
+  const dir = tmpDir('ras-scope-');
   const outside = path.join(dir, 'outside.png');
   fs.writeFileSync(outside, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   const service = new AttachmentService({}, { homeDir: path.join(dir, 'home') });
@@ -119,7 +123,7 @@ test('image resolution rejects paths outside the conversation cache', async () =
 
 test('image resolution allows images generated in the conversation working dir (cwd)', async () => {
   // agent(尤其系统权限的 Claude Code)常把图片写进工作目录而非产物目录 —— 应可预览
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-cwd-'));
+  const cwd = tmpDir('ras-cwd-');
   const img = path.join(cwd, 'zh-account-model.png');
   fs.writeFileSync(img, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   const service = new AttachmentService({}, { homeDir: path.join(cwd, 'home') });
@@ -135,7 +139,7 @@ test('image resolution allows images generated in the conversation working dir (
 });
 
 test('remote image cache keys include the complete remote path', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-cache-key-'));
+  const dir = tmpDir('ras-cache-key-');
   let downloads = 0;
   const ssh = {
     exec: async (command) => {
@@ -188,7 +192,7 @@ test('listArtifacts merges scanned and event paths without duplicates', async ()
 });
 
 test('local artifact discovery collapses escaped Windows path duplicates', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-win-artifact-'));
+  const home = tmpDir('ras-win-artifact-');
   const service = new AttachmentService({}, { homeDir: home });
   const dir = await service.ensureArtifactDir({ convId: 'c1', messageId: 'm1', isLocal: true });
   const imagePath = path.join(dir, 'preview.png');

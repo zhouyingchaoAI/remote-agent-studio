@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { tmpDir } = require('./helpers/tmp');
 
 const {
   ErrorLog, redact, classifyError, fingerprint, makeEntry, aggregate
@@ -114,7 +114,7 @@ test('空输入与脏数据不崩', () => {
 /* ------------------------------------------------------------ 落盘 */
 
 test('端到端:写入、读回(最新在前)、清空', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-errlog-'));
+  const dir = tmpDir('ras-errlog-');
   const log = new ErrorLog(dir);
   log.append({ source: 'agent', text: '第一个错' });
   log.append({ source: 'ipc:agent:send', text: '第二个错' });
@@ -130,7 +130,7 @@ test('端到端:写入、读回(最新在前)、清空', () => {
 });
 
 test('单行坏了不该让整个日志页打不开', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-errlog-bad-'));
+  const dir = tmpDir('ras-errlog-bad-');
   const log = new ErrorLog(dir);
   log.append({ source: 'a', text: '好的一条' });
   fs.appendFileSync(log.file, '{这不是合法 JSON\n', 'utf8');
@@ -144,7 +144,7 @@ test('单行坏了不该让整个日志页打不开', () => {
 test('记日志失败绝不能影响主流程 —— 它只是观测', () => {
   /* 造一个必然失败的目标:把一个普通文件当作父目录,mkdir 会立刻 ENOTDIR。
      (别用 /proc 之类的特殊文件系统,不同环境下行为不一致,还可能直接挂住) */
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-errlog-ro-'));
+  const dir = tmpDir('ras-errlog-ro-');
   const blocker = path.join(dir, 'iam-a-file');
   fs.writeFileSync(blocker, 'x');
 

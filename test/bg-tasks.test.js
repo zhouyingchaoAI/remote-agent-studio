@@ -6,7 +6,9 @@ const bg = require('../electron/bgTasks');
 
 const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 const F = bg.FIELD;
-const taskLine = (pid, et, w, r, cmd) => ['TASK', pid, et, w, r, cmd].join(F);
+/* 第 6 列是 long 标记:没匹配上已知类型、只是跑得久而被捞进来的进程。
+   默认传 0(= 认得出的任务),需要时单独传。 */
+const taskLine = (pid, et, w, r, cmd, long = 0) => ['TASK', pid, et, w, r, long, cmd].join(F);
 
 /* ------------------------------------------------------------ 分隔符 */
 
@@ -336,4 +338,47 @@ test('systemd 单元不显示"进度读不到"', () => {
   // 那句话是给进程用的(读不到 /proc/<pid>/io);单元根本没有 pid,说它没意义
   const ui = read('src/components/BgTasksDrawer.jsx');
   assert.match(ui, /isHost && task\.kind !== 'systemd' &&/);
+});
+
+/* -------------------------------------- 没被认出来的长跑进程也要能看到 */
+
+test('跑够久但没匹配上已知类型的进程也会被捞回来', () => {
+  /* KINDS 是一份**人工列举**,一定会漏 —— 智能体完全可能起一个我没想到的
+     长命令。而漏掉的那个恰恰最需要被看见:你连它叫什么都不知道。 */
+  const r = bg.parseScan(taskLine(88, 900, 10, 0, '/opt/x/weird-job --forever', 1));
+  assert.equal(r.tasks.length, 1);
+  assert.equal(r.tasks[0].longRunning, true);
+  assert.equal(r.tasks[0].kind, 'other');
+});
+
+test('认得出的任务不带 long 标记', () => {
+  const r = bg.parseScan(taskLine(1, 10, 0, 0, 'docker pull nginx', 0));
+  assert.equal(r.tasks[0].longRunning, false);
+});
+
+test('long 标记会一路传到面板的任务对象上', () => {
+  const s = bg.mergeTasks([], scanOf([t({ longRunning: true })]), 0);
+  assert.equal(s[0].longRunning, true);
+});
+
+test('只有跑够 5 分钟的才纳入,短命进程不算', () => {
+  // 短命进程每轮扫描都在变,列出来是一片闪烁的噪音,本来也不需要盯
+  assert.match(bg.buildScanCommand(), /-ge 300/);
+});
+
+test('常驻守护进程被排除', () => {
+  // 不排除的话,sshd/systemd 这些永远在跑的会把真正的任务淹没
+  const cmd = bg.buildScanCommand();
+  for (const d of ['sshd', 'systemd', 'agetty', 'rsyslog', 'containerd-shim']) {
+    assert.ok(cmd.includes(`*${d}*`), `没排除 ${d}`);
+  }
+});
+
+test('这一类默认不显示,但给一个开关', () => {
+  /* 默认摊开会淹掉真正的任务;完全不收又会漏。
+     所以:照收,默认藏,需要时一键看全。 */
+  const ui = read('src/components/BgTasksDrawer.jsx');
+  assert.match(ui, /useState\(false\)/);
+  assert.match(ui, /showOther \|\| !t\.longRunning/);
+  assert.match(ui, /其他长跑进程/);
 });

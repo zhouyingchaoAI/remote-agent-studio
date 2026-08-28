@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { tmpDir } = require('./helpers/tmp');
 const {
   decodeProjectDir, textFromEvent, parseSessionFile, scanLocalSessions, summarize
 } = require('../electron/cliSessions');
@@ -64,7 +64,7 @@ test('超长会话按上限截断', () => {
 });
 
 test('扫描真实目录结构:按项目归类、过滤过短会话', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'home-'));
+  const home = tmpDir('home-');
   const proj = path.join(home, '.claude', 'projects', '-Users-me-demo');
   fs.mkdirSync(proj, { recursive: true });
   // 有内容的会话
