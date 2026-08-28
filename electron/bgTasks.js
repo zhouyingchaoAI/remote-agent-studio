@@ -139,8 +139,11 @@ function buildScanCommand() {
     /* 最后一行日志:服务在拉镜像时,进度和报错**都只在这里**。
        没有它,面板只能说"在启动中",等于没说。
        顺手删掉日志里的分隔符,否则里面正好出现一个就会把字段切错位。 */
-    '    last=$(journalctl -u "$u" -n 1 --no-pager -o cat 2>/dev/null'
-      + " | tr -d '\\037' | tail -c 200)",
+    /* 取最后 6 行而不是 1 行:一次拉取会把每一层刷成一行,
+       只看最后一行常常正好落在"Verifying"这类没有数字的行上,
+       而带 `1.2GB/4.5GB` 的那条就在它上面一两行。合成一行传回来。 */
+    '    last=$(journalctl -u "$u" -n 6 --no-pager -o cat 2>/dev/null'
+      + " | tr -d '\\037' | tr '\\n' '|' | tail -c 400)",
     "    printf 'UNIT\\037%s\\037%s\\037%s\\037%s\\037%s\\n'"
       + ' "$u" "$st" "$sub" "$since" "$last"',
     '  done',
@@ -234,9 +237,44 @@ function unitTask(u, { now = Date.now() } = {}) {
     /* 这一行是整条记录里最有用的东西:服务拉镜像时,进度和报错都只在这里。
        没有它,面板只能说"在启动中",等于没说。 */
     lastLog: u.lastLog,
+    /* 日志里如果有 `1.2GB/4.5GB`,那就是**真实**的总量 —— 界面据此画进度条。
+       解析不到就是 null,界面不画,绝不用别的数字凑一个。 */
+    progress: parseSizeProgress(u.lastLog),
+    /* 说清这个百分比是什么的百分比。docker 是按层刷进度的,
+       日志里那对数字是**当前这一层**,不是整个镜像 ——
+       不写明的话,进度条走到 100% 又跳回去会像出错了。 */
+    progressNote: '来自服务日志(docker 按层计,不是整个镜像)',
     note: starting ? '单元仍在 activating —— 尚未就绪,常见于还在拉镜像' : '',
     sampledAtMs: now
   };
+}
+
+/* ----------------------------------------------------- 从日志里抠出真进度 */
+
+const SIZE_UNITS = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3, TB: 1024 ** 4 };
+
+/**
+ * 从一行输出里找 `1.2GB/4.5GB` 这样的进度。
+ *
+ * 这是**唯一**能拿到真实总量的途径。字节数只能告诉你"下了多少",
+ * 而人真正想知道的是"还有多少" —— 截图里那句「还有多少没下载」问的就是这个。
+ * docker pull、wget、curl 的进度行都是这个格式。
+ *
+ * 取最后一处匹配:一行里可能有多层的数字,越靠后越新。
+ */
+function parseSizeProgress(text) {
+  const re = /(\d+(?:\.\d+)?)\s*([kKMGT]?i?B)\s*\/\s*(\d+(?:\.\d+)?)\s*([kKMGT]?i?B)/g;
+  let last = null;
+  let m;
+  while ((m = re.exec(String(text || '')))) last = m;
+  if (!last) return null;
+  const unit = (u) => SIZE_UNITS[String(u).replace('i', '').toUpperCase().replace(/^K/, 'K')] || SIZE_UNITS[`${String(u)[0].toUpperCase()}B`] || 1;
+  const transferred = Number(last[1]) * unit(last[2]);
+  const total = Number(last[3]) * unit(last[4]);
+  /* 总量必须大于已下载才可信。反过来的话多半是我们把两个不相干的数字
+     配成了一对(比如内存占用),宁可不显示也不要给一个 300% 的进度条。 */
+  if (!(total > 0) || transferred > total * 1.05) return null;
+  return { transferred, total };
 }
 
 /* --------------------------------------------------------------- 进度 */
@@ -251,8 +289,11 @@ const STALL_AFTER_MS = 90 * 1000;   // 连续这么久没有字节增长才叫�
  * 这正是本模块反复强调要避免的那类错误。
  */
 const STALL_KINDS = new Set([
-  'docker-pull', 'ollama', 'hf', 'git-clone', 'pip', 'npm', 'apt', 'rsync', 'scp', 'wget', 'curl'
+  'docker-pull', 'docker-run', 'ollama', 'hf', 'git-clone', 'pip', 'npm', 'apt', 'rsync', 'scp', 'wget', 'curl'
 ]);
+
+/** 这几类的实际下载都发生在 docker 守护进程里,客户端进程不写盘 */
+const DOCKER_KINDS = new Set(['docker-pull', 'docker-run', 'docker-build']);
 
 /**
  * 拿这次扫描和上次比,算出速率和是否停滞。
@@ -267,14 +308,19 @@ const STALL_KINDS = new Set([
 function mergeTasks(prev, scan, nowMs) {
   const byPid = new Map((prev || []).map((t) => [t.pid, t]));
   const dockerBytes = pickDaemonBytes(scan.daemons);
-  const dockerTasks = scan.tasks.filter((t) => t.kind === 'docker-pull');
+  /* 哪些任务的字节数该从守护进程上读。
+     **不只是 docker pull** —— `docker run` 在本地没有镜像时会隐式拉取,
+     `docker build` 拉基础镜像同理。截图里那条「启动容器 docker run」
+     跑了 15 分钟一直显示 0 B,就是因为这里只认了 docker-pull:
+     客户端进程本来就不写盘,活是 dockerd 干的。 */
+  const dockerTasks = scan.tasks.filter((t) => DOCKER_KINDS.has(t.kind));
 
   return scan.tasks.map((t) => {
     const old = byPid.get(t.pid);
     /* docker pull 的字节数要从守护进程上取。
        只有恰好一个拉取在跑时才能归到它头上 —— 有多个时无法区分是谁下的,
        与其平摊出一个假数字,不如老实说进度未知。 */
-    const useDaemon = t.kind === 'docker-pull' && dockerTasks.length === 1 && dockerBytes >= 0;
+    const useDaemon = DOCKER_KINDS.has(t.kind) && dockerTasks.length === 1 && dockerBytes >= 0;
     const bytes = useDaemon ? dockerBytes : t.writeBytes;
     const measurable = bytes >= 0;
 
@@ -387,9 +433,9 @@ function diskWarning(disks = [], { minFreeBytes = 5 * 1024 ** 3 } = {}) {
 }
 
 module.exports = {
-  KINDS, STALL_AFTER_MS, STALL_KINDS, FIELD,
+  KINDS, STALL_AFTER_MS, STALL_KINDS, DOCKER_KINDS, FIELD,
   classifyKind, kindLabel,
-  buildScanCommand, parseScan, mergeTasks, pickDaemonBytes, unitTask,
+  buildScanCommand, parseScan, mergeTasks, pickDaemonBytes, unitTask, parseSizeProgress,
   formatBytes, formatDuration, taskTitle,
   buildStopCommand, diskWarning
 };

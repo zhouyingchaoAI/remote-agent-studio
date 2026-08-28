@@ -70,13 +70,19 @@ export function BgTasksBadge({ onClick, hostId = '', convId = '' }) {
 }
 
 /** 有确切总量时才画进度条 —— 画一根不知道走到哪的条,比不画更误导 */
-function ProgressBar({ p }) {
+function ProgressBar({ p, note }) {
   if (!p || !p.total || !(p.total > 0)) return null;
   const pct = Math.min(100, Math.round(((p.transferred || 0) / p.total) * 100));
   return (
-    <div className="bg-bar" title={`${fmtBytes(p.transferred)} / ${fmtBytes(p.total)}`}>
-      <div className="bg-bar-fill" style={{ width: `${pct}%` }} />
-      <span className="bg-bar-text">{pct}%</span>
+    <div className="bg-bar-wrap">
+      <div className="bg-bar" title={note || `${fmtBytes(p.transferred)} / ${fmtBytes(p.total)}`}>
+        <div className="bg-bar-fill" style={{ width: `${pct}%` }} />
+        <span className="bg-bar-text">
+          {pct}% · {fmtBytes(p.transferred)} / {fmtBytes(p.total)}
+        </span>
+      </div>
+      {/* 说清这是什么的百分比:docker 按层刷,走到 100% 又跳回去不是出错 */}
+      {note && <span className="bg-bar-note small muted">{note}</span>}
     </div>
   );
 }
@@ -114,7 +120,7 @@ function TaskRow({ task, hostName }) {
         )}
       </div>
 
-      <ProgressBar p={task.progress} />
+      <ProgressBar p={task.progress} note={task.progressNote} />
 
       <div className="row gap bg-task-meta small muted">
         {hostName && <span>{hostName}</span>}

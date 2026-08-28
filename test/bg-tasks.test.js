@@ -383,3 +383,67 @@ test('这一类默认不显示,但给一个开关', () => {
   assert.match(ui, /showOther \|\| !t\.longRunning/);
   assert.match(ui, /其他长跑进程/);
 });
+
+/* ------------------------------------------------ 真的能看到下载进度 */
+
+test('docker run / build 的字节数也按 dockerd 算', () => {
+  /* 截图里那条「启动容器 docker run」跑了 15 分钟一直显示 0 B ——
+     因为之前只认 docker-pull。可 docker run 在本地没镜像时会隐式拉取,
+     客户端进程本来就不写盘,活是 dockerd 干的。 */
+  const mk = (kind) => t({ pid: 9, kind, command: 'docker run --rm x', writeBytes: 0 });
+  for (const kind of ['docker-run', 'docker-build', 'docker-pull']) {
+    let s = bg.mergeTasks([], scanOf([mk(kind)], { dockerd: 0 }), 0);
+    s = bg.mergeTasks(s, scanOf([mk(kind)], { dockerd: 200 * 1024 * 1024 }), 10000);
+    assert.equal(s[0].bytesSource, 'daemon', `${kind} 应按 dockerd 计`);
+    assert.equal(s[0].bytesPerSec, 20 * 1024 * 1024);
+  }
+  assert.ok(bg.DOCKER_KINDS.has('docker-run'));
+});
+
+test('从日志里解析出真实的已下载/总量', () => {
+  /* 这是**唯一**能拿到真实总量的途径。字节数只能说"下了多少",
+     而人想知道的是"还有多少"—— 截图里那句「还有多少没下载」问的就是它。 */
+  const r = bg.parseSizeProgress('Downloading [====>    ]  1.2GB/4.5GB');
+  assert.ok(Math.abs(r.transferred - 1.2 * 1024 ** 3) < 1);
+  assert.ok(Math.abs(r.total - 4.5 * 1024 ** 3) < 1);
+});
+
+test('一行里有多层时取最后一处 —— 越靠后越新', () => {
+  const r = bg.parseSizeProgress('a1: 512MB/2GB | b2: 1.5GB/3GB');
+  assert.equal(r.total, 3 * 1024 ** 3);
+});
+
+test('解析不到就返回 null,绝不拿别的数字凑', () => {
+  assert.equal(bg.parseSizeProgress('Pulling fs layer'), null);
+  assert.equal(bg.parseSizeProgress(''), null);
+  assert.equal(bg.parseSizeProgress(null), null);
+});
+
+test('已下载大于总量时判为解析错误', () => {
+  /* 多半是把两个不相干的数字配成了一对(比如内存占用)。
+     宁可不显示,也不要给一个 300% 的进度条。 */
+  assert.equal(bg.parseSizeProgress('mem 8GB/4GB'), null);
+});
+
+test('服务任务带上解析出的进度和一句说明', () => {
+  const line = ['UNIT', 'a.service', 'activating', 'start', '1',
+    'Downloading 2.1GB/8.4GB'].join(F);
+  const u = bg.parseScan(line).units[0];
+  const task = bg.unitTask(u, { now: 0 });
+  assert.ok(task.progress.total > task.progress.transferred);
+  // docker 按层刷进度,不写明的话进度条走到 100% 又跳回去会像出错了
+  assert.match(task.progressNote, /按层/);
+});
+
+test('日志取最后 6 行而不是 1 行', () => {
+  /* 一次拉取会把每一层刷成一行,只看最后一行常常正好落在
+     "Verifying"这类没有数字的行上,而带进度的那条就在上面一两行。 */
+  assert.match(bg.buildScanCommand(), /journalctl -u "\$u" -n 6/);
+});
+
+test('进度条标出这是什么的百分比', () => {
+  const ui = read('src/components/BgTasksDrawer.jsx');
+  assert.match(ui, /<ProgressBar p=\{task\.progress\} note=\{task\.progressNote\} \/>/);
+  // 光有百分比不够,得同时看到"下了多少 / 一共多少"
+  assert.match(ui, /fmtBytes\(p\.transferred\)\} \/ \{fmtBytes\(p\.total\)/);
+});

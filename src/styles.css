@@ -960,3 +960,6 @@ progress { width: 140px; height: 6px; }
 /* 失败的输出默认展开,并且看一眼就知道 */
 .tool-output.failed .tool-output-body { border-color: var(--red); }
 .exit-bad { color: var(--red); }
+.bg-bar-wrap { margin: 6px 0 2px; }
+.bg-bar-wrap .bg-bar { margin: 0; }
+.bg-bar-note { display: block; margin-top: 3px; font-size: 10px; }
