@@ -91,11 +91,26 @@ function logError(input) {
  * 逐个 handler 加 try/catch 会漏,而漏掉的那个往往就是没人复现得了的那个。
  * 包完仍然原样抛出,调用方的行为完全不变。
  */
+const { TaskRegistry, mergeHostTasks } = require('./taskRegistry');
+/* 后台任务登记表。挂在这个包装里而不是逐个 handler 里加登记 ——
+   逐个加会漏,而且漏掉的往往正是跑得最久、最该被看见的那个。 */
+const taskRegistry = new TaskRegistry();
+
 const _rawHandle = ipcMain.handle.bind(ipcMain);
-ipcMain.handle = (channel, fn) => _rawHandle(channel, async (event, ...args) => {
+/* 记下每个通道的实现,给「取消任务」复用。
+   不用 ipcMain._invokeHandlers —— 那是 Electron 的私有字段,升级就可能没了,
+   而且没了不会报错,只会让取消按钮悄悄失效。 */
+const handlerFns = new Map();
+ipcMain.handle = (channel, fn) => {
+  handlerFns.set(channel, fn);
+  return _rawHandle(channel, async (event, ...args) => {
+  const taskId = taskRegistry.begin(channel, args?.[0]);
   try {
-    return await fn(event, ...args);
+    const r = await fn(event, ...args);
+    if (taskId) taskRegistry.end(taskId, { ok: true });
+    return r;
   } catch (e) {
+    if (taskId) taskRegistry.end(taskId, { ok: false, error: e?.message || String(e) });
     logError({
       source: `ipc:${channel}`,
       text: e?.message || String(e),
@@ -103,9 +118,10 @@ ipcMain.handle = (channel, fn) => _rawHandle(channel, async (event, ...args) => 
       hostId: args?.[0]?.hostId,
       convId: args?.[0]?.convId
     });
-    throw e;   // 观测不改变行为
-  }
-});
+      throw e;   // 观测不改变行为
+    }
+  });
+};
 
 // 主进程自己崩了也要留下痕迹,否则只剩一个白窗口
 process.on('uncaughtException', (e) => {
@@ -1977,7 +1993,11 @@ async function doUpload({ ssh, localPath, remotePath, isDir, signal, report }) {
 ipcMain.handle('fs:upload', async (_e, { hostId, localPath, remotePath, transferId, isDir }) => {
   const s = getSession(hostId);
   const signal = newSignal(transferId);
-  const report = (p) => send('transfer:progress', { hostId, transferId, ...p });
+  const report = (p) => {
+    send('transfer:progress', { hostId, transferId, ...p });
+    // 同一份进度喂给后台任务面板,免得那边只能显示一个干巴巴的"进行中"
+    taskRegistry.updateByRef(transferId, { progress: p });
+  };
   try {
     return await doUpload({ ssh: s.ssh, localPath, remotePath, isDir, signal, report });
   } finally {
@@ -2282,7 +2302,11 @@ ipcMain.handle('fs:copyHostToHost', async (_e, {
   const dstHost = (loadHosts() || []).find((x) => x.id === toHostId);
   if (!dstHost) throw new Error('目标主机不存在');
 
-  const report = (p) => send('transfer:progress', { hostId: fromHostId, transferId, ...p });
+  const report = (p) => {
+    send('transfer:progress', { hostId: fromHostId, transferId, ...p });
+    // 同一份进度喂给后台任务面板,免得那边只能显示一个干巴巴的"进行中"
+    taskRegistry.updateByRef(transferId, { progress: p });
+  };
 
   /* 1) 探测直连 */
   report({ phase: 'probe', scanning: true });
@@ -2533,7 +2557,11 @@ async function doDownload({ ssh, remotePath, localPath, isDir, signal, report })
 ipcMain.handle('fs:download', async (_e, { hostId, remotePath, localPath, transferId, isDir }) => {
   const s = getSession(hostId);
   const signal = newSignal(transferId);
-  const report = (p) => send('transfer:progress', { hostId, transferId, ...p });
+  const report = (p) => {
+    send('transfer:progress', { hostId, transferId, ...p });
+    // 同一份进度喂给后台任务面板,免得那边只能显示一个干巴巴的"进行中"
+    taskRegistry.updateByRef(transferId, { progress: p });
+  };
   try {
     return await doDownload({ ssh: s.ssh, remotePath, localPath, isDir, signal, report });
   } finally {
@@ -2738,6 +2766,32 @@ async function bgScanHost(hostId) {
   return st;
 }
 
+/**
+ * 统一快照:应用侧任务 + 主机侧进程,合成一份。
+ *
+ * 主机侧要经过 mergeHostTasks —— 进程从 ps 里消失时得留下一条终态,
+ * 否则"下完了"和"下挂了"表现完全一样,而那恰恰是最该被回答的问题。
+ */
+function tasksSnapshot() {
+  const now = Date.now();
+  const hostTasks = [];
+  for (const [hostId, st] of bgState) {
+    st.merged = mergeHostTasks(st.merged, st.tasks || [], hostId, { now });
+    hostTasks.push(...st.merged);
+  }
+  const tasks = taskRegistry.snapshot({ now, hostTasks });
+  const warnings = [...bgState.entries()]
+    .map(([hostId, st]) => (st.warning ? { hostId, ...st.warning } : null))
+    .filter(Boolean);
+  return {
+    tasks,
+    warnings,
+    running: tasks.filter((t) => t.state === 'running').length,
+    stalled: tasks.filter((t) => t.state === 'stalled').length,
+    failed: tasks.filter((t) => t.state === 'failed').length
+  };
+}
+
 function bgSnapshot() {
   const hosts = [];
   let running = 0;
@@ -2765,7 +2819,7 @@ ipcMain.handle('bg:start', (_e, { fast = false } = {}) => {
     // 只扫已连接的主机;本机会话是懒创建的,没建就不主动建
     const ids = [...sessions.keys()];
     await Promise.all(ids.map((id) => bgScanHost(id).catch(() => {})));
-    const snap = bgSnapshot();
+    const snap = tasksSnapshot();
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send('bg:update', snap);
   };
   tick();
@@ -2781,6 +2835,24 @@ ipcMain.handle('bg:stop', () => {
 });
 
 ipcMain.handle('bg:snapshot', () => bgSnapshot());
+
+/* 面板要的是**所有**后台任务,不只是下载。
+   应用侧任务来自 IPC 包装的自动登记,主机侧来自进程扫描,这里合成一份。 */
+ipcMain.handle('tasks:snapshot', () => tasksSnapshot());
+
+ipcMain.handle('tasks:cancel', async (_e, { id } = {}) => {
+  const t = taskRegistry.tasks.get(id);
+  if (!t) throw new Error('任务不存在或已结束');
+  if (!t.cancelChannel) throw new Error('这个任务不支持取消');
+  /* 复用各自原本的取消通道,而不是在这里另写一套停止逻辑 ——
+     取消一次传输要清临时文件、取消一轮对话要收掉会话,
+     那些细节属于各自的模块,抄一遍必然会漏。 */
+  const payload = { hostId: t.hostId, convId: t.convId, transferId: t.refId, askId: t.refId };
+  const fn = handlerFns.get(t.cancelChannel);
+  if (!fn) throw new Error(`取消通道未注册:${t.cancelChannel}`);
+  await fn(null, payload);
+  return { ok: true, via: t.cancelChannel };
+});
 
 ipcMain.handle('bg:stop-task', async (_e, { hostId, pid } = {}) => {
   /* 停止是破坏性的,而任务是靠进程特征匹配出来的 —— 理论上可能认错进程。

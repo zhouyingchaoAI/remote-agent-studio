@@ -24,6 +24,9 @@ const { redact } = require('./errorLog');
 
 /** 认得出的下载类任务。顺序有意义:先匹配到的先算。 */
 const KINDS = [
+  /* docker-build 必须排在 docker-pull **前面**:`docker build --pull` 两个都匹配,
+     而它实质是构建。反过来放会把每一次带 --pull 的构建都显示成"拉取镜像"。 */
+  { id: 'docker-build', re: /\bdocker\b[^|]*\bbuild\b/, label: '构建镜像' },
   { id: 'docker-pull', re: /\bdocker\b[^|]*\b(pull|load)\b/, label: '拉取镜像' },
   { id: 'ollama', re: /\bollama\s+(pull|run)\b/, label: '拉取模型' },
   { id: 'hf', re: /\b(huggingface-cli|hf)\s+download\b|\bmodelscope\s+download\b/, label: '下载模型' },
@@ -34,7 +37,11 @@ const KINDS = [
   { id: 'rsync', re: /\brsync\b/, label: '同步文件' },
   { id: 'scp', re: /\bscp\b/, label: '传输文件' },
   { id: 'wget', re: /\bwget\b/, label: '下载文件' },
-  { id: 'curl', re: /\bcurl\b.*(-O|--remote-name|-o\s|--output)/, label: '下载文件' }
+  { id: 'curl', re: /\bcurl\b.*(-O|--remote-name|-o\s|--output)/, label: '下载文件' },
+  /* 下载之外的长跑活儿。同样是"起了就看不见"的一类,而且失败得更安静 ——
+     编译挂了往往只在几百行输出的中间留一行。 */
+  { id: 'compile', re: /\b(make|cmake|ninja|cargo\s+(build|install)|go\s+build|mvn|gradle)\b/, label: '编译' },
+  { id: 'train', re: /\b(torchrun|deepspeed|accelerate\s+launch)\b|python[\d.]*\s+\S*train\S*\.py/, label: '训练' }
 ];
 
 function classifyKind(cmd) {
@@ -70,7 +77,9 @@ function buildScanCommand() {
     '    *"docker "*pull*|*"docker "*load*|*ollama*pull*|*huggingface-cli*download*'
       + '|*modelscope*download*|*"git "*clone*|*pip*install*|*npm*install*|*pnpm*install*'
       + '|*yarn*add*|*apt-get*install*|*apt*install*|*yum*install*|*dnf*install*'
-      + '|*rsync*|*scp*|*wget*|*curl*-O*|*curl*-o*) ;;',
+      + '|*rsync*|*scp*|*wget*|*curl*-O*|*curl*-o*'
+      + '|*"docker "*build*|*make*|*cmake*|*ninja*|*cargo*build*|*"go "*build*'
+      + '|*mvn*|*gradle*|*torchrun*|*deepspeed*|*accelerate*launch*) ;;',
     '    *) continue ;;',
     '  esac',
     `  w=$(awk '/^write_bytes:/{print $2}' /proc/$p/io 2>/dev/null || echo -1)`,
@@ -132,6 +141,17 @@ function parseScan(text) {
 const STALL_AFTER_MS = 90 * 1000;   // 连续这么久没有字节增长才叫停滞
 
 /**
+ * 只有这些类型适用"停滞"判定。
+ *
+ * 编译和训练**本来就会长时间不写盘** —— 编译在内存里跑、训练几分钟才存一次
+ * checkpoint。把它们按下载的标准判死,会给一个完全健康的任务打上"卡住了",
+ * 这正是本模块反复强调要避免的那类错误。
+ */
+const STALL_KINDS = new Set([
+  'docker-pull', 'ollama', 'hf', 'git-clone', 'pip', 'npm', 'apt', 'rsync', 'scp', 'wget', 'curl'
+]);
+
+/**
  * 拿这次扫描和上次比,算出速率和是否停滞。
  *
  * @param prev  上一轮的任务列表(按 pid 索引)
@@ -185,7 +205,7 @@ function mergeTasks(prev, scan, nowMs) {
       progress: 'measured',
       bytesPerSec,
       movedAtMs,
-      stalled: nowMs - movedAtMs >= STALL_AFTER_MS
+      stalled: STALL_KINDS.has(t.kind) && nowMs - movedAtMs >= STALL_AFTER_MS
     };
   });
 }
@@ -264,7 +284,7 @@ function diskWarning(disks = [], { minFreeBytes = 5 * 1024 ** 3 } = {}) {
 }
 
 module.exports = {
-  KINDS, STALL_AFTER_MS, FIELD,
+  KINDS, STALL_AFTER_MS, STALL_KINDS, FIELD,
   classifyKind, kindLabel,
   buildScanCommand, parseScan, mergeTasks, pickDaemonBytes,
   formatBytes, formatDuration, taskTitle,

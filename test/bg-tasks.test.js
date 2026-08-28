@@ -257,7 +257,10 @@ test('停止任务需要二次确认,并把完整命令摆出来', () => {
   assert.match(drawer, /<pre className="bg-cmd">\{task\.command\}<\/pre>/);
 });
 
-test('没有任务时角标整个隐藏', () => {
-  // 常驻一个 0 等于噪音,有变化时才该出现
-  assert.match(read('src/components/BgTasksDrawer.jsx'), /if \(!snap\.running\) return null/);
+test('没有任何值得看的东西时角标整个隐藏', () => {
+  /* 常驻一个 0 等于噪音。但"没有在跑"不等于"没事" ——
+     刚失败或已停滞的任务同样要让人看见,否则失败会静悄悄地过去。 */
+  const ui = read('src/components/BgTasksDrawer.jsx');
+  assert.match(ui, /if \(!snap\.running && !bad\) return null/);
+  assert.match(ui, /const bad = \(snap\.stalled \|\| 0\) \+ \(snap\.failed \|\| 0\)/);
 });

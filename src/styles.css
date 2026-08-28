@@ -895,3 +895,27 @@ progress { width: 140px; height: 6px; }
   padding: 6px 8px; margin: 6px 0; font-size: 11px;
   white-space: pre-wrap; word-break: break-all; max-height: 96px; overflow-y: auto;
 }
+
+/* 任务状态与进度条 */
+.bg-state { font-size: 11px; flex-shrink: 0; }
+.bg-state.s-running { color: var(--accent); }
+.bg-state.s-stalled { color: var(--yellow); }
+.bg-state.s-done { color: var(--green); }
+.bg-state.s-failed { color: var(--red); }
+/* 「已结束(结果未知)」用中性色:它既不是成功也不是失败,
+   染成绿或红都是在替用户下一个我们并不知道的结论。 */
+.bg-state.s-ended { color: var(--muted); }
+
+.bg-task.st-done, .bg-task.st-ended { opacity: .72; }
+.bg-task.st-failed { border-color: var(--red); }
+
+.bg-bar {
+  position: relative; height: 14px; margin: 6px 0 2px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 7px; overflow: hidden;
+}
+.bg-bar-fill { height: 100%; background: var(--accent); transition: width .3s ease; }
+.bg-bar-text {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 10px; color: var(--text);
+}
+.bg-note { margin-top: 5px; }

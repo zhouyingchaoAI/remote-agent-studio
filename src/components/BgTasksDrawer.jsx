@@ -1,14 +1,28 @@
 import React, { useEffect, useState } from 'react';
 
 /**
- * 后台下载任务抽屉。
+ * 后台任务面板。
  *
- * 智能体在对话里起的 docker pull / wget / pip install 会随着对话往下滚
- * 而消失在视野里,等你想起来看,要么早完了,要么卡了半小时没人知道。
+ * 后台跑的活儿远不止下载:传文件、装引擎、下发技能、跑速览、自动沉淀、
+ * 智能体的每一轮对话,以及主机上那些智能体自己起的进程。它们本来散在各自的
+ * 页面里,有的连"在跑"都看不出来 —— 这里把它们收到一处。
  *
- * 这个面板刻意**不追求百分比**。多数下载器不把总量告诉外人,硬凑一个百分比
- * 就是编数字。真正值钱的是三样:在跑没跑、速率、有没有停滞。
+ * 两条贯穿始终的原则:
+ *
+ * 1. **不编进度。** 多数下载器不给总量,硬凑百分比就是编数字。有精确进度就画进度条,
+ *    只能测到字节数就报「已写入 3.4 GB · 12 MB/s」,什么都测不到就直说测不到。
+ * 2. **终态要说清是哪一种。** 「完成」是应用亲眼看到它成功返回;
+ *    「已结束(结果未知)」是主机上的进程消失了但我们拿不到退出码。
+ *    这两个混为一谈,面板就失去了存在的意义。
  */
+
+const STATE_TEXT = {
+  running: '进行中',
+  stalled: '停滞',
+  done: '完成',
+  failed: '失败',
+  ended: '已结束(结果未知)'
+};
 
 function fmtBytes(n) {
   if (n == null || !Number.isFinite(n) || n < 0) return '—';
@@ -18,8 +32,8 @@ function fmtBytes(n) {
   return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
 }
 
-function fmtDur(sec) {
-  const s = Math.max(0, Math.round(sec || 0));
+function fmtDur(ms) {
+  const s = Math.max(0, Math.round((ms || 0) / 1000));
   if (s < 60) return `${s} 秒`;
   if (s < 3600) return `${Math.floor(s / 60)} 分`;
   const h = Math.floor(s / 3600); const m = Math.floor((s % 3600) / 60);
@@ -29,88 +43,116 @@ function fmtDur(sec) {
 /**
  * 顶栏角标。
  *
- * 这个东西存在的理由:面板不打开时也得让人知道"有东西在下" —— 人恰恰是
- * 想不起来看的时候才最需要它。所以后台保持一个 30 秒的慢档轮询,
- * 面板打开时才切到 6 秒的快档(见主进程 bg:start 的 fast 参数)。
- *
- * 没有任务时整个角标隐藏,不留一个常驻的 0。
+ * 存在的理由:面板不打开时也得让人知道后台有活儿 —— 人恰恰是想不起来看的时候
+ * 才最需要它。所以保持一个 30 秒的慢档轮询,面板打开才切到 6 秒的快档。
  */
 export function BgTasksBadge({ onClick }) {
-  const [snap, setSnap] = useState({ running: 0, stalled: 0 });
+  const [snap, setSnap] = useState({ running: 0, stalled: 0, failed: 0 });
 
   useEffect(() => {
     window.api.bg.start({ fast: false });
-    const off = window.api.bg.onUpdate((s) => setSnap(s));
+    const off = window.api.bg.onUpdate(setSnap);
     window.api.bg.snapshot().then(setSnap).catch(() => {});
     return () => off?.();
   }, []);
 
-  if (!snap.running) return null;
+  const bad = (snap.stalled || 0) + (snap.failed || 0);
+  if (!snap.running && !bad) return null;
   return (
-    <button className={`bg-badge${snap.stalled ? ' warn' : ''}`} onClick={onClick}
-      title={snap.stalled ? `${snap.running} 个后台任务,其中 ${snap.stalled} 个已停滞` : `${snap.running} 个后台任务在跑`}>
-      {snap.stalled ? '⚠' : '⬇'} {snap.running}
+    <button className={`bg-badge${bad ? ' warn' : ''}`} onClick={onClick}
+      title={bad ? `${snap.running} 个在跑,${snap.stalled || 0} 个停滞,${snap.failed || 0} 个失败`
+        : `${snap.running} 个后台任务在跑`}>
+      {bad ? '⚠' : '⬇'} {snap.running || bad}
     </button>
   );
 }
 
-function TaskRow({ hostId, task, onStopped }) {
+/** 有确切总量时才画进度条 —— 画一根不知道走到哪的条,比不画更误导 */
+function ProgressBar({ p }) {
+  if (!p || !p.total || !(p.total > 0)) return null;
+  const pct = Math.min(100, Math.round(((p.transferred || 0) / p.total) * 100));
+  return (
+    <div className="bg-bar" title={`${fmtBytes(p.transferred)} / ${fmtBytes(p.total)}`}>
+      <div className="bg-bar-fill" style={{ width: `${pct}%` }} />
+      <span className="bg-bar-text">{pct}%</span>
+    </div>
+  );
+}
+
+function TaskRow({ task, hostName }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
 
-  const stop = async () => {
-    setBusy(true);
+  const isHost = task.source === 'host';
+  const canStop = task.state === 'running' || task.state === 'stalled';
+  const stoppable = isHost ? canStop : (canStop && !!task.cancelChannel);
+
+  const doStop = async () => {
+    setBusy(true); setErr('');
     try {
-      await window.api.bg.stopTask({ hostId, pid: task.pid });
-      onStopped?.();
-    } finally { setBusy(false); setConfirming(false); }
+      if (isHost) await window.api.bg.stopTask({ hostId: task.hostId, pid: task.pid });
+      else await window.api.bg.cancel({ id: task.id });
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); setConfirming(false); }
   };
 
   return (
-    <div className={`bg-task${task.stalled ? ' stalled' : ''}`}>
+    <div className={`bg-task st-${task.state}`}>
       <div className="row gap bg-task-head">
         <span className="bg-kind">{task.label}</span>
-        <span className="bg-title" title={task.command}>{task.title}</span>
+        <span className="bg-title" title={task.command || task.title}>{task.title}</span>
         <span className="flex1" />
-        {!confirming && (
+        <span className={`bg-state s-${task.state}`}>{STATE_TEXT[task.state] || task.state}</span>
+        {stoppable && !confirming && (
           <button className="btn tiny ghost" onClick={() => setConfirming(true)}>停止</button>
         )}
       </div>
 
+      <ProgressBar p={task.progress} />
+
       <div className="row gap bg-task-meta small muted">
-        <span>已运行 {fmtDur(task.elapsedSec)}</span>
-        {task.progress === 'measured' ? (
+        {hostName && <span>{hostName}</span>}
+        <span>{task.state === 'running' || task.state === 'stalled' ? '已运行' : '耗时'} {fmtDur(task.elapsedMs)}</span>
+
+        {isHost && (task.progressMode === 'measured' ? (
           <>
             <span>已写入 {fmtBytes(task.bytes)}</span>
             <span>{task.bytesPerSec == null ? '测速中…' : `${fmtBytes(task.bytesPerSec)}/s`}</span>
           </>
-        ) : (
-          /* 读不到 /proc/<pid>/io(不同用户或内核没开)。
-             这里必须说"读不到",不能显示成 0 B/s —— 那会被看成卡住了。 */
+        ) : task.state !== 'ended' && (
+          /* 读不到 /proc/<pid>/io。必须说"读不到"而不是显示 0 B/s ——
+             后者会被看成卡住了,让人去查一个不存在的问题。 */
           <span title="读不到该进程的 /proc/<pid>/io,多半是它属于另一个用户">进度读不到</span>
-        )}
+        ))}
+
         {task.bytesSource === 'daemon' && (
-          <span title="docker pull 的下载是守护进程做的,客户端进程几乎不写盘,所以这里读的是 dockerd 的写入量">
+          <span title="docker pull 的下载是守护进程做的,客户端几乎不写盘,所以这里读的是 dockerd 的写入量">
             按 dockerd 计
           </span>
         )}
-        <span>PID {task.pid}</span>
+        {isHost && <span>PID {task.pid}</span>}
       </div>
 
-      {task.stalled && (
-        <p className="bg-stall small">
-          ⚠ 超过 90 秒没有新数据写入 —— 进程还在,但很可能已经连不上源了
-        </p>
+      {task.note && <p className="bg-note small muted">{task.note}</p>}
+      {task.state === 'stalled' && (
+        <p className="bg-stall small">⚠ 超过 90 秒没有新数据写入 —— 进程还在,但很可能已经连不上源了</p>
       )}
+      {task.error && <p className="error-text small">{task.error}</p>}
+      {err && <p className="error-text small">{err}</p>}
 
       {confirming && (
         <div className="bg-confirm">
-          <p className="small">确认停止?会向 PID {task.pid} 发送 SIGTERM。</p>
-          <pre className="bg-cmd">{task.command}</pre>
+          <p className="small">
+            {isHost
+              ? `确认停止?会向 PID ${task.pid} 发送 SIGTERM。`
+              : '确认取消这个任务?'}
+          </p>
+          {task.command && <pre className="bg-cmd">{task.command}</pre>}
           <div className="row gap">
             <button className="btn tiny" onClick={() => setConfirming(false)}>取消</button>
-            <button className="btn tiny danger" disabled={busy} onClick={stop}>
-              {busy ? '停止中…' : '确认停止'}
+            <button className="btn tiny danger" disabled={busy} onClick={doStop}>
+              {busy ? '处理中…' : '确认停止'}
             </button>
           </div>
         </div>
@@ -120,22 +162,25 @@ function TaskRow({ hostId, task, onStopped }) {
 }
 
 export default function BgTasksDrawer({ open, onClose, hostName }) {
-  const [snap, setSnap] = useState({ hosts: [], running: 0, stalled: 0 });
+  const [snap, setSnap] = useState({ tasks: [], warnings: [], running: 0, stalled: 0, failed: 0 });
+  const [showDone, setShowDone] = useState(true);
 
-  /* 只在抽屉打开时轮询。每次扫描占一条 SSH 通道,常驻轮询会在用户毫无察觉的
-     情况下把远端 sshd 的 MaxSessions 吃光 —— 表现是"新对话打不开",极难联想到这里。 */
   useEffect(() => {
     if (!open) return undefined;
     window.api.bg.start({ fast: true });
-    const off = window.api.bg.onUpdate((s) => setSnap(s));
+    const off = window.api.bg.onUpdate(setSnap);
+    window.api.bg.snapshot().then(setSnap).catch(() => {});
     /* 关面板只降回慢档,不整个停掉 —— 角标还要靠它更新。
-       慢档 30 秒一次的通道开销可以接受,6 秒一次常驻就不行了。 */
+       慢档 30 秒的通道开销可以接受,6 秒常驻就不行了。 */
     return () => { off?.(); window.api.bg.start({ fast: false }); };
   }, [open]);
 
   if (!open) return null;
 
-  const hosts = (snap.hosts || []).filter((h) => (h.tasks || []).length || h.warning || h.error);
+  const tasks = (snap.tasks || []).filter((t) =>
+    showDone || t.state === 'running' || t.state === 'stalled');
+  const finishedCount = (snap.tasks || []).length - (snap.tasks || [])
+    .filter((t) => t.state === 'running' || t.state === 'stalled').length;
 
   return (
     <>
@@ -144,45 +189,44 @@ export default function BgTasksDrawer({ open, onClose, hostName }) {
         <div className="row gap bg-drawer-head">
           <b>后台任务</b>
           <span className="muted small">
-            {snap.running ? `${snap.running} 个在跑` : '暂无'}
-            {snap.stalled ? ` · ${snap.stalled} 个停滞` : ''}
+            {snap.running ? `${snap.running} 个在跑` : '暂无进行中'}
+            {snap.stalled ? ` · ${snap.stalled} 停滞` : ''}
+            {snap.failed ? ` · ${snap.failed} 失败` : ''}
           </span>
           <span className="flex1" />
+          {finishedCount > 0 && (
+            <label className="check-row inline" title="刚跑完的任务会保留 10 分钟">
+              <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} />
+              <span className="small">含已结束</span>
+            </label>
+          )}
           <button className="icon-btn" onClick={onClose}>✕</button>
         </div>
 
         <div className="bg-drawer-body">
-          {hosts.length === 0 && (
+          {(snap.warnings || []).map((w) => (
+            <p key={w.hostId + w.mount} className="bg-warn small">
+              💾 {hostName?.(w.hostId) || w.hostId}:{w.message}
+            </p>
+          ))}
+
+          {tasks.length === 0 && (
             <p className="muted small pad center">
-              没有检测到正在跑的下载或安装任务。
+              没有正在跑的后台任务。
               <br />
-              扫的是已连接主机上的进程,所以智能体起的和你自己在终端敲的都会出现在这里。
+              这里会汇总应用发起的活儿(传输、安装、技能下发、速览、对话轮次)
+              和已连接主机上扫到的进程(智能体或你自己起的下载、编译)。
             </p>
           )}
 
-          {hosts.map((h) => (
-            <div key={h.hostId} className="bg-host">
-              <div className="bg-host-name small">{hostName?.(h.hostId) || h.hostId}</div>
-
-              {h.warning && (
-                <p className="bg-warn small">💾 {h.warning.message}</p>
-              )}
-              {h.error && (
-                /* 扫不动时保留上一次的列表,只是标出来 —— 主机抖一下就清空列表,
-                   会让人误以为任务都跑完了 */
-                <p className="bg-warn small">扫描失败({h.error}),下面是上一次的结果</p>
-              )}
-
-              {(h.tasks || []).map((t) => (
-                <TaskRow key={t.pid} hostId={h.hostId} task={t}
-                  onStopped={() => window.api.bg.snapshot().then(setSnap)} />
-              ))}
-            </div>
+          {tasks.map((t) => (
+            <TaskRow key={t.id} task={t} hostName={t.hostId ? (hostName?.(t.hostId) || t.hostId) : ''} />
           ))}
         </div>
 
         <p className="bg-drawer-foot muted small">
-          命令行展示前已脱敏(key/token 换成 ***)。关掉此面板即停止轮询。
+          命令与参数展示前已脱敏。「完成」是应用确认成功;「已结束(结果未知)」
+          是主机进程消失但拿不到退出码。
         </p>
       </aside>
     </>

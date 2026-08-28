@@ -37,8 +37,9 @@ contextBridge.exposeInMainWorld('api', {
   bg: {
     start: invoke('bg:start'),
     stop: invoke('bg:stop'),
-    snapshot: invoke('bg:snapshot'),
+    snapshot: invoke('tasks:snapshot'),
     stopTask: invoke('bg:stop-task'),
+    cancel: invoke('tasks:cancel'),
     onUpdate: on('bg:update')
   },
   screenshot: {
