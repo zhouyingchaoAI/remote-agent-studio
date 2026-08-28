@@ -27,6 +27,11 @@ const KINDS = [
   /* docker-build 必须排在 docker-pull **前面**:`docker build --pull` 两个都匹配,
      而它实质是构建。反过来放会把每一次带 --pull 的构建都显示成"拉取镜像"。 */
   { id: 'docker-build', re: /\bdocker\b[^|]*\bbuild\b/, label: '构建镜像' },
+  /* `docker run` 在本地没有镜像时会**隐式拉取** —— 那时候整台机器上
+     一个 docker pull 进程都没有,拉取完全发生在守护进程里。
+     截图里那台机器就是这样:服务 ExecStart 是 docker run,人却在等镜像。
+     不认它的话,最该被看见的那段时间恰好什么都看不见。 */
+  { id: 'docker-run', re: /\bdocker\b[^|]*\b(run|create|start)\b|\bdocker[- ]compose\b[^|]*\bup\b/, label: '启动容器' },
   { id: 'docker-pull', re: /\bdocker\b[^|]*\b(pull|load)\b/, label: '拉取镜像' },
   { id: 'ollama', re: /\bollama\s+(pull|run)\b/, label: '拉取模型' },
   { id: 'hf', re: /\b(huggingface-cli|hf)\s+download\b|\bmodelscope\s+download\b/, label: '下载模型' },
@@ -79,7 +84,8 @@ function buildScanCommand() {
       + '|*yarn*add*|*apt-get*install*|*apt*install*|*yum*install*|*dnf*install*'
       + '|*rsync*|*scp*|*wget*|*curl*-O*|*curl*-o*'
       + '|*"docker "*build*|*make*|*cmake*|*ninja*|*cargo*build*|*"go "*build*'
-      + '|*mvn*|*gradle*|*torchrun*|*deepspeed*|*accelerate*launch*) ;;',
+      + '|*mvn*|*gradle*|*torchrun*|*deepspeed*|*accelerate*launch*'
+      + '|*"docker "*run*|*"docker "*create*|*docker-compose*up*|*"docker "*compose*up*) ;;',
     '    *) continue ;;',
     '  esac',
     `  w=$(awk '/^write_bytes:/{print $2}' /proc/$p/io 2>/dev/null || echo -1)`,
@@ -92,6 +98,38 @@ function buildScanCommand() {
     `  [ -n "$dp" ] && printf 'DAEMON%s%s%s%s\\n' "\x1f" "$d" "\x1f" `
       + `"$(awk '/^write_bytes:/{print $2}' /proc/$dp/io 2>/dev/null || echo -1)"`,
     'done',
+    /* systemd 单元。
+     *
+     * 智能体很爱把长活儿包成服务跑(截图里就是 qwen7b-vllm.service 在拉镜像),
+     * 而这时:
+     *   · ExecStart 是 docker run,拉取发生在守护进程里 —— 没有 docker pull 进程;
+     *   · 单元停在 activating,既没起来也没报错,对话里只剩一句"正在下载"。
+     * activating 本身就是最好的信号:它的意思就是"在启动,还没就绪"。
+     *
+     * 只看 activating 的 + 名字像下载/镜像的 running 单元,并限量 —— 
+     * 给每个 running 单元都跑一次 systemctl show 会很慢。
+     */
+    'if command -v systemctl >/dev/null 2>&1; then',
+    '  { systemctl list-units --type=service --state=activating --no-legend --plain 2>/dev/null;',
+    '    systemctl list-units --type=service --state=running --no-legend --plain 2>/dev/null'
+      + " | grep -Ei 'pull|download|image|fetch|install|vllm|model|sync'; }"
+      // 管道必须留在上一行末尾:`}` 换行再 `| awk` 在 sh 里是语法错误
+      + " | awk '{print $1}' | sort -u | head -8 | while read -r u; do",
+    '    [ -n "$u" ] || continue',
+    /* 一次 systemctl show 取三个属性,而不是跑三次 ——
+       每台主机最多 8 个单元,乘以 3 就是 24 次进程启动,够拖慢一轮扫描。 */
+    '    v=$(systemctl show "$u" -p ActiveState -p SubState'
+      + ' -p ExecMainStartTimestampMonotonic --value 2>/dev/null | tr "\\n" " ")',
+    '    set -- $v; st=${1:-?}; sub=${2:-?}; since=${3:-0}',
+    /* 最后一行日志:服务在拉镜像时,进度和报错**都只在这里**。
+       没有它,面板只能说"在启动中",等于没说。
+       顺手删掉日志里的分隔符,否则里面正好出现一个就会把字段切错位。 */
+    '    last=$(journalctl -u "$u" -n 1 --no-pager -o cat 2>/dev/null'
+      + " | tr -d '\\037' | tail -c 200)",
+    "    printf 'UNIT\\037%s\\037%s\\037%s\\037%s\\037%s\\n'"
+      + ' "$u" "$st" "$sub" "$since" "$last"',
+    '  done',
+    'fi',
     /* 磁盘余量:大镜像/权重把盘写满是这些任务最常见的死法,
        而报错往往埋在几百行输出里,不如直接摆出来 */
     `df -P -k 2>/dev/null | awk 'NR>1 && $1 ~ /^\\// {printf "DISK\x1f%s\x1f%s\x1f%s\\n", $6, $4, $5}'`
@@ -103,6 +141,7 @@ function parseScan(text) {
   const tasks = [];
   const daemons = {};
   const disks = [];
+  const units = [];
   for (const line of String(text || '').split('\n')) {
     const parts = line.split(FIELD);
     // TASK ␟ pid ␟ etimes ␟ write_bytes ␟ rchar ␟ 完整命令行
@@ -125,6 +164,17 @@ function parseScan(text) {
       });
     } else if (parts[0] === 'DAEMON' && parts.length >= 3) {
       daemons[parts[1]] = Number(parts[2]);
+    // UNIT ␟ 单元名 ␟ ActiveState ␟ SubState ␟ 启动时刻(单调,微秒) ␟ 最后一行日志
+    } else if (parts[0] === 'UNIT' && parts.length >= 6) {
+      const name = String(parts[1] || '').trim();
+      if (!name.endsWith('.service')) continue;
+      units.push({
+        unit: name,
+        activeState: parts[2],
+        subState: parts[3],
+        // 日志里可能有 token(拉私有仓库的报错常带 Authorization),照例脱敏
+        lastLog: redact(String(parts[5] || '').trim()).slice(-200)
+      });
     } else if (parts[0] === 'DISK' && parts.length >= 4) {
       disks.push({
         mount: parts[1],
@@ -133,7 +183,42 @@ function parseScan(text) {
       });
     }
   }
-  return { tasks, daemons, disks };
+  return { tasks, daemons, disks, units };
+}
+
+/* ------------------------------------------------- systemd 单元 → 任务 */
+
+/**
+ * 把 systemd 单元变成面板上的一条任务。
+ *
+ * 为什么值得单独一路:智能体很爱把长活儿包成服务跑,而这时候
+ *   · ExecStart 往往是 `docker run` —— 镜像的拉取发生在守护进程里,
+ *     整台机器上**一个 docker pull 进程都没有**,只扫 ps 什么也看不到;
+ *   · 单元停在 activating,既没起来也没报错,对话里只留一句"正在下载"。
+ *
+ * `activating` 就是最好的信号 —— 它的字面意思就是"在启动,还没就绪"。
+ * 而真正说明"到哪一步了"的,是最后一行日志。
+ */
+function unitTask(u, { now = Date.now() } = {}) {
+  const starting = u.activeState === 'activating';
+  const failed = u.activeState === 'failed' || u.subState === 'failed';
+  return {
+    unit: u.unit,
+    kind: 'systemd',
+    label: '服务',
+    title: `服务 ${u.unit.replace(/\.service$/, '')}`,
+    /* activating 也算"进行中":它确实在推进。
+       但**永远不判停滞** —— 服务可能就是启动慢,而我们手上没有任何字节数
+       能证明它没在动,凭时长判死就是猜。 */
+    state: failed ? 'failed' : 'running',
+    activeState: u.activeState,
+    subState: u.subState,
+    /* 这一行是整条记录里最有用的东西:服务拉镜像时,进度和报错都只在这里。
+       没有它,面板只能说"在启动中",等于没说。 */
+    lastLog: u.lastLog,
+    note: starting ? '单元仍在 activating —— 尚未就绪,常见于还在拉镜像' : '',
+    sampledAtMs: now
+  };
 }
 
 /* --------------------------------------------------------------- 进度 */
@@ -286,7 +371,7 @@ function diskWarning(disks = [], { minFreeBytes = 5 * 1024 ** 3 } = {}) {
 module.exports = {
   KINDS, STALL_AFTER_MS, STALL_KINDS, FIELD,
   classifyKind, kindLabel,
-  buildScanCommand, parseScan, mergeTasks, pickDaemonBytes,
+  buildScanCommand, parseScan, mergeTasks, pickDaemonBytes, unitTask,
   formatBytes, formatDuration, taskTitle,
   buildStopCommand, diskWarning
 };

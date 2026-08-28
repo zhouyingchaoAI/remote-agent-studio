@@ -264,3 +264,76 @@ test('没有任何值得看的东西时角标整个隐藏', () => {
   assert.match(ui, /if \(!snap\.running && !bad\) return null/);
   assert.match(ui, /const bad = \(snap\.stalled \|\| 0\) \+ \(snap\.failed \|\| 0\)/);
 });
+
+/* --------------------------------------------- 服务在拉镜像(截图里的场景) */
+
+const unitLine = (u, st, sub, since, log) => ['UNIT', u, st, sub, since, log].join(F);
+
+test('docker run 也算一类任务 —— 它会隐式拉镜像', () => {
+  /* 本地没有镜像时 `docker run` 会自己去拉,而这时整台机器上
+     一个 docker pull 进程都没有,拉取完全发生在守护进程里。
+     不认它的话,最该被看见的那段时间恰好什么都看不见。 */
+  assert.equal(bg.classifyKind('docker run --rm --name qwen7b-vllm vllm-ascend:v0.23'), 'docker-run');
+  assert.equal(bg.classifyKind('docker compose up -d'), 'docker-run');
+  assert.match(bg.buildScanCommand(), /\*"docker "\*run\*/);
+});
+
+test('扫描会查 systemd:activating 的单元 + 名字像下载的 running 单元', () => {
+  const cmd = bg.buildScanCommand();
+  assert.match(cmd, /--state=activating/);
+  assert.match(cmd, /pull\|download\|image\|fetch\|install\|vllm\|model\|sync/);
+  // 限量:给每个 running 单元都跑一次 systemctl show 会很慢
+  assert.match(cmd, /head -8/);
+  // 没有 systemd 的机器上必须安静跳过,而不是报一堆 command not found
+  assert.match(cmd, /command -v systemctl/);
+});
+
+test('解析 systemd 单元', () => {
+  const r = bg.parseScan(unitLine('qwen7b-vllm.service', 'activating', 'start', '123', 'Pulling fs layer'));
+  assert.equal(r.units.length, 1);
+  assert.equal(r.units[0].unit, 'qwen7b-vllm.service');
+  assert.equal(r.units[0].activeState, 'activating');
+  assert.equal(r.units[0].lastLog, 'Pulling fs layer');
+});
+
+test('非 .service 的行被忽略', () => {
+  assert.equal(bg.parseScan(unitLine('foo.mount', 'active', 'mounted', '1', 'x')).units.length, 0);
+});
+
+test('单元日志同样脱敏', () => {
+  // 拉私有仓库失败时,报错里常常带着 Authorization 头
+  const fake = 'sk-' + 'c'.repeat(40);
+  const r = bg.parseScan(unitLine('a.service', 'failed', 'failed', '1', `denied: Bearer ${fake}`));
+  assert.ok(!r.units[0].lastLog.includes(fake));
+});
+
+test('activating 的单元报成进行中,并说清它卡在哪一步', () => {
+  /* 截图里的场景:服务停在 activating,对话里只留一句"正在下载"。
+     最后一行日志是唯一能说明"到哪一步了"的东西。 */
+  const r = bg.parseScan(unitLine('qwen7b-vllm.service', 'activating', 'start', '9', 'Pulling from ascendhub: 2.1GB/8.4GB'));
+  const t = bg.unitTask(r.units[0], { now: 0 });
+  assert.equal(t.state, 'running');
+  assert.equal(t.kind, 'systemd');
+  assert.match(t.note, /activating/);
+  assert.match(t.lastLog, /2\.1GB\/8\.4GB/);
+});
+
+test('failed 的单元报成失败', () => {
+  const r = bg.parseScan(unitLine('qwen7b-vllm.service', 'failed', 'failed', '9', 'exited, code=139'));
+  assert.equal(bg.unitTask(r.units[0], { now: 0 }).state, 'failed');
+});
+
+test('单元永远不会被判停滞', () => {
+  /* 服务可能就是启动慢,而我们手上没有任何字节数能证明它没在动 ——
+     凭时长判死就是猜,而误报"卡住了"比不报更糟。 */
+  const r = bg.parseScan(unitLine('a.service', 'activating', 'start', '1', 'x'));
+  const t = bg.unitTask(r.units[0], { now: 999999999 });
+  assert.notEqual(t.state, 'stalled');
+  assert.ok(!bg.STALL_KINDS.has('systemd'));
+});
+
+test('systemd 单元不显示"进度读不到"', () => {
+  // 那句话是给进程用的(读不到 /proc/<pid>/io);单元根本没有 pid,说它没意义
+  const ui = read('src/components/BgTasksDrawer.jsx');
+  assert.match(ui, /isHost && task\.kind !== 'systemd' &&/);
+});

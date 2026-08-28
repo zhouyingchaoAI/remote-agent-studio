@@ -86,7 +86,10 @@ function TaskRow({ task, hostName }) {
 
   const isHost = task.source === 'host';
   const canStop = task.state === 'running' || task.state === 'stalled';
-  const stoppable = isHost ? canStop : (canStop && !!task.cancelChannel);
+  /* systemd 单元这一版不给停止按钮:停一个服务和杀一个进程完全是两回事
+     (要 systemctl stop,还得考虑 Restart= 会不会把它又拉起来)。
+     与其给一个点了可能没反应的按钮,不如先不给。 */
+  const stoppable = isHost ? (canStop && !!task.pid) : (canStop && !!task.cancelChannel);
 
   const doStop = async () => {
     setBusy(true); setErr('');
@@ -115,7 +118,9 @@ function TaskRow({ task, hostName }) {
         {hostName && <span>{hostName}</span>}
         <span>{task.state === 'running' || task.state === 'stalled' ? '已运行' : '耗时'} {fmtDur(task.elapsedMs)}</span>
 
-        {isHost && (task.progressMode === 'measured' ? (
+        {task.activeState && <span title="systemd 的 ActiveState/SubState">{task.activeState}/{task.subState}</span>}
+
+        {isHost && task.kind !== 'systemd' && (task.progressMode === 'measured' ? (
           <>
             <span>已写入 {fmtBytes(task.bytes)}</span>
             <span>{task.bytesPerSec == null ? '测速中…' : `${fmtBytes(task.bytesPerSec)}/s`}</span>
@@ -131,9 +136,14 @@ function TaskRow({ task, hostName }) {
             按 dockerd 计
           </span>
         )}
-        {isHost && <span>PID {task.pid}</span>}
+        {isHost && task.pid && <span>PID {task.pid}</span>}
       </div>
 
+      {/* 服务的最后一行日志。这是整条记录里最有用的东西 ——
+          服务在拉镜像时,进度和报错都只在这里;没有它,面板只能说"在启动中"。 */}
+      {task.lastLog && (
+        <pre className="bg-log" title={task.lastLog}>{task.lastLog}</pre>
+      )}
       {task.note && <p className="bg-note small muted">{task.note}</p>}
       {task.state === 'stalled' && (
         <p className="bg-stall small">⚠ 超过 90 秒没有新数据写入 —— 进程还在,但很可能已经连不上源了</p>

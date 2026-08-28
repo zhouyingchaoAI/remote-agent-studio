@@ -2752,6 +2752,7 @@ async function bgScanHost(hostId) {
     const now = Date.now();
     st.tasks = bgTasks.mergeTasks(st.tasks, scan, now);
     st.disks = scan.disks;
+    st.units = scan.units || [];
     st.warning = bgTasks.diskWarning(scan.disks);
     st.at = now;
     st.error = '';
@@ -2778,6 +2779,13 @@ function tasksSnapshot() {
   for (const [hostId, st] of bgState) {
     st.merged = mergeHostTasks(st.merged, st.tasks || [], hostId, { now });
     hostTasks.push(...st.merged);
+    /* systemd 单元是一份**实时状态**,不是有终态的任务。
+       单元从列表里消失通常意味着它离开了 activating(起来了),但我们并没有
+       真的确认过 —— 所以不给它伪造一个"完成",直接不再显示。 */
+    for (const u of st.units || []) {
+      const t = bgTasks.unitTask(u, { now });
+      hostTasks.push({ ...t, id: `unit_${hostId}_${t.unit}`, source: 'host', hostId, elapsedMs: 0 });
+    }
   }
   const tasks = taskRegistry.snapshot({ now, hostTasks });
   const warnings = [...bgState.entries()]
