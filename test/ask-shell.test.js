@@ -89,7 +89,9 @@ test('上下文取自 xterm 缓冲区,比截图准', () => {
 
 test('问答是只读的一次性调用,不该动任何文件', () => {
   const main = read('electron/main.js');
-  const block = main.slice(main.indexOf("ipcMain.handle('ask:shell'"));
+  /* 会话构造挪进了 runAskOnce(为了能换一组参数重试),
+     所以从那里开始切 —— 契约没变,只是位置变了。 */
+  const block = main.slice(main.indexOf('async function runAskOnce('));
   assert.match(block, /permissionMode: 'workspace'/);
   assert.match(block, /只读沙箱/);
   // 脱敏发生在主进程,不指望调用方记得洗
@@ -144,7 +146,7 @@ test('没有活跃对话就沿用该主机最近用过的那个', () => {
   const r = pick(st, 'h1');
   // 断言的是「引擎取自哪条对话」;模型不再跟对话走(固定挑最快的)
   assert.equal(r.agent, 'codex', '应取 updatedAt 最大的那条');
-  assert.equal(r.model, 'gpt-5');
+  assert.equal(r.model, '', 'codex 应跟随 CLI 配置,不替用户指定模型');
   assert.equal(r.reasoningEffort, 'minimal', '不沿用对话里的 xhigh');
   assert.equal(r.source, 'recent');
 });
@@ -188,7 +190,7 @@ test('面板上标出用的是哪个引擎/模型 —— 关系到费用,不该�
 
 test('主进程按传入的引擎配置建会话,包括 deepseek 端点', () => {
   const main = read('electron/main.js');
-  const block = main.slice(main.indexOf("ipcMain.handle('ask:shell'"));
+  const block = main.slice(main.indexOf('async function runAskOnce('));
   assert.match(block, /deepseekEndpoint: loadSettings\(\)\.deepseekEndpoint/);
   assert.match(block, /reasoningEffort: agent === 'codex' \? reasoningEffort : ''/);
 });
@@ -255,6 +257,10 @@ test('固定用最快的模型和最低推理强度', () => {
   assert.match(ui, /const FASTEST_MODEL = \{/);
   assert.match(ui, /claude: 'haiku'/);
   assert.match(ui, /deepseek: 'deepseek-v4-flash'/);
+  /* codex 故意留空 = 跟随 CLI 配置。很多人的 codex 指向自建/中转端点,
+     那里没有 gpt-5 这个名字 —— 硬塞一个模型名会让引擎一声不吭返回空。
+     对 codex 来说延迟大头是推理强度,换模型的收益远不如冒的风险大。 */
+  assert.match(ui, /codex: '',/);
   // 推理强度是延迟差别最大的开关,而"命令怎么写"是回忆不是解题
   assert.match(ui, /reasoningEffort: agent === 'codex' \? 'minimal' : ''/);
 });
@@ -282,4 +288,38 @@ test('主机环境探测有缓存 —— 它是串在提问前面的一次完整
   assert.match(main, /let env = askEnvCache\.get\(hostId\);/);
   // 断开时必须失效:重连往往意味着机器换了或刚装完东西
   assert.match(main, /askEnvCache\.delete\(hostId\);/);
+});
+
+
+test('指定的模型问不出内容时,退回 CLI 默认配置重试一次', () => {
+  /* 真实故障:面板替用户指定了 gpt-5,而那台机器的 codex 指向自建端点、
+     没有这个模型 —— 引擎一声不吭返回空,用户只看到"引擎没有返回任何内容"。
+     求快不能把功能求没了,所以降级重试。 */
+  const main = read('electron/main.js');
+  assert.match(main, /async function runAskOnce\(/);
+  assert.match(main, /if \(model \|\| reasoningEffort\) \{/);
+  assert.match(main, /model: '', reasoningEffort: '', env/);
+});
+
+test('只重试一次,且只在指定过模型时重试', () => {
+  // 否则就是拿同样的参数再撞一遍墙,白白多等一个超时
+  const main = read('electron/main.js');
+  assert.ok(!/runAskOnce[\s\S]{0,400}runAskOnce[\s\S]{0,400}runAskOnce/.test(main),
+    '不该有三次调用');
+});
+
+test('报错里带上引擎自己的输出', () => {
+  /* 原因就在 stderr 里(比如 unknown model xxx)。不带上它,
+     用户只能去猜 —— 这正是这次故障里最耽误事的一环。 */
+  const main = read('electron/main.js');
+  assert.match(main, /engineErr \+= /);
+  assert.match(main, /引擎输出:\$\{detail\}/);
+});
+
+test('降级过要告诉用户', () => {
+  // 否则他只会觉得"这次怎么变慢了"
+  const main = read('electron/main.js');
+  assert.match(main, /fellBackFrom/);
+  const ui = read('src/components/AskShell.jsx');
+  assert.match(ui, /result\.fellBackFrom/);
 });

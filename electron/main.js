@@ -2450,33 +2450,15 @@ ipcMain.handle('ask:cancel', (_e, { askId } = {}) => {
   return { ok: true };
 });
 
-ipcMain.handle('ask:shell', async (_e, {
-  hostId, question, tail = '', imagePath = '', askId = '',
-  agent = 'codex', model = '', reasoningEffort = ''
-} = {}) => {
+/**
+ * 跑一次「快速问一下」。
+ *
+ * 单独抽出来是为了能**换一组参数重试**:这个面板为了求快会自作主张挑
+ * 最快的模型 + 最低推理强度,而用户的 codex 可能指向自建/中转端点,
+ * 那里根本没有 gpt-5 这个名字 —— 表现就是引擎一声不吭地返回空。
+ */
+async function runAskOnce({ hostId, prompt, imagePath, askId, agent, model, reasoningEffort, env }) {
   const s = getSession(hostId);
-
-  /* 环境信息:免得给 apt 命令而机器是 yum。
-   *
-   * **带缓存**,因为这是一次完整的 SSH 往返,而且发生在问模型**之前** ——
-   * 纯串行地加在每次提问的延迟上。而这些信息(发行版、shell、用户)
-   * 一台机器上基本不会变,每次重新探一遍纯属浪费。
-   * 只有 cwd 会变,但对"这条命令怎么写"的影响很小,值得用它换几秒。
-   */
-  let env = askEnvCache.get(hostId);
-  if (!env) {
-    try {
-      const r = await s.ssh.exec(`${hostId === LOCAL_ID ? '' : Installer.BIN_PATH + ' '}${askShell.buildEnvCommand()}`,
-        { timeoutMs: 15000 });
-      env = askShell.parseEnv(r.stdout || '');
-      askEnvCache.set(hostId, env);
-    } catch (_) { env = {}; /* 拿不到就不带,不影响提问 */ }
-  }
-
-  const prompt = askShell.buildAskPrompt({
-    question, tail: askShell.sanitizeTail(tail), env, hasImage: !!imagePath
-  });
-
   const session = new AgentSession(s.ssh, s.proxy, {
     agent, cwd: env.cwd || '', model,
     // 跟对话用同一套配置,包括 deepseek 端点与 codex 推理强度
@@ -2488,8 +2470,13 @@ ipcMain.handle('ask:shell', async (_e, {
   askSessions.set(askId, session);
 
   let answer = '';
+  /* 把引擎的报错也收起来。之前只报一句"引擎没有返回任何内容",
+     而**原因就在 stderr 里**(比如 unknown model xxx)—— 不带上它,
+     用户只能去猜,而这正是这次故障里最耽误事的一环。 */
+  let engineErr = '';
   session.on('message', (msg) => {
     if (msg.kind === 'text' || msg.kind === 'result') answer += `\n${msg.text || ''}`;
+    else if (msg.kind === 'error' || msg.kind === 'stderr') engineErr += `\n${msg.text || ''}`;
     else if (msg.kind === 'text_delta') {
       answer += msg.text || '';
       // 边出边推:一个「问中…」转到底,用户根本不知道是在想还是挂了
@@ -2519,12 +2506,64 @@ ipcMain.handle('ask:shell', async (_e, {
     askSessions.delete(askId);
     try { session.cancel(); } catch (_) { /* 已经结束了 */ }
   }
-  const text = answer.trim();
-  if (!text) {
-    // 退 0 却没输出:静默是最糟的失败方式,上一轮在 dsh 上已经栽过一次
-    throw new Error('引擎没有返回任何内容。到「环境配置」页点一次「测试」确认该引擎当前可用。');
+  return { answer: answer.trim(), engineErr };
+}
+
+ipcMain.handle('ask:shell', async (_e, {
+  hostId, question, tail = '', imagePath = '', askId = '',
+  agent = 'codex', model = '', reasoningEffort = ''
+} = {}) => {
+  const s = getSession(hostId);
+
+  /* 环境信息:免得给 apt 命令而机器是 yum。
+   *
+   * **带缓存**,因为这是一次完整的 SSH 往返,而且发生在问模型**之前** ——
+   * 纯串行地加在每次提问的延迟上。而这些信息(发行版、shell、用户)
+   * 一台机器上基本不会变,每次重新探一遍纯属浪费。
+   */
+  let env = askEnvCache.get(hostId);
+  if (!env) {
+    try {
+      const r = await s.ssh.exec(`${hostId === LOCAL_ID ? '' : Installer.BIN_PATH + ' '}${askShell.buildEnvCommand()}`,
+        { timeoutMs: 15000 });
+      env = askShell.parseEnv(r.stdout || '');
+      askEnvCache.set(hostId, env);
+    } catch (_) { env = {}; /* 拿不到就不带,不影响提问 */ }
   }
-  return { answer: text, commands: askShell.extractCommands(text), env };
+
+  const prompt = askShell.buildAskPrompt({
+    question, tail: askShell.sanitizeTail(tail), env, hasImage: !!imagePath
+  });
+
+  const first = await runAskOnce({ hostId, prompt, imagePath, askId, agent, model, reasoningEffort, env });
+  if (first.answer) {
+    return { answer: first.answer, commands: askShell.extractCommands(first.answer), env };
+  }
+
+  /* 空输出最常见的原因,是我们**替用户指定了一个他那台机器上不存在的模型**。
+     所以退回"跟随 CLI 自身配置"重试一次 —— 慢一点,但至少能用。
+     只在确实指定过模型/推理强度时重试,否则就是拿同样的参数再撞一遍墙。 */
+  if (model || reasoningEffort) {
+    const retry = await runAskOnce({
+      hostId, prompt, imagePath, askId, agent, model: '', reasoningEffort: '', env
+    }).catch(() => null);
+    if (retry && retry.answer) {
+      return {
+        answer: retry.answer,
+        commands: askShell.extractCommands(retry.answer),
+        env,
+        // 告诉用户降级了,以及为什么 —— 否则他只会觉得"这次怎么变慢了"
+        fellBackFrom: model || `推理强度 ${reasoningEffort}`
+      };
+    }
+  }
+
+  const detail = askShell.sanitizeTail(first.engineErr, { maxLines: 6, maxChars: 400 }).trim();
+  throw new Error(
+    `引擎没有返回任何内容${model ? `(已试过 ${model},以及 CLI 默认模型)` : ''}。`
+    + (detail ? `\n引擎输出:${detail}` : '')
+    + '\n到「环境配置」页点一次「测试」确认该引擎当前可用。'
+  );
 });
 
 /** 下载:文件或整个目录 */

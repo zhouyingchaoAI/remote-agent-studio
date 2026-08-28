@@ -11,7 +11,13 @@ import { useStore } from '../store.js';
  * 账单记在哪、装没装。引擎跟着对话走,模型固定挑最快的。
  */
 const FASTEST_MODEL = {
-  codex: 'gpt-5',
+  /* codex 这里**故意留空 = 跟随 CLI 自身配置**。
+     替用户指定模型名是危险的:很多人的 codex 指向自建或中转端点,
+     那里根本没有 gpt-5 这个名字,结果是引擎一声不吭返回空
+     —— 我上一版硬塞 'gpt-5' 就把一台好好的机器问废了。
+     而对 codex 来说,延迟的大头本来就是推理强度(下面压到 minimal),
+     换模型带来的收益远不如冒的风险大。 */
+  codex: '',
   claude: 'haiku',
   deepseek: 'deepseek-v4-flash',
   // dsh 没有 --model 开关,模型由它自己的 profile 决定,给了也没用
@@ -209,6 +215,12 @@ export default function AskShell({ hostId, termId, getTail, onInsert }) {
             </div>
           )}
           <pre className="ask-answer">{result.answer}</pre>
+          {/* 降级过就说一声,否则用户只会觉得"这次怎么变慢了" */}
+          {result.fellBackFrom && (
+            <p className="muted small">
+              ⚠ 「{result.fellBackFrom}」在这台机器上没返回内容,已改用 CLI 默认配置重试。
+            </p>
+          )}
           <p className="muted small">
             命令只会填进终端、不会自动执行 —— 按回车前请自己看一眼。
             {result.env?.os ? ` 已按「${result.env.os}」作答。` : ''}
