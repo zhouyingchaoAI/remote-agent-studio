@@ -3,7 +3,28 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import AskShell from './AskShell.jsx';
-import { useStore } from '../store.js';
+import { useStore, onThemeChange, themeVar } from '../store.js';
+
+/**
+ * 终端配色跟随皮肤。
+ *
+ * 背景用 --bg 而不是 --bg2:终端占满整块区域,用面板色会和外框差一档,
+ * 看着像没铺满。前景/光标取正文色和强调色,ANSI 基色沿用主题的语义色,
+ * 这样红=错误、绿=成功在任何皮肤下都一致。
+ */
+function xtermTheme() {
+  return {
+    background: themeVar('bg', '#0b0d12'),
+    foreground: themeVar('text', '#e6e6e6'),
+    cursor: themeVar('accent', '#4f8cff'),
+    selectionBackground: `${themeVar('accent', '#4f8cff')}44`,
+    red: themeVar('red', '#ff5c5c'),
+    green: themeVar('green', '#3ecf8e'),
+    yellow: themeVar('yellow', '#f0b429'),
+    blue: themeVar('accent', '#4f8cff'),
+    magenta: themeVar('accent2', '#7c5cff')
+  };
+}
 
 /** 终端页:多标签,每个标签一个独立远程 shell */
 export default function TerminalPanel({ hostId, active }) {
@@ -66,7 +87,7 @@ function TermView({ hostId, termId, active }) {
     const term = new Terminal({
       fontSize,
       fontFamily: 'Menlo, Consolas, monospace',
-      theme: { background: '#0b0d12' },
+      theme: xtermTheme(),
       cursorBlink: true
     });
     const fit = new FitAddon();
@@ -75,6 +96,10 @@ function TermView({ hostId, termId, active }) {
     fit.fit();
     termRef.current = term;
     fitRef.current = fit;
+
+    /* 换肤时跟着变。xterm 的配色是构造时传进去的普通对象,不认 CSS 变量 ——
+       不监听的话会出现「界面切成浅色了、终端还是一块黑」。 */
+    const offTheme = onThemeChange(() => { term.options.theme = xtermTheme(); });
 
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown' || !(event.ctrlKey || event.metaKey)) return true;
@@ -132,7 +157,7 @@ function TermView({ hostId, termId, active }) {
     ro.observe(boxRef.current);
 
     return () => {
-      offData(); offClosed(); disp.dispose(); ro.disconnect();
+      offData(); offClosed(); offTheme(); disp.dispose(); ro.disconnect();
       window.removeEventListener('resize', onResize);
       term.dispose();
     };

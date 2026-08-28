@@ -128,7 +128,8 @@ function saveProxy(hostId, cfg) {
 /* -------- 应用设置持久化(userData/settings.json) -------- */
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 const DEFAULT_SETTINGS = {
-  theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5,
+  // accent 为空 = 用皮肤自带的强调色(见 src/themes.js)
+  theme: 'dark', accent: '', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5,
   screenshotShortcut: 'CommandOrControl+Shift+2', screenshotShortcutEnabled: true,
   // 远程 claude 可用性测试用的模型:CLI 默认模型可能已无额度,固定用 opus 更能反映真实状态
   claudeTestModel: 'opus',

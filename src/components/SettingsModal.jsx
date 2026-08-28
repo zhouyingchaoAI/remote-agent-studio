@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../store.js';
+import { THEMES, getTheme } from '../themes.js';
 
 export default function SettingsModal() {
   const show = useStore((s) => s.showSettings);
@@ -22,12 +23,38 @@ export default function SettingsModal() {
           <button className="icon-btn" title="关闭 (Esc)" onClick={close}>✕</button>
         </div>
         <div className="settings-body">
+          <div className="settings-row block">
+            <span>皮肤</span>
+            {/* 用色块而不是下拉:配色是看的,名字说明不了任何事 */}
+            <div className="theme-grid">
+              {THEMES.map((t) => (
+                <button key={t.id} type="button" title={t.desc}
+                  className={`theme-card${settings.theme === t.id ? ' on' : ''}`}
+                  onClick={() => apply({ theme: t.id })}>
+                  <span className="theme-swatch" style={{ background: t.colors.bg, borderColor: t.colors.border }}>
+                    <i style={{ background: t.colors.accent }} />
+                    <i style={{ background: t.colors.green }} />
+                    <i style={{ background: t.colors.yellow }} />
+                    <i style={{ background: t.colors.text }} />
+                  </span>
+                  <span className="theme-name">{t.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <label className="settings-row">
-            <span>主题</span>
-            <select value={settings.theme} onChange={(e) => apply({ theme: e.target.value })}>
-              <option value="dark">深色</option>
-              <option value="light">浅色</option>
-            </select>
+            <span>强调色</span>
+            <span className="row gap">
+              <input type="color" className="accent-input"
+                value={settings.accent || getTheme(settings.theme).colors.accent}
+                onChange={(e) => apply({ accent: e.target.value })} />
+              {settings.accent && (
+                <button className="btn tiny ghost" onClick={() => apply({ accent: '' })}>
+                  恢复皮肤原色
+                </button>
+              )}
+            </span>
           </label>
           <label className="settings-row">
             <span>终端字号</span>

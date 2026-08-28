@@ -40,6 +40,9 @@ const SetupTerminal = forwardRef(function SetupTerminal({ termId, fontSize = 12,
       // 二维码是半块字符拼的,行高必须贴紧,否则模块被拉长扫不出来
       lineHeight: 1,
       letterSpacing: 0,
+      /* 这里**故意不跟随皮肤**:登录二维码是半块字符拼的,浅色皮肤会把它
+         渲染成反色(浅底深码),不少手机扫码器认不出反色 QR。
+         宁可这一块和主界面配色不一致,也不能让人扫不出来。 */
       theme: { background: '#0b0d12', foreground: '#e6e6e6' },
       cursorBlink: true,
       scrollback: 4000

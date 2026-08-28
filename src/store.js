@@ -1,4 +1,28 @@
 import { create } from 'zustand';
+import { applyTheme, DEFAULT_THEME } from './themes.js';
+
+/**
+ * 主题变化通知。
+ *
+ * xterm 的配色是在构造时传进去的对象,不吃 CSS 变量 —— 换皮肤后终端会
+ * 保持原样,出现「界面变白了、终端还是黑的」。所以换肤时广播一次,
+ * 让每个终端实例自己去取新的变量值。
+ */
+const THEME_EVENT = 'ras:theme';
+function notifyTheme() {
+  if (typeof window !== 'undefined') window.dispatchEvent(new window.CustomEvent(THEME_EVENT));
+}
+export function onThemeChange(fn) {
+  window.addEventListener(THEME_EVENT, fn);
+  return () => window.removeEventListener(THEME_EVENT, fn);
+}
+
+/** 读当前生效的配色 token,给 xterm 这类不认 CSS 变量的组件用 */
+export function themeVar(name, fallback = '') {
+  if (typeof window === 'undefined') return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim();
+  return v || fallback;
+}
 
 function normalizePermissionMode(value) {
   if (value === 'system' || value?.permissionMode === 'system') return 'system';
@@ -42,14 +66,18 @@ export const useStore = create((set, get) => ({
   queued: {},           // convId -> [{id,text,files}] 排队待发送的消息
   setupLogs: {},        // hostId -> string
   envInfo: {},          // hostId -> {os,node,npm,codex,claude}
-  settings: { theme: 'dark', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5, screenshotShortcut: 'CommandOrControl+Shift+2', screenshotShortcutEnabled: true },
+  settings: { theme: DEFAULT_THEME, accent: '', terminalFontSize: 13, defaultPermissionMode: 'workspace', autoConfirmCap: 5, screenshotShortcut: 'CommandOrControl+Shift+2', screenshotShortcutEnabled: true },
   showSettings: false,
 
   setShowSettings: (v) => set({ showSettings: v }),
   applySettings: (patch) => {
     set((s) => ({ settings: { ...s.settings, ...patch } }));
     const next = useStore.getState().settings;
-    if (patch.theme) document.documentElement.setAttribute('data-theme', next.theme);
+    /* 强调色变了也要重刷 —— 它是叠在主题上的覆盖,不重新 apply 就只改了一半 */
+    if (patch.theme !== undefined || patch.accent !== undefined) {
+      applyTheme(next.theme, { accent: next.accent });
+      notifyTheme();
+    }
     window.api.settings.save(patch).catch(() => {});
   },
 
@@ -574,7 +602,8 @@ export async function loadSettings() {
   try {
     const s = await window.api.settings.get();
     useStore.setState({ settings: s });
-    document.documentElement.setAttribute('data-theme', s.theme || 'dark');
+    applyTheme(s.theme || DEFAULT_THEME, { accent: s.accent });
+    notifyTheme();
   } catch (_) {}
 }
 

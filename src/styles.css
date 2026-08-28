@@ -1,3 +1,6 @@
+/* 皮肤在 src/themes.js 里,由 JS 以行内变量写到 :root 上(这样自定义强调色
+   不必为每种组合预生成 CSS)。这里保留一份深/浅色,只为 JS 跑起来之前的
+   首帧不闪白 —— 换肤逻辑不要改这里,改 themes.js。 */
 :root, :root[data-theme="dark"] {
   --bg: #0f1117;
   --bg2: #161a23;
@@ -10,6 +13,11 @@
   --green: #3ecf8e;
   --red: #ff5c5c;
   --yellow: #f0b429;
+  /* 别名。这三个一直被组件用着却从没定义过 —— 少一个不是"丑一点",
+     是 background: var(--panel) 整条声明失效、控件变透明。 */
+  --fg: var(--text);
+  --panel: var(--bg2);
+  --ok: var(--green);
 }
 :root[data-theme="light"] {
   --bg: #f6f7f9;
@@ -20,9 +28,12 @@
   --muted: #667085;
   --accent: #2f6fed;
   --accent2: #6a4bff;
-  --green: #1a9e6a;
-  --red: #d64545;
-  --yellow: #b7791f;
+  --green: #127a52;
+  --red: #c62828;
+  --yellow: #8a5b00;
+  --fg: var(--text);
+  --panel: var(--bg2);
+  --ok: var(--green);
 }
 /* 对话可读栏宽度上限:窄屏铺满,宽屏内容居中不超过它。
    1360px 适配 1300~1600 逻辑宽度的窗口(内容尽量铺开),更宽的屏则自动居中留白。 */
@@ -42,16 +53,18 @@ pre, code { font-family: Menlo, Consolas, monospace; }
 .app { display: flex; height: 100vh; padding-top: 36px; position: relative; }
 .app::before { content: ''; position: fixed; inset: 0 0 auto 0; height: 36px; z-index: 900; background: var(--bg); border-bottom: 1px solid var(--border); -webkit-app-region: drag; }
 
-/* 全局深色滚动条(替换系统默认的白色滚动条) */
+/* 全局滚动条(替换系统默认的白色滚动条)。
+   走主题变量而不是写死 rgba(255,255,255,…):写死白色在浅色皮肤上
+   等于把滑块画成了白底白条,滚动条直接消失。 */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--border);
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.26); background-clip: padding-box; border: 2px solid transparent; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); background-clip: padding-box; border: 2px solid transparent; }
 ::-webkit-scrollbar-corner { background: transparent; }
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .flex1 { flex: 1; }
@@ -241,7 +254,7 @@ input[type="checkbox"], input[type="radio"] { width: auto; }
 .message-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .message-file { display: inline-block; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 5px 8px; border-radius: 5px; background: rgba(0,0,0,0.18); font-size: 12px; }
 .image-preview { align-self: flex-start; display: grid; gap: 6px; width: min(520px, 72vw); padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg3); color: var(--text); text-align: left; cursor: zoom-in; }
-.image-preview.compact { width: 180px; background: rgba(0,0,0,0.16); border-color: rgba(255,255,255,0.22); }
+.image-preview.compact { width: 180px; background: var(--bg3); border-color: var(--border); }
 .image-preview img { display: block; width: 100%; max-height: 420px; object-fit: contain; background: #090b10; border-radius: 5px; }
 .image-preview.compact img { aspect-ratio: 4 / 3; max-height: 130px; object-fit: cover; }
 .image-preview span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
@@ -287,7 +300,7 @@ progress { width: 140px; height: 6px; }
 /* terminal */
 .terminal-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
 .terminal-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
-.terminal-box { flex: 1; min-height: 0; background: #0b0d12; padding: 6px; }
+.terminal-box { flex: 1; min-height: 0; background: var(--bg); padding: 6px; }
 .terminal-context-menu {
   position: absolute; z-index: 50; display: grid; min-width: 120px; padding: 4px;
   border: 1px solid var(--border); border-radius: 6px; background: var(--bg2);
@@ -426,7 +439,7 @@ progress { width: 140px; height: 6px; }
 .grok-custom-row { padding: 4px 0; border-top: 1px solid var(--border); }
 .auto-switch input { accent-color: var(--accent, #4c8bf5); }
 /* diff 渲染 */
-.diff-view { margin: 6px 0 0; padding: 8px 0; background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; line-height: 1.5; overflow-x: auto; }
+.diff-view { margin: 6px 0 0; padding: 8px 0; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; line-height: 1.5; overflow-x: auto; }
 .diff-line { padding: 0 10px; white-space: pre; }
 .diff-line.diff-add { background: rgba(63, 185, 80, 0.15); color: #7ee2a8; }
 .diff-line.diff-del { background: rgba(248, 81, 73, 0.15); color: #ff9b95; }
@@ -487,8 +500,8 @@ progress { width: 140px; height: 6px; }
 .md-li { padding-left: 8px; }
 .md-h { font-weight: 700; margin: 8px 0 4px; }
 .md-h1 { font-size: 16px; } .md-h2 { font-size: 15px; } .md-h3, .md-h4 { font-size: 13.5px; }
-.md-code { background: rgba(255,255,255,0.06); border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin: 6px 0; font-size: 12px; overflow-x: auto; white-space: pre; }
-.md-inline-code { background: rgba(255,255,255,0.08); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+.md-code { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin: 6px 0; font-size: 12px; overflow-x: auto; white-space: pre; }
+.md-inline-code { background: var(--bg3); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
 .md-link { color: var(--accent, #4c8bf5); text-decoration: none; cursor: pointer; }
 .md-link:hover { text-decoration: underline; }
 /* 快捷选项按钮 */
@@ -526,7 +539,7 @@ progress { width: 140px; height: 6px; }
   padding: 16px; min-width: 0;
 }
 .log-box {
-  flex: 1; background: #0b0d12; border: 1px solid var(--border); border-radius: 8px;
+  flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
   padding: 12px; font-size: 12px; overflow-y: auto; white-space: pre-wrap;
   word-break: break-all; color: #b6c2d9;
 }
@@ -579,7 +592,7 @@ progress { width: 140px; height: 6px; }
 .term-section .flex1 { flex: 1; }
 .check-row.inline { padding: 0; gap: 5px; }
 .term-host { height: 340px; border: 1px solid var(--border); border-radius: 8px;
-  overflow: hidden; background: #0b0d12; }
+  overflow: hidden; background: var(--bg); }
 /* 扫码时给足高度:二维码约 40 行,放大后需要更大画布 */
 .term-host.zoom { height: 620px; }
 .setup-term { height: 100%; display: flex; flex-direction: column; }
@@ -787,3 +800,51 @@ progress { width: 140px; height: 6px; }
 /* 分屏时顶栏元素多、空间小,允许换行而不是挤成一条 */
 .chat-pane .chat-header { flex-wrap: wrap; padding: 6px 10px; }
 .split-controls { position: relative; display: inline-flex; gap: 4px; }
+
+/* ---------------------------------------------------------- 皮肤选择 */
+/* 让整体换肤有个过渡,而不是"啪"地跳过去。只过渡颜色 ——
+   把 all 写进去会连布局属性一起动,拖动分栏时整个界面会飘。 */
+:root, body, .app { transition: background-color .18s ease, color .18s ease; }
+
+.settings-row.block { display: block; }
+.settings-row.block > span:first-child { display: block; margin-bottom: 8px; }
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 8px;
+}
+.theme-card {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  padding: 7px 4px 6px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+.theme-card:hover { border-color: var(--accent); color: var(--text); }
+.theme-card.on {
+  border-color: var(--accent);
+  color: var(--text);
+  /* 选中态不只靠边框色 —— 有些皮肤的 border 和 accent 很接近,
+     只改边框颜色在小色块上几乎看不出来 */
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.theme-swatch {
+  display: flex; align-items: center; justify-content: center; gap: 3px;
+  width: 100%; height: 30px;
+  border: 1px solid;
+  border-radius: 5px;
+}
+.theme-swatch i { width: 7px; height: 7px; border-radius: 50%; display: block; }
+.theme-name { line-height: 1; }
+
+.accent-input {
+  width: 40px; height: 26px; padding: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
