@@ -120,7 +120,9 @@ function TaskRow({ task, hostName }) {
         )}
       </div>
 
-      <ProgressBar p={task.progress} note={task.progressNote} />
+      {/* progress 是应用自己发起的传输(总量确定);progressFromLog 是从
+          服务日志里解析出的分层进度。两者都没有才不画条。 */}
+      <ProgressBar p={task.progress || task.progressFromLog} note={task.progressNote} />
 
       <div className="row gap bg-task-meta small muted">
         {hostName && <span>{hostName}</span>}
@@ -168,7 +170,7 @@ function TaskRow({ task, hostName }) {
         <pre className="bg-log" title={task.lastLog}>{task.lastLog}</pre>
       )}
       {/* 有字节数但没总量:明说为什么没有百分比,否则会被当成"进度条坏了" */}
-      {task.progressMode === 'measured' && !task.progress?.total && (
+      {task.progressMode === 'measured' && !task.progress?.total && !task.progressFromLog && (
         <p className="bg-note small muted">
           没有百分比:这个下载器不报总量,只能量出已下载多少。
         </p>

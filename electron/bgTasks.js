@@ -77,7 +77,7 @@ const FIELD = '\x1f';
  * 客户端进程几乎不写盘。只看客户端会得出"一直 0 B/s"的结论,
  * 从而把一个正常的拉取误报成卡住 —— 这正是最要避免的错误。
  */
-function buildScanCommand({ watchPaths = [] } = {}) {
+function buildScanCommand({ watchPaths = [], extraUnits = [] } = {}) {
   const pattern = KINDS.map((k) => k.id).join('|');   // 仅用于注释,真正的匹配在下面
   return [
     `# kinds: ${pattern}`,
@@ -110,7 +110,12 @@ function buildScanCommand({ watchPaths = [] } = {}) {
     '  esac',
     `  w=$(awk '/^write_bytes:/{print $2}' /proc/$p/io 2>/dev/null || echo -1)`,
     `  r=$(awk '/^rchar:/{print $2}' /proc/$p/io 2>/dev/null || echo -1)`,
-    `  printf 'TASK%s%s%s%s%s%s%s%s%s%s%s%s%s\\n' "\x1f" "$p" "\x1f" "\${pp:-0}" "\x1f" "$e" "\x1f" "\${w:--1}" "\x1f" "\${r:--1}" "\x1f" "\${long:-0}" "\x1f$a"`,
+    /* 这个进程属于哪个 systemd 单元 —— cgroup 路径里就写着。
+       靠它才能把进程和"它的服务日志"对上:截图里那条 docker compose pull
+       的分层进度只存在于 ragflow-bootstrap.service 的 journal 里,
+       而那个单元名不含 pull/download,按名字过滤根本扫不到。 */
+    `  u=$(sed -n 's/.*\\/\\([A-Za-z0-9@._-]*\\.service\\).*/\\1/p' /proc/$p/cgroup 2>/dev/null | head -1)`,
+    `  printf 'TASK%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\\n' "\x1f" "$p" "\x1f" "\${pp:-0}" "\x1f" "$e" "\x1f" "\${w:--1}" "\x1f" "\${r:--1}" "\x1f" "\${long:-0}" "\x1f" "\${u:-}" "\x1f$a"`,
     'done',
     /* 全机进程的父子关系 + 写入量,各来一遍。
      *
@@ -145,7 +150,12 @@ function buildScanCommand({ watchPaths = [] } = {}) {
     'if command -v systemctl >/dev/null 2>&1; then',
     '  { systemctl list-units --type=service --state=activating --no-legend --plain 2>/dev/null;',
     '    systemctl list-units --type=service --state=running --no-legend --plain 2>/dev/null'
-      + " | grep -Ei 'pull|download|image|fetch|install|vllm|model|sync'; }"
+      + " | grep -Ei 'pull|download|image|fetch|install|vllm|model|sync';"
+      /* 再加上"正在跑下载任务的那些进程所属的单元"。
+         名字过滤一定会漏 —— 截图里的 ragflow-bootstrap.service 不含任何
+         下载相关的词,可它的 journal 里正是那份分层进度。 */
+      + extraUnits.map((u) => ` printf '%s\\n' ${shellQuote(u)};`).join('')
+      + " }"
       // 管道必须留在上一行末尾:`}` 换行再 `| awk` 在 sh 里是语法错误
       + " | awk '{print $1}' | sort -u | head -8 | while read -r u; do",
     '    [ -n "$u" ] || continue',
@@ -193,11 +203,11 @@ function parseScan(text) {
   const io = new Map();      // pid -> write_bytes
   for (const line of String(text || '').split('\n')) {
     const parts = line.split(FIELD);
-    // TASK ␟ pid ␟ ppid ␟ etimes ␟ write_bytes ␟ rchar ␟ long ␟ 完整命令行
-    if (parts[0] === 'TASK' && parts.length >= 8) {
+    // TASK ␟ pid ␟ ppid ␟ etimes ␟ write_bytes ␟ rchar ␟ long ␟ unit ␟ 完整命令行
+    if (parts[0] === 'TASK' && parts.length >= 9) {
       const pid = Number(parts[1]);
       if (!Number.isInteger(pid) || pid <= 0) continue;
-      const command = redact(parts.slice(7).join(FIELD).trim());
+      const command = redact(parts.slice(8).join(FIELD).trim());
       const kind = classifyKind(command);
       tasks.push({
         pid,
@@ -207,6 +217,8 @@ function parseScan(text) {
            界面默认不显示这一类 —— KINDS 是人工列举的,一定会漏,
            但把所有长跑进程都摊开又会淹掉真正的任务。 */
         longRunning: parts[6] === '1',
+        // 它属于哪个 systemd 单元(可能为空:不是被服务拉起来的)
+        unit: String(parts[7] || '').trim(),
         /* -1 表示读不到 /proc/<pid>/io(不是同一个用户,或内核没开)。
            必须和"读到了 0"区分开:前者是测不了,后者是真没写盘。 */
         writeBytes: Number(parts[4]),
@@ -366,6 +378,16 @@ function watchPathForUnit(u) {
 }
 
 /** 汇总本轮要量的目录。限量:du 再快也架不住一次量十几个。 */
+/** 本轮扫到的进程分别属于哪些单元 —— 下一轮把它们也纳入 journal 抓取 */
+function collectUnits({ tasks = [] } = {}, { max = 6 } = {}) {
+  const out = [];
+  for (const t of tasks) {
+    const u = String(t.unit || '').trim();
+    if (u.endsWith('.service') && !out.includes(u) && out.length < max) out.push(u);
+  }
+  return out;
+}
+
 function collectWatchPaths({ tasks = [], units = [] } = {}, { max = 4 } = {}) {
   const out = [];
   const add = (p) => { if (p && !out.includes(p) && out.length < max) out.push(p); };
@@ -482,6 +504,11 @@ function mergeTasks(prev, scan, nowMs) {
        只有恰好一个拉取在跑时才能归到它头上 —— 有多个时无法区分是谁下的,
        与其平摊出一个假数字,不如老实说进度未知。 */
     const useDaemon = DOCKER_KINDS.has(t.kind) && dockerTasks.length === 1 && dockerBytes >= 0;
+    /* docker 客户端进程**本来就不写盘**。归不到守护进程头上时(比如同时有
+       好几个 docker 命令在跑),它自己那个 0 是没有意义的 ——
+       显示「已写入 0 B · 0 B/s」会被读成"卡住了",而它其实下得好好的。
+       这种情况必须报"测不到",不能报 0。 */
+    const dockerUnattributed = DOCKER_KINDS.has(t.kind) && !useDaemon;
     /* 非 docker 的一律按**进程树**求和,而不是只看这一个 pid ——
        git/wget/pip 真正写盘的往往是子进程。 */
     const treeBytes = useDaemon ? -1 : subtreeWriteBytes(t.pid, scan);
@@ -491,12 +518,21 @@ function mergeTasks(prev, scan, nowMs) {
     const watchPath = watchPathFor(t);
     const dirBytes = watchPath && scan.pathSizes ? (scan.pathSizes.get(watchPath) ?? -1) : -1;
     const bytes = dirBytes >= 0 ? dirBytes
-      : (useDaemon ? dockerBytes : (treeBytes >= 0 ? treeBytes : t.writeBytes));
+      : (useDaemon ? dockerBytes
+        : (dockerUnattributed ? -1 : (treeBytes >= 0 ? treeBytes : t.writeBytes)));
     const measurable = bytes >= 0;
+
+    /* 它所属服务的 journal 里可能正带着分层进度(`146.7MB/323.8MB`)。
+       截图里智能体报的那三行百分比就是从这里读的 —— 面板没理由拿不到。 */
+    const ownUnit = t.unit ? (scan.units || []).find((u) => u.unit === t.unit) : null;
+    const logProgress = ownUnit ? parseSizeProgress(ownUnit.lastLog) : null;
 
     const base = {
       ...t,
       title: taskTitle(t),
+      progressFromLog: logProgress,
+      progressNote: logProgress ? `来自 ${t.unit} 的日志(docker 按层计,不是整个镜像)` : '',
+      lastLog: ownUnit ? ownUnit.lastLog : '',
       startedAtMs: old?.startedAtMs ?? (nowMs - t.elapsedSec * 1000),
       bytes: measurable ? bytes : null,
       bytesSource: dirBytes >= 0 ? 'dir'
@@ -613,7 +649,7 @@ function diskWarning(disks = [], { minFreeBytes = 5 * 1024 ** 3 } = {}) {
 
 module.exports = {
   KINDS, STALL_AFTER_MS, STALL_KINDS, DOCKER_KINDS, FIELD,
-  watchPathFor, watchPathForUnit, collectWatchPaths, safeWatchPath,
+  watchPathFor, watchPathForUnit, collectWatchPaths, collectUnits, safeWatchPath,
   classifyKind, kindLabel,
   buildScanCommand, parseScan, mergeTasks, pickDaemonBytes, unitTask, parseSizeProgress,
   subtreeWriteBytes,

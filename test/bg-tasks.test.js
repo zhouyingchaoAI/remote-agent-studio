@@ -8,8 +8,8 @@ const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 const F = bg.FIELD;
 /* 第 6 列是 long 标记:没匹配上已知类型、只是跑得久而被捞进来的进程。
    默认传 0(= 认得出的任务),需要时单独传。 */
-const taskLine = (pid, et, w, r, cmd, long = 0, ppid = 1) =>
-  ['TASK', pid, ppid, et, w, r, long, cmd].join(F);
+const taskLine = (pid, et, w, r, cmd, long = 0, ppid = 1, unit = '') =>
+  ['TASK', pid, ppid, et, w, r, long, unit, cmd].join(F);
 
 /* ------------------------------------------------------------ 分隔符 */
 
@@ -446,7 +446,7 @@ test('日志取最后 6 行而不是 1 行', () => {
 
 test('进度条标出这是什么的百分比', () => {
   const ui = read('src/components/BgTasksDrawer.jsx');
-  assert.match(ui, /<ProgressBar p=\{task\.progress\} note=\{task\.progressNote\} \/>/);
+  assert.match(ui, /<ProgressBar p=\{task\.progress \|\| task\.progressFromLog\} note=\{task\.progressNote\}/);
   // 光有百分比不够,得同时看到"下了多少 / 一共多少"
   assert.match(ui, /fmtBytes\(p\.transferred\)\} \/ \{fmtBytes\(p\.total\)/);
 });
@@ -589,4 +589,54 @@ test('界面标出数字的来源,并解释为什么没有百分比', () => {
   assert.match(ui, /没有百分比:这个下载器不报总量/);
   // 服务卡片之前被 kind !== 'systemd' 排除,压根不显示字节数
   assert.ok(!ui.includes("task.kind !== 'systemd' && (task.progressMode"));
+});
+
+/* ------------------------------- 服务日志里的分层进度要接到进程任务上 */
+
+test('顺带读出进程属于哪个 systemd 单元', () => {
+  /* 截图里那份 146.7/323.8 MB 的分层进度只存在于 ragflow-bootstrap.service
+     的 journal 里,而那个单元名不含 pull/download —— 按名字过滤永远扫不到。
+     进程的 cgroup 路径里就写着它属于哪个单元,顺着这条线才能找到日志。 */
+  assert.match(bg.buildScanCommand(), /\/proc\/\$p\/cgroup/);
+  const r = bg.parseScan(taskLine(9, 60, 0, 0, 'docker run x', 0, 1, 'ragflow-bootstrap.service'));
+  assert.equal(r.tasks[0].unit, 'ragflow-bootstrap.service');
+});
+
+test('下一轮把这些单元也纳入 journal 抓取', () => {
+  const units = bg.collectUnits({ tasks: [{ unit: 'a.service' }, { unit: 'a.service' }, { unit: '' }] });
+  assert.deepEqual(units, ['a.service']);
+  const cmd = bg.buildScanCommand({ extraUnits: ['ragflow-bootstrap.service'] });
+  assert.match(cmd, /'ragflow-bootstrap\.service'/);
+});
+
+test('把所属单元的日志进度挂到进程任务上', () => {
+  // 智能体在对话里报的那三行百分比就是从这里读的,面板没理由拿不到
+  const t9 = t({ pid: 9, kind: 'docker-run', unit: 'ragflow-bootstrap.service', command: 'docker run x' });
+  const scan = {
+    tasks: [t9], daemons: {}, disks: [], ppids: new Map(), io: new Map(), pathSizes: new Map(),
+    units: [{ unit: 'ragflow-bootstrap.service', lastLog: 'a1 Downloading 146.7MB/323.8MB' }]
+  };
+  const s = bg.mergeTasks([], scan, 0);
+  assert.ok(s[0].progressFromLog.total > 0);
+  const pct = Math.round(s[0].progressFromLog.transferred / s[0].progressFromLog.total * 100);
+  assert.equal(pct, 45);
+  assert.match(s[0].progressNote, /ragflow-bootstrap\.service/);
+});
+
+test('docker 归不到守护进程头上时报"测不到",不报 0 B', () => {
+  /* docker 客户端进程本来就不写盘。同时有好几个 docker 命令在跑时
+     归属不了,它自己那个 0 毫无意义 —— 显示「已写入 0 B · 0 B/s」
+     会被读成"卡住了",而它其实下得好好的。 */
+  const a = t({ pid: 1, kind: 'docker-run', command: 'docker run a', writeBytes: 0 });
+  const b = t({ pid: 2, kind: 'docker-pull', command: 'docker pull b', writeBytes: 0 });
+  const s = bg.mergeTasks([], { tasks: [a, b], daemons: { dockerd: 5e9 }, disks: [], ppids: new Map(), io: new Map() }, 0);
+  assert.equal(s[0].progress, 'unknown', '不该显示 0 B');
+  assert.equal(s[0].bytes, null);
+});
+
+test('界面优先用日志解析出来的进度画条', () => {
+  const ui = read('src/components/BgTasksDrawer.jsx');
+  assert.match(ui, /<ProgressBar p=\{task\.progress \|\| task\.progressFromLog\}/);
+  // 有日志进度时就不该再说"没有百分比"
+  assert.match(ui, /!task\.progressFromLog && \(/);
 });

@@ -2763,7 +2763,8 @@ async function bgScanHost(hostId) {
     const s = getSession(hostId);
     /* 要量的目录来自**上一轮**的结果:这一轮才知道有哪些任务、下到哪儿。
        用一轮(6 秒)的延迟换掉一次额外的 SSH 往返,划算。 */
-    const r = await s.ssh.exec(bgTasks.buildScanCommand({ watchPaths: st.watchPaths || [] }),
+    const r = await s.ssh.exec(
+      bgTasks.buildScanCommand({ watchPaths: st.watchPaths || [], extraUnits: st.extraUnits || [] }),
       { timeoutMs: 12000 });
     const scan = bgTasks.parseScan(r.stdout || '');
     const now = Date.now();
@@ -2772,6 +2773,10 @@ async function bgScanHost(hostId) {
     st.units = scan.units || [];
     st.uptimeSec = scan.uptimeSec || 0;
     st.watchPaths = bgTasks.collectWatchPaths(scan);
+    /* 下一轮把"正在跑下载的进程所属的单元"也纳入 journal 抓取 ——
+       它们的日志里往往正带着分层进度,而单元名不含 pull/download,
+       按名字过滤永远扫不到。 */
+    st.extraUnits = bgTasks.collectUnits(scan);
     // 存到 st 上:算快照的是另一个函数,拿不到这里的 scan
     st.pathSizes = scan.pathSizes || new Map();
     st.warning = bgTasks.diskWarning(scan.disks);
