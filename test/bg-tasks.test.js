@@ -336,10 +336,12 @@ test('单元永远不会被判停滞', () => {
   assert.ok(!bg.STALL_KINDS.has('systemd'));
 });
 
-test('systemd 单元不显示"进度读不到"', () => {
-  // 那句话是给进程用的(读不到 /proc/<pid>/io);单元根本没有 pid,说它没意义
+test('systemd 单元量不到时的文案不能照抄进程那套', () => {
+  /* 服务根本没有 pid,跟人说"读不到 /proc/<pid>/io"等于答非所问。
+     现在服务也会显示已下载量(量目标目录),量不到时才走这个分支。 */
   const ui = read('src/components/BgTasksDrawer.jsx');
-  assert.match(ui, /isHost && task\.kind !== 'systemd' &&/);
+  assert.match(ui, /task\.kind === 'systemd'/);
+  assert.match(ui, /未找到下载目录/);
 });
 
 /* -------------------------------------- 没被认出来的长跑进程也要能看到 */
@@ -502,4 +504,89 @@ test('git clone 的标题不再是没有信息量的数字', () => {
   assert.match(mk('git clone --branch main git@github.com:a/b.git'), /github\.com:a\/b\.git/);
   // 本地路径克隆:退到最后一个非选项、非纯数字的参数
   assert.match(mk('git clone --depth 1 /srv/mirror/repo /home/x'), /\/home\/x/);
+});
+
+/* ------------------------------------------- 对话里说的那个数,面板也要有 */
+
+test('服务的已运行时长按单调时钟算,不是写死 0', () => {
+  /* 截图里一个下了半小时的服务显示「已运行 0 秒」—— 比不显示更糟,
+     因为它看起来像刚起来、一切正常。
+     systemd 给的是开机以来的微秒数,得减去 /proc/uptime 才是"跑了多久"。 */
+  const out = [
+    ['UNIT', 'a.service', 'activating', 'start', '120000000', 'Fetching...'].join(F),
+    ['UPTIME', '3600.5'].join(F)
+  ].join('\n');
+  const r = bg.parseScan(out);
+  assert.equal(r.uptimeSec, 3600.5);
+  const task = bg.unitTask(r.units[0], { now: 0, uptimeSec: r.uptimeSec });
+  assert.ok(Math.abs(task.elapsedMs - 3480500) < 1500, `实际 ${task.elapsedMs}`);
+});
+
+test('拿不到启动时刻时不瞎算', () => {
+  const u = { unit: 'a.service', activeState: 'running', subState: 'running', startedMonotonicUs: 0, lastLog: '' };
+  assert.equal(bg.unitTask(u, { now: 0, uptimeSec: 999 }).elapsedMs, 0);
+});
+
+test('从命令里找出下载目标目录', () => {
+  /* 对话里智能体报的「当前约下载 2GB」就是 du 出来的。
+     面板也量同一个目录,才不会出现"对话说 2GB、面板说 0 B"的自相矛盾。 */
+  assert.equal(bg.watchPathFor({ kind: 'git-clone', command: 'git clone --depth 1 https://h/x /home/models/Q' }), '/home/models/Q');
+  assert.equal(bg.watchPathFor({ kind: 'wget', command: 'wget -c -P /home/models/x https://a/b' }), '/home/models/x');
+  assert.equal(bg.watchPathFor({ kind: 'hf', command: 'huggingface-cli download X --local-dir /data/m' }), '/data/m');
+});
+
+test('服务的目标目录从日志里找', () => {
+  // 截图里那条日志就写着「weights to /home/models.」
+  assert.equal(
+    bg.watchPathForUnit({ lastLog: 'Started Download and checkout Qwen3.6 weights to /home/models.|15 objects found' }),
+    '/home/models'
+  );
+});
+
+test('绝不去 du 系统目录', () => {
+  /* 这里防的**不是注入**(路径会被 shellQuote),而是卡死:
+     du -sb / 在几 TB 的机器上要跑几分钟,而扫描是 12 秒超时的 ——
+     结果是每一轮都超时,面板彻底不动。 */
+  for (const bad of ['/', '/usr', '/etc/', '/proc', '/dev', '/var/lib/docker', 'relative/path', '']) {
+    assert.equal(bg.safeWatchPath(bad), '', `${bad} 不该被 du`);
+  }
+  assert.equal(bg.safeWatchPath('/home/models/Q'), '/home/models/Q');
+});
+
+test('要量的目录有数量上限', () => {
+  // du 再快也架不住一次量十几个
+  const tasks = Array.from({ length: 10 }, (_, i) =>
+    ({ kind: 'wget', command: `wget -P /home/d${i} https://a/b` }));
+  assert.ok(bg.collectWatchPaths({ tasks, units: [] }).length <= 4);
+});
+
+test('目录大小优先于 /proc 的写入量', () => {
+  /* 它和智能体报的是同一个数。否则会出现"对话说已下 2GB、面板说 0 B",
+     那比没有数字更让人不信任面板。 */
+  const gt = t({ pid: 9, kind: 'git-clone', command: 'git clone https://h/x /home/models/Q', writeBytes: 0 });
+  const mk = (sz) => ({
+    tasks: [gt], daemons: {}, disks: [], ppids: new Map(), io: new Map(),
+    pathSizes: new Map([['/home/models/Q', sz]])
+  });
+  let s = bg.mergeTasks([], mk(2.0e9), 0);
+  s = bg.mergeTasks(s, mk(2.3e9), 10000);
+  assert.equal(s[0].bytesSource, 'dir');
+  assert.equal(s[0].bytes, 2.3e9);
+  assert.equal(s[0].watchPath, '/home/models/Q');
+});
+
+test('路径被 shell 引用', () => {
+  const cmd = bg.buildScanCommand({ watchPaths: ["/home/it's"] });
+  assert.match(cmd, /du -sb '\/home\/it'/);
+});
+
+test('界面标出数字的来源,并解释为什么没有百分比', () => {
+  const ui = read('src/components/BgTasksDrawer.jsx');
+  for (const src of ['daemon', 'tree', 'dir']) {
+    assert.ok(ui.includes(`task.bytesSource === '${src}'`), `没标出 ${src} 来源`);
+  }
+  // 有字节数却没进度条时,不说明白会被当成"进度条坏了"
+  assert.match(ui, /没有百分比:这个下载器不报总量/);
+  // 服务卡片之前被 kind !== 'systemd' 排除,压根不显示字节数
+  assert.ok(!ui.includes("task.kind !== 'systemd' && (task.progressMode"));
 });

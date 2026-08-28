@@ -128,20 +128,35 @@ function TaskRow({ task, hostName }) {
 
         {task.activeState && <span title="systemd 的 ActiveState/SubState">{task.activeState}/{task.subState}</span>}
 
-        {isHost && task.kind !== 'systemd' && (task.progressMode === 'measured' ? (
+        {isHost && (task.progressMode === 'measured' ? (
           <>
             <span>已写入 {fmtBytes(task.bytes)}</span>
             <span>{task.bytesPerSec == null ? '测速中…' : `${fmtBytes(task.bytesPerSec)}/s`}</span>
           </>
         ) : task.state !== 'ended' && (
-          /* 读不到 /proc/<pid>/io。必须说"读不到"而不是显示 0 B/s ——
-             后者会被看成卡住了,让人去查一个不存在的问题。 */
-          <span title="读不到该进程的 /proc/<pid>/io,多半是它属于另一个用户">进度读不到</span>
+          /* 量不到时必须说"量不到",而不是显示 0 B/s —— 后者会被看成卡住了,
+             让人去查一个不存在的问题。
+             两种量不到的原因完全不同,文案也得不同:服务根本没有 pid,
+             跟人说"读不到 /proc/<pid>/io"等于答非所问。 */
+          task.kind === 'systemd'
+            ? <span title="日志里没提到下载目录,所以量不出已下载多少">未找到下载目录</span>
+            : <span title="读不到该进程的 /proc/<pid>/io,多半是它属于另一个用户">进度读不到</span>
         ))}
 
+        {/* 这个数字是怎么来的 —— 三种来源差别很大,不说清楚没法判断可不可信 */}
         {task.bytesSource === 'daemon' && (
-          <span title="docker pull 的下载是守护进程做的,客户端几乎不写盘,所以这里读的是 dockerd 的写入量">
+          <span title="docker 的下载是守护进程做的,客户端几乎不写盘,所以读的是 dockerd 的写入量">
             按 dockerd 计
+          </span>
+        )}
+        {task.bytesSource === 'tree' && (
+          <span title="下载器自己常常不写盘,写盘的是它 fork 出来的子进程,所以按整棵进程树求和">
+            按进程树计
+          </span>
+        )}
+        {task.bytesSource === 'dir' && (
+          <span title={`量的是目标目录 ${task.watchPath} 的大小 —— 和智能体在对话里报的是同一个数`}>
+            目标目录 {task.watchPath}
           </span>
         )}
         {isHost && task.pid && <span>PID {task.pid}</span>}
@@ -151,6 +166,12 @@ function TaskRow({ task, hostName }) {
           服务在拉镜像时,进度和报错都只在这里;没有它,面板只能说"在启动中"。 */}
       {task.lastLog && (
         <pre className="bg-log" title={task.lastLog}>{task.lastLog}</pre>
+      )}
+      {/* 有字节数但没总量:明说为什么没有百分比,否则会被当成"进度条坏了" */}
+      {task.progressMode === 'measured' && !task.progress?.total && (
+        <p className="bg-note small muted">
+          没有百分比:这个下载器不报总量,只能量出已下载多少。
+        </p>
       )}
       {task.note && <p className="bg-note small muted">{task.note}</p>}
       {task.state === 'stalled' && (

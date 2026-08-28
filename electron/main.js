@@ -2761,12 +2761,19 @@ async function bgScanHost(hostId) {
   bgState.set(hostId, st);
   try {
     const s = getSession(hostId);
-    const r = await s.ssh.exec(bgTasks.buildScanCommand(), { timeoutMs: 12000 });
+    /* 要量的目录来自**上一轮**的结果:这一轮才知道有哪些任务、下到哪儿。
+       用一轮(6 秒)的延迟换掉一次额外的 SSH 往返,划算。 */
+    const r = await s.ssh.exec(bgTasks.buildScanCommand({ watchPaths: st.watchPaths || [] }),
+      { timeoutMs: 12000 });
     const scan = bgTasks.parseScan(r.stdout || '');
     const now = Date.now();
     st.tasks = bgTasks.mergeTasks(st.tasks, scan, now);
     st.disks = scan.disks;
     st.units = scan.units || [];
+    st.uptimeSec = scan.uptimeSec || 0;
+    st.watchPaths = bgTasks.collectWatchPaths(scan);
+    // 存到 st 上:算快照的是另一个函数,拿不到这里的 scan
+    st.pathSizes = scan.pathSizes || new Map();
     st.warning = bgTasks.diskWarning(scan.disks);
     st.at = now;
     st.error = '';
@@ -2797,8 +2804,9 @@ function tasksSnapshot(scope = {}) {
        单元从列表里消失通常意味着它离开了 activating(起来了),但我们并没有
        真的确认过 —— 所以不给它伪造一个"完成",直接不再显示。 */
     for (const u of st.units || []) {
-      const t = bgTasks.unitTask(u, { now });
-      hostTasks.push({ ...t, id: `unit_${hostId}_${t.unit}`, source: 'host', hostId, elapsedMs: 0 });
+      const t = bgTasks.unitTask(u, { now, uptimeSec: st.uptimeSec, pathSizes: st.pathSizes });
+      // elapsedMs 由 unitTask 按单调时钟算出,别在这里覆盖成 0
+      hostTasks.push({ ...t, id: `unit_${hostId}_${t.unit}`, source: 'host', hostId });
     }
   }
   const tasks = taskRegistry.snapshot({ now, hostTasks, ...scope });

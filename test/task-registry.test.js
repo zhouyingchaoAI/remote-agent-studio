@@ -304,3 +304,12 @@ test('磁盘预警只报当前主机', () => {
   const main = read('electron/main.js');
   assert.match(main, /\.filter\(\(\[hostId\]\) => !scope\.hostId \|\| hostId === scope\.hostId\)/);
 });
+
+test('pathSizes 存在 st 上,不是从别的函数的局部变量里拿', () => {
+  /* 算快照的是 tasksSnapshot,量目录的是 bgScanHost —— 两个函数。
+     直接引用 scan.pathSizes 会是 undefined,而这类作用域错误
+     单测抓不到(它在主进程里、要跑起来才炸),lint 抓到了。 */
+  const main = read('electron/main.js');
+  assert.match(main, /st\.pathSizes = scan\.pathSizes/);
+  assert.match(main, /pathSizes: st\.pathSizes/);
+});

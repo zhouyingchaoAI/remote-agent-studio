@@ -22,6 +22,11 @@
  */
 const { redact } = require('./errorLog');
 
+/** 单引号包裹法:内部的单引号用 '\'' 转义。路径来自命令行,必须当不可信处理。 */
+function shellQuote(v) {
+  return `'${String(v).replace(/'/g, "'\\''")}'`;
+}
+
 /** 认得出的下载类任务。顺序有意义:先匹配到的先算。 */
 const KINDS = [
   /* docker-build 必须排在 docker-pull **前面**:`docker build --pull` 两个都匹配,
@@ -72,7 +77,7 @@ const FIELD = '\x1f';
  * 客户端进程几乎不写盘。只看客户端会得出"一直 0 B/s"的结论,
  * 从而把一个正常的拉取误报成卡住 —— 这正是最要避免的错误。
  */
-function buildScanCommand() {
+function buildScanCommand({ watchPaths = [] } = {}) {
   const pattern = KINDS.map((k) => k.id).join('|');   // 仅用于注释,真正的匹配在下面
   return [
     `# kinds: ${pattern}`,
@@ -161,9 +166,18 @@ function buildScanCommand() {
       + ' "$u" "$st" "$sub" "$since" "$last"',
     '  done',
     'fi',
+    /* 系统运行时长。systemd 给的是**单调时钟**的时间戳(开机以来的微秒数),
+       不减去它就没法换算成"这个单元跑了多久" —— 界面上会一直显示「已运行 0 秒」,
+       而那个服务其实已经下了半小时。 */
+    `awk '{printf "UPTIME\x1f%s\\n", $1}' /proc/uptime 2>/dev/null`,
     /* 磁盘余量:大镜像/权重把盘写满是这些任务最常见的死法,
        而报错往往埋在几百行输出里,不如直接摆出来 */
-    `df -P -k 2>/dev/null | awk 'NR>1 && $1 ~ /^\\// {printf "DISK\x1f%s\x1f%s\x1f%s\\n", $6, $4, $5}'`
+    `df -P -k 2>/dev/null | awk 'NR>1 && $1 ~ /^\\// {printf "DISK\x1f%s\x1f%s\x1f%s\\n", $6, $4, $5}'`,
+    /* 量一下下载目标目录有多大。
+       路径由上一轮扫描的结果推出来(见 collectWatchPaths),所以第一轮没有、
+       第二轮起才有 —— 用一轮的延迟换掉一次额外往返,划算。 */
+    ...watchPaths.map((p) => `du -sb ${shellQuote(p)} 2>/dev/null`
+      + ` | awk '{printf "PATHSZ\x1f%s\x1f%s\\n", $2, $1}'`)
   ].join('\n');
 }
 
@@ -173,6 +187,8 @@ function parseScan(text) {
   const daemons = {};
   const disks = [];
   const units = [];
+  let uptimeSec = 0;
+  const pathSizes = new Map();   // 目标目录 -> 字节数
   const ppids = new Map();   // pid -> ppid
   const io = new Map();      // pid -> write_bytes
   for (const line of String(text || '').split('\n')) {
@@ -199,6 +215,10 @@ function parseScan(text) {
         kind,
         label: kindLabel(kind)
       });
+    } else if (parts[0] === 'PATHSZ' && parts.length >= 3) {
+      pathSizes.set(parts[1], Number(parts[2]) || 0);
+    } else if (parts[0] === 'UPTIME' && parts.length >= 2) {
+      uptimeSec = Number(parts[1]) || 0;
     } else if (parts[0] === 'PPID' && parts.length >= 3) {
       ppids.set(Number(parts[1]), Number(parts[2]));
     } else if (parts[0] === 'IO' && parts.length >= 3) {
@@ -213,6 +233,8 @@ function parseScan(text) {
         unit: name,
         activeState: parts[2],
         subState: parts[3],
+        // 单调时钟的微秒数,配合 /proc/uptime 才能算出"跑了多久"
+        startedMonotonicUs: Number(parts[4]) || 0,
         // 日志里可能有 token(拉私有仓库的报错常带 Authorization),照例脱敏
         lastLog: redact(String(parts[5] || '').trim()).slice(-200)
       });
@@ -224,7 +246,7 @@ function parseScan(text) {
       });
     }
   }
-  return { tasks, daemons, disks, units, ppids, io };
+  return { tasks, daemons, disks, units, ppids, io, uptimeSec, pathSizes };
 }
 
 /* ------------------------------------------------- systemd 单元 → 任务 */
@@ -240,8 +262,17 @@ function parseScan(text) {
  * `activating` 就是最好的信号 —— 它的字面意思就是"在启动,还没就绪"。
  * 而真正说明"到哪一步了"的,是最后一行日志。
  */
-function unitTask(u, { now = Date.now() } = {}) {
+function unitTask(u, { now = Date.now(), uptimeSec = 0, pathSizes = null } = {}) {
   const starting = u.activeState === 'activating';
+  /* systemd 的时间戳是单调时钟(开机以来的微秒),减去系统已运行时长才是"跑了多久"。
+     之前这里直接写死 0,于是一个下了半小时的服务显示「已运行 0 秒」—— 
+     比不显示更糟,因为它看起来像刚起来、没问题。 */
+  const startedSec = u.startedMonotonicUs > 0 ? u.startedMonotonicUs / 1e6 : 0;
+  const elapsedMs = (startedSec > 0 && uptimeSec > startedSec)
+    ? Math.round((uptimeSec - startedSec) * 1000)
+    : 0;
+  const unitPath = watchPathForUnit(u);
+  const unitBytes = unitPath && pathSizes ? (pathSizes.get(unitPath) ?? -1) : -1;
   const failed = u.activeState === 'failed' || u.subState === 'failed';
   return {
     unit: u.unit,
@@ -265,8 +296,82 @@ function unitTask(u, { now = Date.now() } = {}) {
        不写明的话,进度条走到 100% 又跳回去会像出错了。 */
     progressNote: '来自服务日志(docker 按层计,不是整个镜像)',
     note: starting ? '单元仍在 activating —— 尚未就绪,常见于还在拉镜像' : '',
+    elapsedMs,
+    /* 服务往哪儿下的,以及那个目录现在多大 —— 这是"对话里说的 2GB"
+       在面板上的对应物。 */
+    watchPath: unitPath,
+    bytes: unitBytes >= 0 ? unitBytes : null,
+    progressMode: unitBytes >= 0 ? 'measured' : 'unknown',
+    bytesSource: unitBytes >= 0 ? 'dir' : '',
     sampledAtMs: now
   };
+}
+
+/* ------------------------------------------------------- 下载目标目录 */
+
+/**
+ * 绝不去 du 的目录。
+ *
+ * 这里防的**不是注入**(路径会被 shellQuote),而是**卡死**:
+ * `du -sb /` 在一台有几 TB 数据的机器上要跑几分钟,而扫描是 12 秒超时的 ——
+ * 结果就是整个面板每一轮都超时,什么都显示不出来。
+ */
+const DU_DENY = /^\/(usr|etc|proc|sys|dev|boot|bin|sbin|lib|lib64|run|var\/lib\/docker)?\/?$/;
+
+function safeWatchPath(pth) {
+  const p = String(pth || '').trim().replace(/[",;|&$`]/g, '');
+  if (!p.startsWith('/') || p.length < 5) return '';
+  if (DU_DENY.test(p)) return '';
+  return p;
+}
+
+/**
+ * 猜这个任务把东西下到哪儿了。
+ *
+ * 为什么要猜:对话里智能体会说「当前约下载 2GB」—— 它是 du 出来的。
+ * 而面板只会读 /proc 的写入量,那个数字在很多情况下拿不到(比如
+ * 写盘的是孙子进程、或者进程属于别的用户)。**目录大小是最稳的一手数据**,
+ * 而且和智能体报的是同一个数,不会出现"对话说 2GB、面板说 0 B"。
+ */
+function watchPathFor(task) {
+  const cmd = String(task?.command || '');
+  const pick = (re) => safeWatchPath((cmd.match(re) || [])[1]);
+  switch (task?.kind) {
+    case 'git-clone': {
+      // 目标目录是最后一个非选项、非 URL、非纯数字的参数
+      const dest = cmd.split(/\s+/).reverse()
+        .find((w) => w.startsWith('/') && !/^-/.test(w));
+      return safeWatchPath(dest);
+    }
+    case 'wget': return pick(/-P\s+(\S+)/) || pick(/-O\s+(\S+)/);
+    case 'curl': return pick(/-o\s+(\S+)/) || pick(/--output\s+(\S+)/);
+    case 'hf': return pick(/--local-dir[= ](\S+)/) || pick(/--cache-dir[= ](\S+)/);
+    case 'rsync':
+    case 'scp': {
+      const last = cmd.split(/\s+/).pop();
+      return safeWatchPath(last);
+    }
+    default: return '';
+  }
+}
+
+/** 服务的目标目录只能从日志里找 —— 截图里那条就写着「weights to /home/models.」 */
+function watchPathForUnit(u) {
+  const m = String(u?.lastLog || '').match(/(\/[A-Za-z0-9._\-/]{4,})/g) || [];
+  for (const raw of m) {
+    const p = safeWatchPath(raw.replace(/[.,;:]$/, ''));
+    if (p) return p;
+  }
+  return '';
+}
+
+/** 汇总本轮要量的目录。限量:du 再快也架不住一次量十几个。 */
+function collectWatchPaths({ tasks = [], units = [] } = {}, { max = 4 } = {}) {
+  const out = [];
+  const add = (p) => { if (p && !out.includes(p) && out.length < max) out.push(p); };
+  for (const t of tasks) add(watchPathFor(t));
+  for (const u of units) add(watchPathForUnit(u));
+  return out;
 }
 
 /* ----------------------------------------------------- 从日志里抠出真进度 */
@@ -380,7 +485,13 @@ function mergeTasks(prev, scan, nowMs) {
     /* 非 docker 的一律按**进程树**求和,而不是只看这一个 pid ——
        git/wget/pip 真正写盘的往往是子进程。 */
     const treeBytes = useDaemon ? -1 : subtreeWriteBytes(t.pid, scan);
-    const bytes = useDaemon ? dockerBytes : (treeBytes >= 0 ? treeBytes : t.writeBytes);
+    /* 目标目录的大小优先级最高:它和智能体在对话里报的是**同一个数**
+       (它也是 du 出来的)。否则会出现"对话说已下 2GB、面板说 0 B"这种
+       自相矛盾 —— 那比没有数字更让人不信任面板。 */
+    const watchPath = watchPathFor(t);
+    const dirBytes = watchPath && scan.pathSizes ? (scan.pathSizes.get(watchPath) ?? -1) : -1;
+    const bytes = dirBytes >= 0 ? dirBytes
+      : (useDaemon ? dockerBytes : (treeBytes >= 0 ? treeBytes : t.writeBytes));
     const measurable = bytes >= 0;
 
     const base = {
@@ -388,7 +499,9 @@ function mergeTasks(prev, scan, nowMs) {
       title: taskTitle(t),
       startedAtMs: old?.startedAtMs ?? (nowMs - t.elapsedSec * 1000),
       bytes: measurable ? bytes : null,
-      bytesSource: useDaemon ? 'daemon' : (treeBytes >= 0 ? 'tree' : 'process'),
+      bytesSource: dirBytes >= 0 ? 'dir'
+        : (useDaemon ? 'daemon' : (treeBytes >= 0 ? 'tree' : 'process')),
+      watchPath: dirBytes >= 0 ? watchPath : '',
       sampledAtMs: nowMs
     };
 
@@ -500,6 +613,7 @@ function diskWarning(disks = [], { minFreeBytes = 5 * 1024 ** 3 } = {}) {
 
 module.exports = {
   KINDS, STALL_AFTER_MS, STALL_KINDS, DOCKER_KINDS, FIELD,
+  watchPathFor, watchPathForUnit, collectWatchPaths, safeWatchPath,
   classifyKind, kindLabel,
   buildScanCommand, parseScan, mergeTasks, pickDaemonBytes, unitTask, parseSizeProgress,
   subtreeWriteBytes,
