@@ -46,15 +46,17 @@ function fmtDur(ms) {
  * 存在的理由:面板不打开时也得让人知道后台有活儿 —— 人恰恰是想不起来看的时候
  * 才最需要它。所以保持一个 30 秒的慢档轮询,面板打开才切到 6 秒的快档。
  */
-export function BgTasksBadge({ onClick }) {
+export function BgTasksBadge({ onClick, hostId = '', convId = '' }) {
   const [snap, setSnap] = useState({ running: 0, stalled: 0, failed: 0 });
 
   useEffect(() => {
-    window.api.bg.start({ fast: false });
+    /* 角标和面板用同一套作用域 —— 否则会出现「角标说有 3 个,点进去一个没有」
+       (那 3 个在别的主机上)。 */
+    window.api.bg.start({ fast: false, hostId, convId });
     const off = window.api.bg.onUpdate(setSnap);
-    window.api.bg.snapshot().then(setSnap).catch(() => {});
+    window.api.bg.snapshot({ hostId, convId }).then(setSnap).catch(() => {});
     return () => off?.();
-  }, []);
+  }, [hostId, convId]);
 
   const bad = (snap.stalled || 0) + (snap.failed || 0);
   if (!snap.running && !bad) return null;
@@ -171,9 +173,12 @@ function TaskRow({ task, hostName }) {
   );
 }
 
-export default function BgTasksDrawer({ open, onClose, hostName }) {
+export default function BgTasksDrawer({ open, onClose, hostName, hostId = '', convId = '' }) {
   const [snap, setSnap] = useState({ tasks: [], warnings: [], running: 0, stalled: 0, failed: 0 });
-  const [showDone, setShowDone] = useState(true);
+  /* 默认只看**当前主机、正在跑**的任务。
+     跑完的仍然留在后台登记表里,打开这个开关就能查到刚才那条成没成 ——
+     只是不该默认占着屏幕。 */
+  const [showAll, setShowAll] = useState(false);
   /* 「其他长跑进程」默认关。
      认得出的类型是一份人工列举,一定会漏 —— 所以扫描顺带把跑了 5 分钟以上、
      又不是常驻守护进程的都捞了回来。但默认摊开会淹掉真正的任务,
@@ -182,22 +187,19 @@ export default function BgTasksDrawer({ open, onClose, hostName }) {
 
   useEffect(() => {
     if (!open) return undefined;
-    window.api.bg.start({ fast: true });
+    window.api.bg.start({ fast: true, hostId, convId, all: showAll });
     const off = window.api.bg.onUpdate(setSnap);
-    window.api.bg.snapshot().then(setSnap).catch(() => {});
+    window.api.bg.snapshot({ hostId, convId, all: showAll }).then(setSnap).catch(() => {});
     /* 关面板只降回慢档,不整个停掉 —— 角标还要靠它更新。
        慢档 30 秒的通道开销可以接受,6 秒常驻就不行了。 */
-    return () => { off?.(); window.api.bg.start({ fast: false }); };
-  }, [open]);
+    return () => { off?.(); window.api.bg.start({ fast: false, hostId, convId }); };
+  }, [open, hostId, convId, showAll]);
 
   if (!open) return null;
 
-  const tasks = (snap.tasks || [])
-    .filter((t) => showOther || !t.longRunning)
-    .filter((t) => showDone || t.state === 'running' || t.state === 'stalled');
+  // 状态和作用域的筛选在主进程做(见 taskRegistry.snapshot),这里只管"其他长跑进程"
+  const tasks = (snap.tasks || []).filter((t) => showOther || !t.longRunning);
   const otherCount = (snap.tasks || []).filter((t) => t.longRunning).length;
-  const finishedCount = (snap.tasks || []).length - (snap.tasks || [])
-    .filter((t) => t.state === 'running' || t.state === 'stalled').length;
 
   return (
     <>
@@ -218,12 +220,11 @@ export default function BgTasksDrawer({ open, onClose, hostName }) {
               <span className="small">其他长跑进程 {otherCount}</span>
             </label>
           )}
-          {finishedCount > 0 && (
-            <label className="check-row inline" title="刚跑完的任务会保留 10 分钟">
-              <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} />
-              <span className="small">含已结束</span>
-            </label>
-          )}
+          <label className="check-row inline"
+            title="默认只显示当前主机正在跑的(失败的也会显示)。勾上可以查看刚跑完的和其他主机的">
+            <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
+            <span className="small">显示全部</span>
+          </label>
           <button className="icon-btn" onClick={onClose}>✕</button>
         </div>
 
@@ -236,10 +237,9 @@ export default function BgTasksDrawer({ open, onClose, hostName }) {
 
           {tasks.length === 0 && (
             <p className="muted small pad center">
-              没有正在跑的后台任务。
+              这台主机上没有正在跑的后台任务。
               <br />
-              这里会汇总应用发起的活儿(传输、安装、技能下发、速览、对话轮次)
-              和已连接主机上扫到的进程(智能体或你自己起的下载、编译)。
+              勾选「显示全部」可以查看刚跑完的、以及其他主机上的。
             </p>
           )}
 

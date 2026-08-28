@@ -12,9 +12,14 @@
  *  · **host** —— 扫描主机进程发现的(见 bgTasks.js)。我们只知道它在跑;
  *    **进程消失时拿不到退出码**,所以只能标"已结束(结果未知)",不能假装成功。
  *
- * 一个关键修正:任务跑完后**要在列表里留一会儿**。
- * 之前的下载面板是进程一消失任务就没了 —— 于是"下完了"和"下挂了"表现完全一样,
- * 你永远不知道刚才那个拉取到底成没成。终态才是这个面板最该回答的问题。
+ * 终态怎么处理,来回改过两次,最后定在这里:
+ *
+ *  · 跑完的任务**仍然登记、仍然保留一段时间**,所以"刚才那条到底成没成"
+ *    随时能查到(打开「显示全部」)。
+ *  · 但**默认不显示**。实测一屏里一半是「已结束(结果未知)」的空壳 ——
+ *    主机上十几秒就没了的子进程根本不是你关心的任务,它们只是把
+ *    真正在跑的活儿挤下去了。
+ *  · **失败的例外,默认就显示。** 失败不是噪音,是最该立刻看到的那条。
  */
 const { redact } = require('./errorLog');
 
@@ -159,14 +164,51 @@ class TaskRegistry {
    *
    * @param hostTasks bgTasks 扫出来的主机进程(见 mergeHostTasks 的取舍)
    */
-  snapshot({ now = Date.now(), hostTasks = [] } = {}) {
+  snapshot({ now = Date.now(), hostTasks = [], hostId = '', convId = '', all = false } = {}) {
     this.prune(now);
     const app = [...this.tasks.values()]
       // 跑得够久才露面:短任务一闪而过只是噪音
       .filter((t) => t.state !== 'running' || now - t.startedAt >= VISIBLE_AFTER_MS)
       .map((t) => ({ ...t, elapsedMs: (t.endedAt || now) - t.startedAt }));
-    return [...app, ...hostTasks].sort(byRecency);
+
+    const merged = [...app, ...hostTasks];
+    /* all=true 时不筛,给「看全部」开关用。
+       终态仍然留在登记表里(prune 才删),只是默认不显示 —— 这样
+       打开开关就能立刻看到刚才那条到底成没成,不必重新跑一遍。 */
+    const visible = all
+      ? merged
+      : merged.filter((t) => DEFAULT_STATES.has(t.state) && matchesScope(t, { hostId, convId }));
+    return visible.sort(byRecency);
   }
+}
+
+/**
+ * 面板默认只显示这些状态。
+ *
+ * 原来把跑完的也留 10 分钟,理由是"要能看到结果"。但实际用起来,
+ * 一屏里一半是「已结束(结果未知)」的空壳 —— 主机上那些十几秒就没了的
+ * 子进程根本不是你关心的"任务",它们只是把真正在跑的活儿挤下去了。
+ *
+ * 折中:默认只看在跑的,**但失败的留着**。失败不是噪音,恰恰是你最需要
+ * 立刻看到的一条;把它和"跑完了"一起藏掉,等于让错误悄悄溜走。
+ * 想看全的有开关。
+ */
+const DEFAULT_STATES = new Set(['running', 'stalled', 'failed']);
+
+/**
+ * 按主机/对话筛。
+ *
+ * **诚实的边界**:主机上扫到的进程**无法归属到某一轮对话** —— 智能体是自己
+ * 在远端起进程的,应用只转发输出,看不到是哪次对话起的哪个进程。
+ * 能做到的最细粒度是「哪台主机」。应用自己发起的任务才带得上 convId。
+ * 所以按对话筛时,主机进程按主机匹配即可,不能硬要求 convId 相等 ——
+ * 那会把它们全部滤掉,而它们正是最需要看的。
+ */
+function matchesScope(t, { hostId = '', convId = '' } = {}) {
+  if (hostId && t.hostId && t.hostId !== hostId) return false;
+  // 只有应用侧任务知道自己属于哪轮对话;带了才比,没带就不筛
+  if (convId && t.source === 'app' && t.convId && t.convId !== convId) return false;
+  return true;
 }
 
 function byRecency(a, b) {
@@ -248,6 +290,6 @@ function stateText(task) {
 
 module.exports = {
   TaskRegistry, TASK_CHANNELS,
-  RETAIN_MS, RETAIN_MAX, VISIBLE_AFTER_MS,
+  RETAIN_MS, RETAIN_MAX, VISIBLE_AFTER_MS, DEFAULT_STATES, matchesScope,
   describe, mergeHostTasks, stateText, shorten
 };

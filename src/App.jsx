@@ -62,6 +62,10 @@ export default function App() {
   const activeHost = hosts.find((h) => h.id === activeHostId);
   const status = statuses[activeHostId] || 'disconnected';
   const [bgOpen, setBgOpen] = useState(false);
+  /* 面板默认只显示当前主机 / 当前对话的任务。
+     注意主机上扫到的进程归不到某一轮对话(智能体是自己在远端起进程的),
+     所以 convId 只对应用侧任务生效 —— 见 taskRegistry.matchesScope。 */
+  const activeConvId = useStore((s) => s.activeConvByHost?.[s.activeHostId] || '');
 
   useEffect(() => {
     loadSettings();
@@ -256,6 +260,7 @@ export default function App() {
       <ErrorBoundary>
       <SettingsModal />
       <BgTasksDrawer open={bgOpen} onClose={() => setBgOpen(false)}
+        hostId={activeHostId} convId={activeConvId}
         hostName={(id) => (hosts.find((h) => h.id === id) || {}).name || id} />
       <Sidebar />
       <div className="main">
@@ -292,7 +297,7 @@ export default function App() {
                 ))}
                 {/* 后台下载任务:放角标而不是占一个标签页 ——
                     导航栏的位置要留给对话/终端/文件这三个最常用的 */}
-                <BgTasksBadge onClick={() => setBgOpen(true)} />
+                <BgTasksBadge onClick={() => setBgOpen(true)} hostId={activeHostId} convId={activeConvId} />
               </div>
             </div>
             <div className="content">

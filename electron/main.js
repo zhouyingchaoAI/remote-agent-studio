@@ -2787,7 +2787,7 @@ async function bgScanHost(hostId) {
  * 主机侧要经过 mergeHostTasks —— 进程从 ps 里消失时得留下一条终态,
  * 否则"下完了"和"下挂了"表现完全一样,而那恰恰是最该被回答的问题。
  */
-function tasksSnapshot() {
+function tasksSnapshot(scope = {}) {
   const now = Date.now();
   const hostTasks = [];
   for (const [hostId, st] of bgState) {
@@ -2801,8 +2801,11 @@ function tasksSnapshot() {
       hostTasks.push({ ...t, id: `unit_${hostId}_${t.unit}`, source: 'host', hostId, elapsedMs: 0 });
     }
   }
-  const tasks = taskRegistry.snapshot({ now, hostTasks });
+  const tasks = taskRegistry.snapshot({ now, hostTasks, ...scope });
+  /* 磁盘预警只报当前主机的。之前是把所有已连接主机的都堆上来,
+     于是你在看 A 机器,却收到 B 机器的告警 —— 看着像当前这台快满了。 */
   const warnings = [...bgState.entries()]
+    .filter(([hostId]) => !scope.hostId || hostId === scope.hostId)
     .map(([hostId, st]) => (st.warning ? { hostId, ...st.warning } : null))
     .filter(Boolean);
   return {
@@ -2832,7 +2835,12 @@ function bgSnapshot() {
   return { hosts, running, stalled };
 }
 
-ipcMain.handle('bg:start', (_e, { fast = false } = {}) => {
+/* 渲染进程当前在看哪台主机 / 哪轮对话。推送要按它筛,
+   否则角标会把别的主机的任务也算进来。 */
+let bgScope = {};
+
+ipcMain.handle('bg:start', (_e, { fast = false, ...scope } = {}) => {
+  bgScope = scope;
   // 已经在按需要的频率跑了就不动,避免频繁重建定时器把采样间隔打乱
   if (bgTimer && bgFast === !!fast) return true;
   if (bgTimer) clearInterval(bgTimer);
@@ -2841,7 +2849,7 @@ ipcMain.handle('bg:start', (_e, { fast = false } = {}) => {
     // 只扫已连接的主机;本机会话是懒创建的,没建就不主动建
     const ids = [...sessions.keys()];
     await Promise.all(ids.map((id) => bgScanHost(id).catch(() => {})));
-    const snap = tasksSnapshot();
+    const snap = tasksSnapshot(bgScope);
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send('bg:update', snap);
   };
   tick();
@@ -2860,7 +2868,7 @@ ipcMain.handle('bg:snapshot', () => bgSnapshot());
 
 /* 面板要的是**所有**后台任务,不只是下载。
    应用侧任务来自 IPC 包装的自动登记,主机侧来自进程扫描,这里合成一份。 */
-ipcMain.handle('tasks:snapshot', () => tasksSnapshot());
+ipcMain.handle('tasks:snapshot', (_e, scope = {}) => tasksSnapshot(scope));
 
 ipcMain.handle('tasks:cancel', async (_e, { id } = {}) => {
   const t = taskRegistry.tasks.get(id);

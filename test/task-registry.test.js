@@ -3,7 +3,8 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const {
-  TaskRegistry, TASK_CHANNELS, VISIBLE_AFTER_MS, describe: desc, mergeHostTasks, stateText
+  TaskRegistry, TASK_CHANNELS, VISIBLE_AFTER_MS, describe: desc, mergeHostTasks, stateText,
+  DEFAULT_STATES, matchesScope
 } = require('../electron/taskRegistry');
 
 const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
@@ -43,7 +44,8 @@ test('登记 → 完成', () => {
   const id = r.begin('fs:upload', { localPath: '/a/b.zip', hostId: 'h1' }, { now: 0 });
   assert.ok(id);
   r.end(id, { ok: true, now: 5000 });
-  const t = r.snapshot({ now: 5000 })[0];
+  // 「完成」默认不显示了,要看得打开 all
+  const t = r.snapshot({ now: 5000, all: true })[0];
   assert.equal(t.state, 'done');
   assert.equal(t.elapsedMs, 5000);
   assert.equal(t.hostId, 'h1');
@@ -81,7 +83,8 @@ test('进度回填只作用于还在跑的任务', () => {
   const id = r.begin('fs:download', { remotePath: '/a', transferId: 'tr_x' }, { now: 0 });
   r.end(id, { ok: true, now: 100 });
   r.updateByRef('tr_x', { progress: { transferred: 1, total: 2 } });
-  assert.equal(r.snapshot({ now: 5000 })[0].progress, null);
+  // 已完成的默认不显示了,要查得打开 all
+  assert.equal(r.snapshot({ now: 5000, all: true })[0].progress, null);
 });
 
 test('进度事件比任务活得久是正常的,不该炸', () => {
@@ -98,8 +101,8 @@ test('跑完的任务保留一段时间,过期才清', () => {
   const r = new TaskRegistry({ retainMs: 1000 });
   const id = r.begin('brief:run', {}, { now: 0 });
   r.end(id, { ok: true, now: 100 });
-  assert.equal(r.snapshot({ now: 900 }).length, 1);
-  assert.equal(r.snapshot({ now: 2000 }).length, 0);
+  assert.equal(r.snapshot({ now: 900, all: true }).length, 1);
+  assert.equal(r.snapshot({ now: 2000, all: true }).length, 0, '过期后连 all 也查不到了');
 });
 
 test('运行中的任务永远不会因为"太久"被清掉', () => {
@@ -117,7 +120,7 @@ test('终态条数有上限,不会被批量操作刷爆', () => {
     const id = r.begin('skills:install', { name: `s${i}` }, { now: i });
     r.end(id, { ok: true, now: i + 1 });
   }
-  assert.equal(r.snapshot({ now: 100 }).length, 3);
+  assert.equal(r.snapshot({ now: 100, all: true }).length, 3);
 });
 
 test('运行中的排在终态前面', () => {
@@ -125,7 +128,7 @@ test('运行中的排在终态前面', () => {
   const done = r.begin('brief:run', {}, { now: 0 });
   r.end(done, { ok: true, now: 1 });
   r.begin('fs:upload', { localPath: '/a' }, { now: 2 });
-  const s = r.snapshot({ now: 10000 });
+  const s = r.snapshot({ now: 10000, all: true });
   assert.equal(s[0].state, 'running', '需要盯的是还在跑的那些');
 });
 
@@ -225,4 +228,79 @@ test('登记表覆盖了各类后台活儿,不只是传输', () => {
   for (const k of ['transfer', 'setup', 'skills', 'brief', 'capture', 'auth', 'agent']) {
     assert.ok(kinds.has(k), `缺少 ${k} 类任务`);
   }
+});
+
+
+/* ------------------------------------------------ 默认只看在跑的 / 当前主机 */
+
+test('默认只显示进行中、停滞、失败', () => {
+  /* 契约改了。原来跑完的也留 10 分钟,理由是"要能看到结果";
+     但实测一屏里一半是「已结束(结果未知)」的空壳,把真正在跑的挤了下去。
+     失败保留是刻意的 —— 它不是噪音,是最该立刻看到的那条。 */
+  assert.ok(DEFAULT_STATES.has('running'));
+  assert.ok(DEFAULT_STATES.has('stalled'));
+  assert.ok(DEFAULT_STATES.has('failed'), '失败不能跟着"跑完了"一起藏掉');
+  assert.ok(!DEFAULT_STATES.has('done'));
+  assert.ok(!DEFAULT_STATES.has('ended'));
+});
+
+test('跑完的默认不显示,但仍留在登记表里可查', () => {
+  const r = new TaskRegistry();
+  const a = r.begin('brief:run', {}, { now: 0 });
+  r.end(a, { ok: true, now: 100 });
+  r.begin('fs:upload', { localPath: '/x' }, { now: 0 });
+  assert.equal(r.snapshot({ now: 9000 }).length, 1, '默认只剩在跑的那条');
+  assert.equal(r.snapshot({ now: 9000, all: true }).length, 2, '打开 all 能查到刚跑完的');
+});
+
+test('失败的默认就显示,不用打开开关', () => {
+  const r = new TaskRegistry();
+  const id = r.begin('setup:installAgent', { agent: 'codex' }, { now: 0 });
+  r.end(id, { ok: false, error: '装不上', now: 100 });
+  assert.equal(r.snapshot({ now: 9000 }).length, 1);
+});
+
+test('只显示当前主机的', () => {
+  const r = new TaskRegistry();
+  r.begin('fs:upload', { localPath: '/a', hostId: 'h1' }, { now: 0 });
+  r.begin('fs:upload', { localPath: '/b', hostId: 'h2' }, { now: 0 });
+  const s = r.snapshot({ now: 9000, hostId: 'h1' });
+  assert.equal(s.length, 1);
+  assert.equal(s[0].hostId, 'h1');
+});
+
+test('主机上扫到的进程按主机匹配,不能因为没有 convId 就被滤掉', () => {
+  /* 这是这个功能诚实的边界:智能体是自己在远端起进程的,应用只转发输出,
+     **看不到是哪一轮对话起的哪个进程**。硬要求 convId 相等会把它们全滤光,
+     而它们恰恰是最需要看的那批。 */
+  const host = { source: 'host', hostId: 'h1', state: 'running' };
+  assert.equal(matchesScope(host, { hostId: 'h1', convId: 'c1' }), true);
+  assert.equal(matchesScope(host, { hostId: 'h2', convId: 'c1' }), false, '主机对不上还是要滤掉');
+});
+
+test('应用侧任务带了 convId 才按对话筛', () => {
+  const mk = (convId) => ({ source: 'app', hostId: 'h1', convId, state: 'running' });
+  assert.equal(matchesScope(mk('c1'), { hostId: 'h1', convId: 'c1' }), true);
+  assert.equal(matchesScope(mk('c2'), { hostId: 'h1', convId: 'c1' }), false);
+  // 没带 convId 的(传输、安装这类)不该因为"不属于任何对话"而消失
+  assert.equal(matchesScope(mk(''), { hostId: 'h1', convId: 'c1' }), true);
+});
+
+test('不传作用域就不筛', () => {
+  const t = { source: 'app', hostId: 'h9', convId: 'cX', state: 'running' };
+  assert.equal(matchesScope(t, {}), true);
+});
+
+test('角标和面板用同一套作用域', () => {
+  // 否则会出现「角标说有 3 个,点进去一个没有」—— 那 3 个在别的主机上
+  const ui = read('src/components/BgTasksDrawer.jsx');
+  assert.match(ui, /export function BgTasksBadge\(\{ onClick, hostId = '', convId = '' \}\)/);
+  assert.match(ui, /window\.api\.bg\.snapshot\(\{ hostId, convId \}\)/);
+});
+
+test('磁盘预警只报当前主机', () => {
+  /* 之前把所有已连接主机的都堆上来 —— 你在看 A 机器却收到 B 的告警,
+     看着像当前这台快满了。 */
+  const main = read('electron/main.js');
+  assert.match(main, /\.filter\(\(\[hostId\]\) => !scope\.hostId \|\| hostId === scope\.hostId\)/);
 });

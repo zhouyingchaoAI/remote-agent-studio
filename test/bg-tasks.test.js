@@ -235,8 +235,9 @@ test('轮询分快慢两档,关面板只降档不停掉', () => {
   assert.match(main, /BG_SLOW_MS = 30000/);
   assert.match(main, /BG_FAST_MS = 6000/);
   const drawer = read('src/components/BgTasksDrawer.jsx');
-  assert.match(drawer, /window\.api\.bg\.start\(\{ fast: true \}\)/);
-  assert.match(drawer, /window\.api\.bg\.start\(\{ fast: false \}\)/);
+  // 现在还带上了作用域参数(当前主机/对话),只校验快慢两档仍在
+  assert.match(drawer, /window\.api\.bg\.start\(\{ fast: true[,}]/);
+  assert.match(drawer, /window\.api\.bg\.start\(\{ fast: false[,}]/);
 });
 
 test('每台主机同时只允许一次扫描在飞', () => {
