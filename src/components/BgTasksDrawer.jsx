@@ -213,6 +213,13 @@ export default function BgTasksDrawer({ open, onClose, hostName, hostId = '', co
      又不是常驻守护进程的都捞了回来。但默认摊开会淹掉真正的任务,
      所以做成开关:平时清爽,找不到东西时一键看全。 */
   const [showOther, setShowOther] = useState(false);
+  const [diag, setDiag] = useState(null);
+
+  const runDiagnose = async () => {
+    setDiag('loading');
+    try { setDiag(await window.api.bg.diagnose({ hostId })); }
+    catch (e) { setDiag(`诊断失败:${e.message}`); }
+  };
 
   useEffect(() => {
     if (!open) return undefined;
@@ -258,6 +265,13 @@ export default function BgTasksDrawer({ open, onClose, hostName, hostId = '', co
         </div>
 
         <div className="bg-drawer-body">
+          {/* 扫描失败必须显眼。之前它只存在主进程里,界面上
+              「扫描挂了」和「确实没任务」长得一模一样 —— 查了好几轮才发现。 */}
+          {(snap.errors || []).map((e) => (
+            <p key={e.hostId} className="bg-warn small">
+              ⚠ {hostName?.(e.hostId) || e.hostId} 扫描失败:{e.message}
+            </p>
+          ))}
           {(snap.warnings || []).map((w) => (
             <p key={w.hostId + w.mount} className="bg-warn small">
               💾 {hostName?.(w.hostId) || w.hostId}:{w.message}
@@ -269,7 +283,20 @@ export default function BgTasksDrawer({ open, onClose, hostName, hostId = '', co
               这台主机上没有正在跑的后台任务。
               <br />
               勾选「显示全部」可以查看刚跑完的、以及其他主机上的。
+              <br />
+              <button className="btn tiny ghost" style={{ marginTop: 10 }}
+                onClick={runDiagnose} disabled={diag === 'loading'}>
+                {diag === 'loading' ? '诊断中…' : '诊断:看看扫描到底看见了什么'}
+              </button>
             </p>
+          )}
+          {/* 连着几轮"面板是空的"都只能靠猜,是因为没有任何办法看见
+              扫描的真实输出。有了它,一次就能分清是命令没跑、超时了、
+              还是解析没认出来。 */}
+          {diag && diag !== 'loading' && (
+            <pre className="bg-log" style={{ maxHeight: 300 }}>
+              {typeof diag === 'string' ? diag : JSON.stringify(diag, null, 1)}
+            </pre>
           )}
 
           {tasks.map((t) => (

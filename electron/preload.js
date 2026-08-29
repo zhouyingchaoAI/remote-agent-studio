@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('api', {
     snapshot: invoke('tasks:snapshot'),
     stopTask: invoke('bg:stop-task'),
     cancel: invoke('tasks:cancel'),
+    diagnose: invoke('tasks:diagnose'),
     onUpdate: on('bg:update')
   },
   screenshot: {

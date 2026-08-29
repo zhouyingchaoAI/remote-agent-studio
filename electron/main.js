@@ -2790,6 +2790,11 @@ let bgFast = false;
 /* 两档频率。慢档是为了顶栏角标 —— 面板不打开时也得让人知道"有东西在下",
    否则这个功能只有主动去看才有用,而人恰恰是想不起来看才需要它。
    30 秒一次的代价可以接受;6 秒一次只在面板真正打开时才用。 */
+/* 扫描超时。原来 12 秒偏紧:进程多的机器上,把每个进程的 io 都读一遍,
+   再加上 du、systemctl show、journalctl,很容易就超了 ——
+   而超时的表现是面板一直空着,最难联想到病因。
+   (注意别在块注释里写 /proc 的通配路径:那个 星号斜杠 会把注释提前闭合。) */
+const BG_SCAN_TIMEOUT_MS = 25000;
 const BG_SLOW_MS = 30000;
 const BG_FAST_MS = 6000;
 
@@ -2804,8 +2809,18 @@ async function bgScanHost(hostId) {
        用一轮(6 秒)的延迟换掉一次额外的 SSH 往返,划算。 */
     const r = await s.ssh.exec(
       bgTasks.buildScanCommand({ watchPaths: st.watchPaths || [], extraUnits: st.extraUnits || [] }),
-      { timeoutMs: 12000 });
+      { timeoutMs: BG_SCAN_TIMEOUT_MS });
+    /* **超时不抛异常,只返回 code 124。**
+       不显式检查的话,stdout 是残缺的、解析不出任何任务,而面板会显示
+       「这台主机上没有正在跑的后台任务」—— 和"扫描根本没跑完"长得一模一样。
+       这个盲区让好几轮排查都在猜。 */
+    if (r.code === 124) {
+      throw new Error(`扫描超时(${Math.round(BG_SCAN_TIMEOUT_MS / 1000)} 秒)`
+        + ' —— 这台机器进程多或磁盘慢,面板可能一直显示不出任务。');
+    }
     const scan = bgTasks.parseScan(r.stdout || '');
+    st.lastRaw = String(r.stdout || '').slice(0, 4000);   // 诊断用
+    st.lastCode = r.code;
     const now = Date.now();
     st.tasks = bgTasks.mergeTasks(st.tasks, scan, now);
     st.disks = scan.disks;
@@ -2860,9 +2875,15 @@ function tasksSnapshot(scope = {}) {
     .filter(([hostId]) => !scope.hostId || hostId === scope.hostId)
     .map(([hostId, st]) => (st.warning ? { hostId, ...st.warning } : null))
     .filter(Boolean);
+  /* 扫描失败必须报出来。之前只存在 st.error 里、从没送到界面 ——
+     于是"扫描挂了"和"确实没任务"在界面上完全一样,查半天查不到方向。 */
+  const errors = [...bgState.entries()]
+    .filter(([hostId, st]) => st.error && (!scope.hostId || hostId === scope.hostId))
+    .map(([hostId, st]) => ({ hostId, message: st.error }));
   return {
     tasks,
     warnings,
+    errors,
     running: tasks.filter((t) => t.state === 'running').length,
     stalled: tasks.filter((t) => t.state === 'stalled').length,
     failed: tasks.filter((t) => t.state === 'failed').length
@@ -2921,6 +2942,29 @@ ipcMain.handle('bg:snapshot', () => bgSnapshot());
 /* 面板要的是**所有**后台任务,不只是下载。
    应用侧任务来自 IPC 包装的自动登记,主机侧来自进程扫描,这里合成一份。 */
 ipcMain.handle('tasks:snapshot', (_e, scope = {}) => tasksSnapshot(scope));
+
+/* 诊断:把这一轮扫描的原始输出摆出来。
+   连着几轮"面板是空的"都只能靠猜,是因为**没有任何办法看见扫描到底看见了什么**。
+   有了它,一次就能定位是命令没跑、超时了、还是解析没认出来。 */
+ipcMain.handle('tasks:diagnose', async (_e, { hostId } = {}) => {
+  const s = getSession(hostId);
+  const cmd = bgTasks.buildScanCommand({ watchPaths: [], extraUnits: [] });
+  const r = await s.ssh.exec(cmd, { timeoutMs: BG_SCAN_TIMEOUT_MS });
+  const scan = bgTasks.parseScan(r.stdout || '');
+  return {
+    exitCode: r.code,
+    // 原始输出会含命令行,照例脱敏
+    raw: require('./errorLog').redact(String(r.stdout || '').slice(0, 6000)),
+    stderr: require('./errorLog').redact(String(r.stderr || '').slice(0, 1000)),
+    counts: {
+      任务: scan.tasks.length,
+      进程io: scan.io.size,
+      systemd单元: scan.units.length,
+      磁盘: scan.disks.length
+    },
+    tasks: scan.tasks.map((t) => ({ pid: t.pid, kind: t.kind, long: t.longRunning, cmd: t.command.slice(0, 120) }))
+  };
+});
 
 ipcMain.handle('tasks:cancel', async (_e, { id } = {}) => {
   const t = taskRegistry.tasks.get(id);

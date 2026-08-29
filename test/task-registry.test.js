@@ -344,3 +344,44 @@ test('登记表里不再有 agent/ask/brief/capture 这几类', () => {
     assert.ok(!kinds.has(k), `${k} 类不该出现在后台任务面板里`);
   }
 });
+
+/* ------------------------------ 扫描失败不能长得像"没有任务" */
+
+test('扫描超时会被识别出来,而不是静静地返回空', () => {
+  /* exec 超时只返回 code 124、**不抛异常**。不显式检查的话,
+     stdout 是残缺的、解析不出任务,面板就显示「没有正在跑的后台任务」——
+     和"扫描根本没跑完"长得一模一样。这个盲区让好几轮排查都在猜。 */
+  const main = read('electron/main.js');
+  assert.match(main, /if \(r\.code === 124\)/);
+  assert.match(main, /扫描超时/);
+});
+
+test('扫描错误会送到界面', () => {
+  // 之前只存在 st.error 里,从没进过快照 —— 界面无从分辨挂了还是真没任务
+  const main = read('electron/main.js');
+  assert.match(main, /const errors = \[\.\.\.bgState\.entries\(\)\]/);
+  const ui = read('src/components/BgTasksDrawer.jsx');
+  assert.match(ui, /snap\.errors \|\| \[\]/);
+  assert.match(ui, /扫描失败/);
+});
+
+test('有个诊断入口能看到扫描的原始输出', () => {
+  /* 连着几轮"面板是空的"都只能靠猜,是因为没有任何办法看见
+     扫描到底看见了什么。有了它,一次就能分清是命令没跑、超时了、
+     还是解析没认出来。 */
+  const main = read('electron/main.js');
+  assert.match(main, /ipcMain\.handle\('tasks:diagnose'/);
+  // 原始输出含命令行,必须脱敏
+  assert.match(main, /redact\(String\(r\.stdout/);
+  const ui = read('src/components/BgTasksDrawer.jsx');
+  assert.match(ui, /runDiagnose/);
+});
+
+test('扫描里的慢环节各自限时', () => {
+  /* du 和 journalctl 都可能很慢,而它们只是锦上添花 ——
+     不该把整轮扫描拖到超时,导致连"有哪些任务"都显示不出来。 */
+  const bg = require('../electron/bgTasks');
+  const cmd = bg.buildScanCommand({ watchPaths: ['/tmp'] });
+  assert.match(cmd, /timeout 4 du -sb/);
+  assert.match(cmd, /timeout 3 journalctl/);
+});

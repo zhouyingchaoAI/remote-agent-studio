@@ -202,7 +202,7 @@ function buildScanCommand({ watchPaths = [], extraUnits = [] } = {}) {
     /* 取最后 6 行而不是 1 行:一次拉取会把每一层刷成一行,
        只看最后一行常常正好落在"Verifying"这类没有数字的行上,
        而带 `1.2GB/4.5GB` 的那条就在它上面一两行。合成一行传回来。 */
-    '    last=$(journalctl -u "$u" -n 6 --no-pager -o cat 2>/dev/null'
+    '    last=$(timeout 3 journalctl -u "$u" -n 6 --no-pager -o cat 2>/dev/null'
       + " | tr -d '\\037' | tr '\\n' '|' | tail -c 400)",
     "    printf 'UNIT\\037%s\\037%s\\037%s\\037%s\\037%s\\n'"
       + ' "$u" "$st" "$sub" "$since" "$last"',
@@ -218,7 +218,10 @@ function buildScanCommand({ watchPaths = [], extraUnits = [] } = {}) {
     /* 量一下下载目标目录有多大。
        路径由上一轮扫描的结果推出来(见 collectWatchPaths),所以第一轮没有、
        第二轮起才有 —— 用一轮的延迟换掉一次额外往返,划算。 */
-    ...watchPaths.map((p) => `du -sb ${shellQuote(p)} 2>/dev/null`
+    /* 每个 du 单独限时 4 秒。目录里文件极多时 du 会很慢,
+       而它只是锦上添花的一项 —— 不该把整轮扫描拖到超时,
+       导致连"有哪些任务"都显示不出来。 */
+    ...watchPaths.map((p) => `timeout 4 du -sb ${shellQuote(p)} 2>/dev/null`
       + ` | awk '{printf "PATHSZ\x1f%s\x1f%s\\n", $2, $1}'`)
   ].join('\n');
 }
