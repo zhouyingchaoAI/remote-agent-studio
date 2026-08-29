@@ -29,10 +29,10 @@ test('标题带上最能认出它的那点信息', () => {
 });
 
 test('标题在存下来之前脱敏', () => {
-  /* 提问和路径都可能带密钥 —— 比如「我这个 sk-xxx 为什么 401」。
+  /* 路径和参数都可能带密钥(下载链接里带 token 很常见)。
      面板会把标题显示出来,所以脱敏必须发生在登记时。 */
   const fake = 'sk-' + 'b'.repeat(40);
-  const d = desc('ask:shell', { question: `为什么 ${fake} 会 401` });
+  const d = desc('fs:download', { remotePath: `/tmp/dump-${fake}.bin` });
   assert.ok(!d.title.includes(fake));
   assert.match(d.title, /\*\*\*/);
 });
@@ -99,7 +99,7 @@ test('跑完的任务保留一段时间,过期才清', () => {
   /* 这是这个面板存在的核心理由之一:进程一消失任务就没了的话,
      "下完了"和"下挂了"表现完全一样。 */
   const r = new TaskRegistry({ retainMs: 1000 });
-  const id = r.begin('brief:run', {}, { now: 0 });
+  const id = r.begin('skills:install', { name: 's1' }, { now: 0 });
   r.end(id, { ok: true, now: 100 });
   assert.equal(r.snapshot({ now: 900, all: true }).length, 1);
   assert.equal(r.snapshot({ now: 2000, all: true }).length, 0, '过期后连 all 也查不到了');
@@ -125,7 +125,7 @@ test('终态条数有上限,不会被批量操作刷爆', () => {
 
 test('运行中的排在终态前面', () => {
   const r = new TaskRegistry();
-  const done = r.begin('brief:run', {}, { now: 0 });
+  const done = r.begin('skills:install', { name: 's1' }, { now: 0 });
   r.end(done, { ok: true, now: 1 });
   r.begin('fs:upload', { localPath: '/a' }, { now: 2 });
   const s = r.snapshot({ now: 10000, all: true });
@@ -223,9 +223,11 @@ test('docker build --pull 算构建,不算拉取', () => {
   assert.equal(bg.classifyKind('docker pull nginx'), 'docker-pull');
 });
 
-test('登记表覆盖了各类后台活儿,不只是传输', () => {
+test('登记表覆盖各类后台作业,但不含"模型在想"那一类', () => {
+  /* 这个面板要回答的是"镜像拉到哪了、文件传了多少、命令跑完没有",
+     不是"模型思考到第几轮"。 */
   const kinds = new Set(Object.values(TASK_CHANNELS).map((d) => d.kind));
-  for (const k of ['transfer', 'setup', 'skills', 'brief', 'capture', 'auth', 'agent']) {
+  for (const k of ['transfer', 'setup', 'skills', 'auth', 'service']) {
     assert.ok(kinds.has(k), `缺少 ${k} 类任务`);
   }
 });
@@ -246,7 +248,7 @@ test('默认只显示进行中、停滞、失败', () => {
 
 test('跑完的默认不显示,但仍留在登记表里可查', () => {
   const r = new TaskRegistry();
-  const a = r.begin('brief:run', {}, { now: 0 });
+  const a = r.begin('skills:install', { name: 's1' }, { now: 0 });
   r.end(a, { ok: true, now: 100 });
   r.begin('fs:upload', { localPath: '/x' }, { now: 0 });
   assert.equal(r.snapshot({ now: 9000 }).length, 1, '默认只剩在跑的那条');
@@ -312,4 +314,33 @@ test('pathSizes 存在 st 上,不是从别的函数的局部变量里拿', () =>
   const main = read('electron/main.js');
   assert.match(main, /st\.pathSizes = scan\.pathSizes/);
   assert.match(main, /pathSizes: st\.pathSizes/);
+});
+
+/* --------------------------------------- 这个面板不是用来看会话进度的 */
+
+test('对话轮次、快速提问、语音转写不登记为后台任务', () => {
+  /* 用户:「这里的后台任务是后台镜像拉取、下载等进度,还有执行指令进度,
+     不是会话进度」。
+     它们本质是"模型在想",而且对话页自己就有转圈和「停止」按钮 ——
+     重复放进面板只会把真正需要盯的东西挤下去。 */
+  assert.equal(desc('agent:send', { prompt: 'x' }), null);
+  assert.equal(desc('ask:shell', { question: 'x' }), null);
+  assert.equal(desc('stt:transcribe', {}), null);
+  assert.equal(desc('brief:run', {}), null);
+  assert.equal(desc('autocapture:runNow', {}), null);
+});
+
+test('拉取、传输、安装这类仍然登记', () => {
+  // 判断标准:关掉这个页面之后是不是还要盯着它
+  for (const ch of ['fs:download', 'fs:upload', 'fs:copyHostToHost',
+    'setup:installAgent', 'skills:install', 'registry:login', 'web:start']) {
+    assert.ok(desc(ch, {}), `${ch} 应该登记`);
+  }
+});
+
+test('登记表里不再有 agent/ask/brief/capture 这几类', () => {
+  const kinds = new Set(Object.values(TASK_CHANNELS).map((d) => d.kind));
+  for (const k of ['agent', 'ask', 'brief', 'capture']) {
+    assert.ok(!kinds.has(k), `${k} 类不该出现在后台任务面板里`);
+  }
 });

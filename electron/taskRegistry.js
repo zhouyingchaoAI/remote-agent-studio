@@ -54,18 +54,22 @@ const TASK_CHANNELS = {
   'setup:detect': { kind: 'setup', label: '检测环境' },
   'skills:install': { kind: 'skills', label: '下发技能', title: (a) => a?.name || '' },
   'skills:marketFetch': { kind: 'skills', label: '拉取技能市场' },
-  'brief:run': { kind: 'brief', label: '生成速览' },
-  'autocapture:runNow': { kind: 'capture', label: '自动沉淀' },
-  'autocapture:backfill': { kind: 'capture', label: '补跑沉淀' },
   'github:login': { kind: 'auth', label: 'GitHub 登录', cancel: 'github:cancel' },
   'github:syncToRemote': { kind: 'auth', label: '下发 GitHub 登录态' },
   'github:install': { kind: 'auth', label: '安装 gh' },
   'registry:login': { kind: 'auth', label: '登录镜像仓库', title: (a) => a?.registry || '' },
   'web:start': { kind: 'service', label: '启动本地服务', title: (a) => a?.id || '' },
-  'web:waitReady': { kind: 'service', label: '等待服务就绪', title: (a) => a?.id || '' },
-  'ask:shell': { kind: 'ask', label: '快速提问', title: (a) => a?.question || '', cancel: 'ask:cancel' },
-  'agent:send': { kind: 'agent', label: '智能体', title: (a) => a?.prompt || '', cancel: 'agent:cancel' },
-  'stt:transcribe': { kind: 'ask', label: '语音转写' }
+  'web:waitReady': { kind: 'service', label: '等待服务就绪', title: (a) => a?.id || '' }
+
+  /* **对话轮次、快速提问、语音转写、速览、自动沉淀都不在这里。**
+   *
+   * 它们本质是"模型在想",不是后台作业 —— 而且对话页自己就有转圈和
+   * 「停止」按钮,重复放进这个面板只会把真正需要盯的东西挤下去:
+   * 你想在这儿看的是镜像拉到哪了、文件传了多少、命令跑完没有。
+   *
+   * 判断标准:**这件事是不是即使你关掉这个页面也仍然要盯的**。
+   * 一轮对话不是(它就在你眼前),一个 8GB 的镜像拉取是。
+   */
 };
 
 function base(p) {

@@ -120,13 +120,25 @@ function buildScanCommand({ watchPaths = [], extraUnits = [] } = {}) {
       + '|*NetworkManager*|*containerd-shim*|*docker-proxy*|*chronyd*|*ntpd*'
       + '|*auditd*|*irqbalance*|*udev*|*"login "*) continue ;;',
     '       esac',
-    /* **属于某个 systemd 服务、且跑了一分钟以上的,直接算正经任务。**
-       服务就是"有人特意让它在后台跑"的意思,不该被折叠进"其他长跑进程"。
-       截图里那个 ragflow-bootstrap.sh 就是这种:它自己不下载,
-       但它是整次下载的门面,进度都在它的 journal 里。 */
-    '       if [ -n "${u:-}" ] && [ "${e:-0}" -ge 60 ] 2>/dev/null; then long=0;',
-    /* 不属于任何服务的,还是按"跑够 5 分钟"收进隐藏桶。
-       短命进程每轮扫描都在变,列出来是一片闪烁的噪音。 */
+    /* 兜底分支的三档,按"这东西多像一个后台作业"从强到弱:
+     *
+     * 1. **shell 脚本跑够一分钟** —— 不管归不归某个服务。智能体很爱用
+     *    `nohup xxx-retry.sh &` 起重试循环,那种进程的 cgroup 是会话作用域
+     *    而不是 .service,只按"属于服务"判会把它漏进隐藏桶。
+     *    而它恰恰最该盯:截图里那个 ragflow-pull-retry.sh 已经重试 186 次了。
+     * 2. **属于某个 systemd 服务且跑够一分钟** —— "属于一个服务"就是
+     *    "有人特意让它在后台跑"的证据。
+     * 3. 其余的按"跑够 5 分钟"收进默认隐藏的桶。短命进程每轮扫描都在变,
+     *    列出来是一片闪烁的噪音。
+     *
+     * glob 里的空格必须加引号(`*".sh "*`),不加会被 case 当成语法错误。
+     */
+    '       isjob=0',
+    '       case "$a" in',
+    '         *.sh|*".sh "*|*"bash -c"*|*"sh -c"*) isjob=1 ;;',
+    '       esac',
+    '       if [ "$isjob" = 1 ] && [ "${e:-0}" -ge 60 ] 2>/dev/null; then long=0;',
+    '       elif [ -n "${u:-}" ] && [ "${e:-0}" -ge 60 ] 2>/dev/null; then long=0;',
     '       else [ "${e:-0}" -ge 300 ] 2>/dev/null || continue; long=1; fi ;;',
     '  esac',
     `  w=$(awk '/^write_bytes:/{print $2}' /proc/$p/io 2>/dev/null || echo -1)`,

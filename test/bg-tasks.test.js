@@ -681,14 +681,36 @@ test('交互式登录 shell 仍然排除', () => {
   assert.equal(classifyInShell(['-bash', 'bash', '/bin/bash', 'sshd: root@pts/0']).length, 0);
 });
 
-test('不属于服务的脚本仍进隐藏桶', () => {
-  /* "属于某个 systemd 服务"才是"有人特意让它在后台跑"的证据。
-     否则一台机器上随便一个跑了很久的脚本都会挤到前面。 */
-  const out = classifyInShell(['/bin/bash /home/me/random.sh'], '');
-  assert.ok(out[0].startsWith('1|'));
+test('既不是脚本、也不属于服务的长跑进程,才进隐藏桶', () => {
+  /* 规则改过一次:原来要求"属于某个 systemd 服务"才算正经任务,
+     但智能体用 nohup 起的重试脚本不属于任何服务,恰恰最该盯。
+     现在脚本单独放行,剩下这类才折叠。 */
+  const out = classifyInShell(['/opt/vendor/some-daemon --serve'], '');
+  assert.ok(out[0].startsWith('1|'), `实际:${out[0]}`);
 });
 
 test('服务里的进程只要跑够一分钟就算任务,不用等五分钟', () => {
   const cmd = bg.buildScanCommand();
   assert.match(cmd, /\[ -n "\$\{u:-\}" \] && \[ "\$\{e:-0\}" -ge 60 \]/);
+});
+
+test('nohup 起的重试脚本也要算正经任务', () => {
+  /* 智能体常用 `nohup xxx-retry.sh &` 起重试循环,那种进程的 cgroup 是
+     会话作用域而不是 .service —— 只按"属于服务"判会把它漏进默认隐藏的桶。
+     而它恰恰最该盯:截图里那个 ragflow-pull-retry.sh 已经重试 186 次了。 */
+  const out = classifyInShell(['/bin/bash /usr/local/bin/ragflow-pull-retry.sh'], '');
+  assert.equal(out.length, 1, '被丢掉了');
+  assert.ok(out[0].startsWith('0|'), '不该塞进隐藏桶');
+});
+
+test('刚起来的脚本不冒出来', () => {
+  // 每轮扫描都在变的短命进程是噪音;要跑够一分钟
+  const { execFileSync } = require('child_process');
+  const L = bg.buildScanCommand().split('\n');
+  const s = L.findIndex((l) => l.includes('u=$(sed'));
+  const e = L.indexOf('  esac');
+  const script = ['for a in "$@"; do', 'e=10; long=; u=""',
+    ...L.slice(s + 1, e + 1), 'echo "$long|$a"', 'done'].join('\n');
+  const out = execFileSync('bash', ['-c', script, '_', '/bin/bash /tmp/quick.sh']).toString().trim();
+  assert.equal(out, '');
 });
