@@ -2864,6 +2864,9 @@ function tasksSnapshot(scope = {}) {
        真的确认过 —— 所以不给它伪造一个"完成",直接不再显示。 */
     for (const u of st.units || []) {
       const t = bgTasks.unitTask(u, { now, uptimeSec: st.uptimeSec, pathSizes: st.pathSizes });
+      /* 只列"确实有事在发生"的单元。每台机器都有几十个常驻服务,
+         全摆上来会把你在等的那个下载挤到看不见。 */
+      if (!bgTasks.unitIsInteresting(t)) continue;
       // elapsedMs 由 unitTask 按单调时钟算出,别在这里覆盖成 0
       hostTasks.push({ ...t, id: `unit_${hostId}_${t.unit}`, source: 'host', hostId });
     }

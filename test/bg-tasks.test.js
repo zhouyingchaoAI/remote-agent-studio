@@ -714,3 +714,47 @@ test('刚起来的脚本不冒出来', () => {
   const out = execFileSync('bash', ['-c', script, '_', '/bin/bash /tmp/quick.sh']).toString().trim();
   assert.equal(out, '');
 });
+
+/* ------------------------- 面板被系统服务塞满的那次 */
+
+test('systemctl 属性按名字取,不能靠返回顺序', () => {
+  /* systemctl show 是按它自己的内部顺序返回的,不是你请求的顺序。
+     用 --value 按位置取,界面上就出现了 `143995769/active` ——
+     时间戳被当成了 ActiveState,整排字段错位,顺带让"已运行"永远是 0 秒。 */
+  const cmd = bg.buildScanCommand();
+  assert.match(cmd, /sed -n 's\/\^ActiveState=\/\/p'/);
+  assert.match(cmd, /sed -n 's\/\^ExecMainStartTimestampMonotonic=\/\/p'/);
+  assert.ok(!/-p ExecMainStartTimestampMonotonic --value/.test(cmd), '不该再用 --value 按位置取');
+});
+
+test('系统目录按前缀拒绝 du,不只是完全相等', () => {
+  // auditd 的日志里有 /sbin/augenrules,之前被当成了"下载目录"
+  for (const bad of ['/sbin/augenrules', '/usr/lib/x', '/bin/ls', '/etc/foo', '/var/lib/docker/tmp']) {
+    assert.equal(bg.safeWatchPath(bad), '', `${bad} 不该被 du`);
+  }
+  assert.equal(bg.safeWatchPath('/home/models/Q'), '/home/models/Q');
+});
+
+test('只把"认得出是什么活儿"的进程所属单元拉进来', () => {
+  /* 不加这个过滤,面板被 auditd / mdmonitor / libstoragemgmt 塞满 ——
+     它们只是碰巧有个子进程被扫到,跟你在等的下载毫无关系。 */
+  const units = bg.collectUnits({ tasks: [
+    { unit: 'auditd.service', kind: 'other', longRunning: true },
+    { unit: 'mdmonitor.service', kind: 'script', longRunning: true },
+    { unit: 'ragflow-bootstrap.service', kind: 'docker-pull', longRunning: false }
+  ] });
+  assert.deepEqual(units, ['ragflow-bootstrap.service']);
+});
+
+test('普通 running 的守护进程不该出现在面板上', () => {
+  /* 光"它在 running"不算有事发生。每台机器都有几十个常驻服务,
+     全摆上来会把你在等的那个下载挤到看不见。 */
+  const mk = (over) => bg.unitTask({
+    unit: 'x.service', activeState: 'running', subState: 'running',
+    startedMonotonicUs: 1, lastLog: '', ...over
+  }, { now: 0, uptimeSec: 99 });
+  assert.equal(bg.unitIsInteresting(mk()), false, 'running + 无进度 = 噪音');
+  assert.equal(bg.unitIsInteresting(mk({ activeState: 'activating' })), true);
+  assert.equal(bg.unitIsInteresting(mk({ activeState: 'failed', subState: 'failed' })), true);
+  assert.equal(bg.unitIsInteresting(mk({ lastLog: 'Downloading 1MB/2MB' })), true, '有真实进度就该显示');
+});

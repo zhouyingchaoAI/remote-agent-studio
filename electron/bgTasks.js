@@ -191,11 +191,17 @@ function buildScanCommand({ watchPaths = [], extraUnits = [] } = {}) {
       // 管道必须留在上一行末尾:`}` 换行再 `| awk` 在 sh 里是语法错误
       + " | awk '{print $1}' | sort -u | head -8 | while read -r u; do",
     '    [ -n "$u" ] || continue',
-    /* 一次 systemctl show 取三个属性,而不是跑三次 ——
-       每台主机最多 8 个单元,乘以 3 就是 24 次进程启动,够拖慢一轮扫描。 */
+    /* 一次 systemctl show 取三个属性(跑三次太慢:8 个单元 × 3 = 24 次进程启动)。
+       **但绝不能用 --value 按位置取** —— systemctl 是按它自己的内部顺序返回的,
+       不是你请求的顺序。界面上出现过 `143995769/active` 这种东西,
+       就是把时间戳当成了 ActiveState:字段整体错位了。
+       所以保留 KEY=VALUE 形式,按名字各取各的。 */
     '    v=$(systemctl show "$u" -p ActiveState -p SubState'
-      + ' -p ExecMainStartTimestampMonotonic --value 2>/dev/null | tr "\\n" " ")',
-    '    set -- $v; st=${1:-?}; sub=${2:-?}; since=${3:-0}',
+      + ' -p ExecMainStartTimestampMonotonic 2>/dev/null)',
+    `    st=$(printf '%s\\n' "$v" | sed -n 's/^ActiveState=//p' | head -1)`,
+    `    sub=$(printf '%s\\n' "$v" | sed -n 's/^SubState=//p' | head -1)`,
+    `    since=$(printf '%s\\n' "$v" | sed -n 's/^ExecMainStartTimestampMonotonic=//p' | head -1)`,
+    '    st=${st:-?}; sub=${sub:-?}; since=${since:-0}',
     /* 最后一行日志:服务在拉镜像时,进度和报错**都只在这里**。
        没有它,面板只能说"在启动中",等于没说。
        顺手删掉日志里的分隔符,否则里面正好出现一个就会把字段切错位。 */
@@ -309,6 +315,26 @@ function parseScan(text) {
  * `activating` 就是最好的信号 —— 它的字面意思就是"在启动,还没就绪"。
  * 而真正说明"到哪一步了"的,是最后一行日志。
  */
+/**
+ * 这个单元值不值得摆到面板上。
+ *
+ * 光"它在 running"是不够的 —— 每台机器上都有几十个常驻服务,
+ * 面板被 auditd / mdmonitor / libstoragemgmt 塞满时,你要等的那个下载
+ * 反而被挤到了看不见的地方(截图里就是这样)。
+ *
+ * 只有三种情况才算"有事发生":
+ *  · **activating** —— 字面意思就是"在启动、还没就绪",正是你在等的状态;
+ *  · **失败** —— 最该立刻看到的一条;
+ *  · **日志里解析出了真实进度** —— 那说明它确实在下载。
+ */
+function unitIsInteresting(task) {
+  if (!task) return false;
+  if (task.activeState === 'activating') return true;
+  if (task.state === 'failed') return true;
+  if (task.progress && task.progress.total > 0) return true;
+  return false;
+}
+
 function unitTask(u, { now = Date.now(), uptimeSec = 0, pathSizes = null } = {}) {
   const starting = u.activeState === 'activating';
   /* systemd 的时间戳是单调时钟(开机以来的微秒),减去系统已运行时长才是"跑了多久"。
@@ -363,7 +389,7 @@ function unitTask(u, { now = Date.now(), uptimeSec = 0, pathSizes = null } = {})
  * `du -sb /` 在一台有几 TB 数据的机器上要跑几分钟,而扫描是 12 秒超时的 ——
  * 结果就是整个面板每一轮都超时,什么都显示不出来。
  */
-const DU_DENY = /^\/(usr|etc|proc|sys|dev|boot|bin|sbin|lib|lib64|run|var\/lib\/docker)?\/?$/;
+const DU_DENY = /^\/(usr|etc|proc|sys|dev|boot|bin|sbin|lib|lib64|run|var\/lib\/docker)(\/|$)|^\/?$/;
 
 function safeWatchPath(pth) {
   const p = String(pth || '').trim().replace(/[",;|&$`]/g, '');
@@ -417,7 +443,12 @@ function watchPathForUnit(u) {
 function collectUnits({ tasks = [] } = {}, { max = 6 } = {}) {
   const out = [];
   for (const t of tasks) {
-    const u = String(t.unit || '').trim();
+    /* **只拉"认得出是什么活儿"的那些进程所属的单元。**
+       之前不加这个过滤,面板被 auditd / mdmonitor / libstoragemgmt 这类
+       系统守护进程塞满了 —— 它们只是碰巧有个子进程被扫到,
+       跟你在等的下载毫无关系。 */
+    if (!t.unit || t.kind === 'other' || t.longRunning) continue;
+    const u = String(t.unit).trim();
     if (u.endsWith('.service') && !out.includes(u) && out.length < max) out.push(u);
   }
   return out;
@@ -686,7 +717,8 @@ module.exports = {
   KINDS, STALL_AFTER_MS, STALL_KINDS, DOCKER_KINDS, FIELD,
   watchPathFor, watchPathForUnit, collectWatchPaths, collectUnits, safeWatchPath,
   classifyKind, kindLabel,
-  buildScanCommand, parseScan, mergeTasks, pickDaemonBytes, unitTask, parseSizeProgress,
+  buildScanCommand, parseScan, mergeTasks, pickDaemonBytes, unitTask, unitIsInteresting,
+  parseSizeProgress,
   subtreeWriteBytes,
   formatBytes, formatDuration, taskTitle,
   buildStopCommand, diskWarning
