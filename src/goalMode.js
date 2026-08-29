@@ -1,14 +1,40 @@
 /**
- * 目标模式(Goal Mode)—— 对标 codex 的 /goal。
+ * 目标模式(Goal Mode)。
  *
  * 痛点:agent 每轮结束就停,哪怕问题没解决(常见于"我会继续排查"之后就没有然后了)。
- * 目标模式让它跨轮自动推进:每轮结束后判断目标是否达成,没达成就自动追一句继续,
- * 直到达成、卡住或触达上限。
+ * 目标模式让它跨轮自动推进,直到达成、卡住或触达预算。
+ *
+ * ── 这一版对齐了 codex /goal 的核心取舍,差别集中在三点 ──
+ *
+ * 1. **达成靠证据,不靠模型的话。**
+ *    原来只能正则匹配模型说的"目标已达成"—— 而模型宣称完成的成本是零,
+ *    它随口一句就结束了。现在目标可以带一条**验收命令**
+ *    (`npm test`、`curl -fsS localhost:8000/v1/models`、`test -f xxx`),
+ *    退出码 0 才算达成。这是这次改动里唯一真正改变结果的一条。
+ *    验收失败时,**命令的真实输出会成为下一轮的输入** —— 比任何续推话术都有用。
+ *
+ * 2. **预算按 token,不按轮次。**
+ *    一轮可能烧 2k token 也可能烧 200k,轮次是个很差的代理指标。
+ *    轮次上限保留为兜底(防死循环),但真正的闸门是 token。
+ *
+ * 3. **快到预算时换一种提示词。**
+ *    codex 用两份提示(continuation / budget_limit):快没预算时不该再开新工作,
+ *    而该收敛、把剩余项交代清楚。一直用同一句"继续推进"会在预算耗尽的瞬间
+ *    留下一个半拉子状态。
  *
  * 纯函数,便于单测 —— 这类"自动循环"逻辑必须能离线验证,否则出错就是烧钱。
  */
 
 export const GOAL_DEFAULT_MAX_ROUNDS = 25;
+/**
+ * 默认 token 预算。
+ *
+ * 轮次挡不住烧钱:一轮 200k token 的深度推理和一轮 2k 的确认,
+ * 在轮次上是一样的。所以真正的闸门放在 token 上,轮次退居兜底(防死循环)。
+ */
+export const GOAL_DEFAULT_TOKEN_BUDGET = 2_000_000;
+/** 剩余预算低于这个比例时,提示词换成"收敛"档 */
+export const GOAL_WRAPUP_RATIO = 0.15;
 /** 每次点「继续」追加的轮次预算 */
 export const GOAL_EXTEND_ROUNDS = 25;
 /** 上限的上限:再怎么加也不能无限烧 */
@@ -84,6 +110,16 @@ export function decideGoalStep(goal, ctx = {}) {
   if (ctx.dangerHit) {
     return { action: 'stop', reason: 'danger', message: `🛑 目标模式已暂停:本轮出现危险命令「${String(ctx.dangerHit).slice(0, 80)}」,请人工确认后再继续。` };
   }
+  /* token 预算先判 —— 它才是真正的闸门,轮次只是防死循环的兜底。 */
+  const budget = goal.tokenBudget || GOAL_DEFAULT_TOKEN_BUDGET;
+  const used = ctx.tokensUsed || 0;
+  if (used >= budget) {
+    return {
+      action: 'stop', reason: 'budget',
+      message: `🎯 已用完 token 预算(${fmtTokens(used)} / ${fmtTokens(budget)})并暂停。\n`
+        + '点「继续」会再给一份同样的预算;任务本来就大的话,用 /goal budget 5m 一次调高。'
+    };
+  }
   if ((goal.rounds || 0) >= maxRounds) {
     return {
       action: 'stop', reason: 'maxRounds',
@@ -97,14 +133,43 @@ export function decideGoalStep(goal, ctx = {}) {
   }
   const progress = classifyGoalProgress(ctx.lastText);
   if (progress === 'done') {
-    /* 达成要过一道核验关。模型宣称完成的成本极低,直接采信就会出现
-     * 「0 轮就达成」这种明显没做完的情况。先让它逐条对照目标给证据,
-     * 再说一次达成才算数。 */
+    /* 达成判据分两档,能用硬的就绝不用软的。
+     *
+     * **有验收命令 → 跑它,退出码说了算。** 模型宣称完成的成本是零,
+     * 而一条 `npm test` 或 `curl -fsS .../v1/models` 是不会撒谎的。
+     * 这是这一版和原来最大的差别。
+     *
+     * 没有验收命令时,退回原来的"让它自己拿证据"—— 聊胜于无,
+     * 但界面上会标明这是**弱判定**,免得让人以为验过了。
+     */
+    if (goal.verifyCommand) {
+      /* ctx.checkResult 由外面把命令跑完再塞回来 —— 这个模块是纯函数,
+         不碰 IO。没跑就先要求跑。 */
+      if (!ctx.checkResult) {
+        return {
+          action: 'check', command: goal.verifyCommand,
+          message: `🎯 模型宣称达成,先跑一遍验收命令:\n${goal.verifyCommand}`
+        };
+      }
+      if (ctx.checkResult.code === 0) {
+        return { action: 'complete', message: buildCompleteMessage(goal, ctx.checkResult) };
+      }
+      /* **验收失败时,把命令的真实输出喂回去。**
+         这比任何"请继续推进"的话术都有用:它是具体的、可操作的,
+         而且直接反驳了模型刚才那句"已达成"。 */
+      return {
+        action: 'continue',
+        prompt: buildCheckFailedPrompt(goal, ctx.checkResult),
+        clearVerifying: true,
+        message: `🎯 验收未通过(退出码 ${ctx.checkResult.code}),已把输出反馈给模型继续修。`
+      };
+    }
     if (!goal.verifying) {
       return {
         action: 'verify',
         prompt: buildVerifyPrompt(goal),
         message: '🎯 模型宣称目标已达成,先让它逐条核对验收项并给出证据,通过后才算完成。'
+          + '\n(这条目标没设验收命令,只能靠模型自证 —— 用 /goal check <命令> 可以换成硬判据。)'
       };
     }
     return { action: 'complete', message: buildCompleteMessage(goal) };
@@ -113,7 +178,11 @@ export function decideGoalStep(goal, ctx = {}) {
     return { action: 'stop', reason: 'blocked', message: '🎯 模型表示需要你提供信息或授权,目标模式已暂停等待你处理。' };
   }
   // 又说没完成了 -> 撤销核验态,回到正常推进
-  return { action: 'continue', prompt: buildContinuePrompt(goal), clearVerifying: !!goal.verifying };
+  return {
+    action: 'continue',
+    prompt: buildContinuePrompt(goal, { tokensUsed: used }),
+    clearVerifying: !!goal.verifying
+  };
 }
 
 /**
@@ -140,17 +209,44 @@ export function buildVerifyPrompt(goal) {
  * 必须带上目标原文 —— 达成后目标条会被清掉,不写进消息的话,
  * 万一判断有误,用户连原来设的是什么都找不回来了。
  */
-export function buildCompleteMessage(goal) {
+export function buildCompleteMessage(goal, checkResult = null) {
   const rounds = goal?.rounds || 0;
-  return [
-    `🎯 目标已达成,目标模式结束(共推进 ${rounds} 轮):${goal?.text || ''}`,
-    '若判断有误,复制上面这句目标用 /goal 重新设定即可。'
-  ].join('\n');
+  const lines = [`🎯 目标已达成,目标模式结束(共推进 ${rounds} 轮):${goal?.text || ''}`];
+  /* 说清是怎么判定达成的。"验收命令通过"和"模型自己说完成了"
+     是两种可信度完全不同的结论,不该长得一样。 */
+  if (checkResult) {
+    lines.push(`验收命令通过(退出码 0):${goal?.verifyCommand || ''}`);
+  } else {
+    lines.push('⚠ 这条目标没有验收命令,达成是模型自述的 —— 建议自己确认一下。');
+  }
+  lines.push('若判断有误,复制上面这句目标用 /goal 重新设定即可。');
+  return lines.join('\n');
 }
 
-/** 续推提示词:强调不要停、不要反问,并要求自检 */
-export function buildContinuePrompt(goal) {
+/**
+ * 续推提示词。
+ *
+ * **分两档**,这是从 codex 那里学来的一条:它用 continuation 和 budget_limit
+ * 两份提示。快没预算时还在说"继续推进",结果就是预算耗尽的那一刻
+ * 留下一个半拉子状态 —— 该收敛的时候必须明确要求收敛。
+ */
+export function buildContinuePrompt(goal, { tokensUsed = 0 } = {}) {
   const round = (goal.rounds || 0) + 1;
+  const budget = goal.tokenBudget || GOAL_DEFAULT_TOKEN_BUDGET;
+  const left = budget - tokensUsed;
+
+  if (left > 0 && left < budget * GOAL_WRAPUP_RATIO) {
+    return [
+      `【目标模式 · 收尾】预算快用完了(剩余约 ${fmtTokens(left)}),目标:${goal.text}`,
+      '',
+      '现在**不要再开新的工作**,把这一轮用来收敛:',
+      '1. 优先完成"再花一点点力气就能完成"的那部分',
+      '2. 把当前真实状态写清楚:哪些已经可用、哪些没做、卡在哪',
+      '3. 剩余项写成一份可以直接接着做的清单(具体到命令和文件)',
+      '4. 不要为了显得完成而含糊其辞 —— 没做完就说没做完'
+    ].join('\n');
+  }
+
   return [
     `【目标模式 · 第 ${round} 轮】当前目标尚未达成:${goal.text}`,
     '',
@@ -161,6 +257,40 @@ export function buildContinuePrompt(goal) {
     '4. 若目标已真正达成,请明确回复"目标已达成"并给出验证证据',
     '5. 若确实需要我提供信息或授权才能继续,请明确说明缺什么'
   ].join('\n');
+}
+
+/**
+ * 验收命令失败后的提示词。
+ *
+ * 核心是把**命令的真实输出**原样交回去。模型刚说完"已达成",
+ * 这份输出直接反驳了它 —— 比任何"请继续推进"的话术都有力,
+ * 而且是具体的、可操作的。
+ */
+export function buildCheckFailedPrompt(goal, result = {}) {
+  const out = String(result.output || '').trim().slice(-1500);
+  return [
+    `【目标模式 · 验收未通过】你说目标已达成,但验收命令的退出码是 ${result.code}。`,
+    `目标:${goal?.text || ''}`,
+    `验收命令:${goal?.verifyCommand || ''}`,
+    '',
+    '命令的实际输出:',
+    '```',
+    out || '(无输出)',
+    '```',
+    '',
+    '请据此继续:',
+    '1. 先说清这份输出说明了什么问题 —— 不要重复"已完成"',
+    '2. 直接修,不要写进"后续计划"',
+    '3. 修完自己先跑一遍那条验收命令,通过了再说达成'
+  ].join('\n');
+}
+
+/** token 数按人读得懂的量级显示 */
+export function fmtTokens(n) {
+  const v = Number(n) || 0;
+  if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e3) return `${Math.round(v / 1e3)}k`;
+  return String(v);
 }
 
 /**
@@ -186,10 +316,28 @@ export function setGoalMaxRounds(goal, n) {
   return { maxRounds: Math.max(capped, (goal?.rounds || 0) + 1), status: 'active' };
 }
 
+/** 手动设定 token 预算(/goal budget 5m) */
+export function setGoalTokenBudget(goal, raw) {
+  const m = String(raw || '').trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*([km]?)$/);
+  if (!m) throw new Error('预算写法:/goal budget 500k 或 /goal budget 5m');
+  const mult = m[2] === 'm' ? 1e6 : (m[2] === 'k' ? 1e3 : 1);
+  const want = Math.round(Number(m[1]) * mult);
+  if (want < 1000) throw new Error('预算太小了,至少 1k');
+  return { tokenBudget: want, status: 'active' };
+}
+
 /** 新建目标对象 */
-export function createGoal(text, { maxRounds = GOAL_DEFAULT_MAX_ROUNDS } = {}) {
+export function createGoal(text, {
+  maxRounds = GOAL_DEFAULT_MAX_ROUNDS,
+  tokenBudget = GOAL_DEFAULT_TOKEN_BUDGET,
+  verifyCommand = ''
+} = {}) {
   return {
     text: String(text || '').trim(), status: 'active',
-    rounds: 0, maxRounds, verifying: false, createdAt: Date.now()
+    rounds: 0, maxRounds, tokenBudget,
+    /* 验收命令:退出码 0 才算达成。留空则退回"模型自证"的弱判定,
+       界面上会标出来 —— 两种可信度不该长得一样。 */
+    verifyCommand: String(verifyCommand || '').trim(),
+    verifying: false, createdAt: Date.now()
   };
 }

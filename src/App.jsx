@@ -177,6 +177,9 @@ export default function App() {
           const step = decideGoalStep(conv.goal, {
             lastText: agentTexts[agentTexts.length - 1] || '',
             recentTexts: agentTexts,
+            /* token 才是真闸门:一轮可能烧 2k 也可能 200k,轮次是很差的代理指标。
+               用的是对话已有的累计用量(顶栏那个 Σ … tok 就是它)。 */
+            tokensUsed: (conv.usage?.inputTokens || 0) + (conv.usage?.outputTokens || 0),
             dangerHit: danger ? (danger.detail || '危险命令') : null
           });
           /* 团队模式:目标模式说「还要继续」时,由它决定下一轮谁上。
@@ -203,11 +206,53 @@ export default function App() {
             // 'passed' -> 审查通过,落回目标模式自己的达成核验
             st.pushMessage(convId, { role: 'agent', kind: 'raw', text: teamStep.message, ts: Date.now() });
           }
+          if (step.action === 'check') {
+            /* **达成判据换成了机器可验的。**
+               模型说"已完成"的成本是零;这条命令的退出码不会撒谎。
+               跑完再把结果塞回 decideGoalStep,由它决定是完成还是接着修。 */
+            st.pushMessage(convId, { role: 'agent', kind: 'raw', text: step.message, ts: Date.now() });
+            window.api.goal.check({ hostId: conv.hostId, command: step.command })
+              .then((res) => {
+                const next = decideGoalStep(conv.goal, {
+                  lastText: agentTexts[agentTexts.length - 1] || '',
+                  recentTexts: agentTexts,
+                  tokensUsed: (conv.usage?.inputTokens || 0) + (conv.usage?.outputTokens || 0),
+                  checkResult: res
+                });
+                st.pushMessage(convId, {
+                  role: 'agent', kind: 'tool_output',
+                  output: res.output, exitCode: res.code, ts: Date.now()
+                });
+                if (next.message) {
+                  st.pushMessage(convId, { role: 'agent', kind: 'raw', text: next.message, ts: Date.now() });
+                }
+                if (next.action === 'complete') {
+                  st.updateConversationGoal(convId, { status: 'done' });
+                  return;
+                }
+                st.updateConversationGoal(convId, { rounds: (conv.goal.rounds || 0) + 1, verifying: false });
+                sendToAgent(conv.hostId, convId, next.prompt, [], { auto: true });
+              })
+              .catch((e) => {
+                /* 验收命令本身跑不起来(主机断了、命令写错)不能当成"未达成"——
+                   那会让模型去修一个根本不存在的问题。暂停,让人看一眼。 */
+                st.updateConversationGoal(convId, { status: 'paused' });
+                st.pushMessage(convId, {
+                  role: 'agent', kind: 'raw', ts: Date.now(),
+                  text: `🎯 验收命令没能执行(${e.message}),目标模式已暂停 —— `
+                    + '这不代表目标没达成,先确认命令本身写对了。'
+                });
+              });
+            return;
+          }
           if (step.action === 'continue') {
             st.updateConversationGoal(convId, {
               rounds: (conv.goal.rounds || 0) + 1,
               ...(step.clearVerifying ? { verifying: false } : {})
             });
+            if (step.message) {
+              st.pushMessage(convId, { role: 'agent', kind: 'raw', text: step.message, ts: Date.now() });
+            }
             sendToAgent(conv.hostId, convId, step.prompt, [], { auto: true });
           } else if (step.action === 'verify') {
             // 宣称达成先不采信,追一轮逐条核验

@@ -2977,6 +2977,30 @@ ipcMain.handle('bg:snapshot', () => bgSnapshot());
 
 /* 面板要的是**所有**后台任务,不只是下载。
    应用侧任务来自 IPC 包装的自动登记,主机侧来自进程扫描,这里合成一份。 */
+/**
+ * 跑一条目标的验收命令。
+ *
+ * 这是目标模式里唯一的**硬判据**:模型说"已完成"的成本是零,
+ * 而 `npm test` / `curl -fsS .../health` 的退出码不会撒谎。
+ *
+ * 命令是用户在 /goal --check 里自己写的,所以这里不做白名单 ——
+ * 但**有超时**:验收命令挂住会让整个目标循环停在那儿,
+ * 而那看起来就像"任务还在跑",最难察觉。
+ */
+ipcMain.handle('goal:check', async (_e, { hostId, command } = {}) => {
+  const cmd = String(command || '').trim();
+  if (!cmd) throw new Error('没有验收命令');
+  const s = getSession(hostId);
+  const r = await s.ssh.exec(
+    `${hostId === LOCAL_ID ? '' : Installer.BIN_PATH + ' '}${cmd}`,
+    { timeoutMs: 60000 });
+  return {
+    code: r.code,
+    // 输出会进提示词发给模型,照例脱敏
+    output: require('./errorLog').redact(`${r.stdout || ''}\n${r.stderr || ''}`.trim().slice(-4000))
+  };
+});
+
 ipcMain.handle('tasks:snapshot', (_e, scope = {}) => tasksSnapshot(scope));
 
 /* 诊断:把这一轮扫描的原始输出摆出来。

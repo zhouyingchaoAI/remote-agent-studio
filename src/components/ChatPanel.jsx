@@ -6,8 +6,8 @@ import { buildPromptHistory, stepPromptHistory } from '../promptHistory.js';
 import { extractOptions } from '../quickReplies.js';
 import { matchCommands, applyCompletion, parseSlash, parseGoalArgs, helpText } from '../slashCommands.js';
 import {
-  createGoal, buildContinuePrompt, resumeGoalPatch, setGoalMaxRounds,
-  GOAL_DEFAULT_MAX_ROUNDS, GOAL_EXTEND_ROUNDS
+  createGoal, buildContinuePrompt, resumeGoalPatch, setGoalMaxRounds, setGoalTokenBudget,
+  fmtTokens, GOAL_DEFAULT_MAX_ROUNDS, GOAL_EXTEND_ROUNDS, GOAL_DEFAULT_TOKEN_BUDGET
 } from '../goalMode.js';
 import { createTeam, engineLabel, TEAM_PRESETS } from '../teamMode.js';
 import FilePreview from './FilePreview.jsx';
@@ -516,13 +516,25 @@ function ChatView({ hostId, conv, split = false }) {
         localNote(`全自动:${on ? '开' : '关'}`); return true;
       }
       case 'goal': {
-        const { sub, text, rounds } = parseGoalArgs(args);
+        const { sub, text, rounds, raw, command, verifyCommand } = parseGoalArgs(args);
         const goal = conv.goal;
         if (sub === 'set') {
-          st.setConversationGoal(conv.id, createGoal(text));
-          localNote(`🎯 目标已设定:${text}\n每轮结束后会自动推进,直到达成或触发上限(${GOAL_DEFAULT_MAX_ROUNDS} 轮)。\n随时可用 /goal pause 暂停、/goal clear 清除。`);
+          const fresh = createGoal(text, { verifyCommand });
+          st.setConversationGoal(conv.id, fresh);
+          localNote([
+            `🎯 目标已设定:${text}`,
+            verifyCommand
+              /* 有验收命令 = 硬判据。这条差别值得在设定时就说清楚,
+                 因为它决定了"达成"这两个字有多可信。 */
+              ? `验收命令(退出码 0 才算达成):${verifyCommand}`
+              : '⚠ 没有验收命令,达成只能靠模型自述 —— 建议用 /goal check <命令> 补一条,'
+                + '\n  比如 `npm test`、`curl -fsS localhost:8000/v1/models`、`test -f /path/to/产物`。',
+            `预算:${fmtTokens(GOAL_DEFAULT_TOKEN_BUDGET)} token(/goal budget 5m 可调),`
+              + `轮次兜底 ${GOAL_DEFAULT_MAX_ROUNDS}。`,
+            '随时可用 /goal pause 暂停、/goal clear 清除。'
+          ].join('\n'));
           // 立刻开跑
-          setTimeout(() => sendToAgent(hostId, conv.id, buildContinuePrompt({ ...createGoal(text), rounds: 0 }), [], { auto: true }), 0);
+          setTimeout(() => sendToAgent(hostId, conv.id, buildContinuePrompt({ ...fresh, rounds: 0 }), [], { auto: true }), 0);
           return true;
         }
         if (!goal?.text) { localNote('当前没有目标。用 /goal <目标描述> 设定一个。'); return true; }
@@ -544,6 +556,18 @@ function ChatView({ hostId, conv, split = false }) {
             st.updateConversationGoal(conv.id, patch);
             localNote(`🎯 轮次预算已设为 ${patch.maxRounds}(当前 ${goal.rounds || 0} 轮)`);
           } catch (e) { localNote(`🎯 ${e.message}`); }
+        } else if (sub === 'budget') {
+          /* token 预算才是真闸门 —— 轮次上限只是防死循环的兜底 */
+          try {
+            const patch = setGoalTokenBudget(goal, raw);
+            st.updateConversationGoal(conv.id, patch);
+            localNote(`🎯 token 预算已设为 ${fmtTokens(patch.tokenBudget)}`);
+          } catch (e) { localNote(`🎯 ${e.message}`); }
+        } else if (sub === 'check') {
+          /* 给目标装上硬判据。这是目标模式里最值得设的一项:
+             模型说"已完成"的成本是零,而这条命令的退出码不会撒谎。 */
+          st.updateConversationGoal(conv.id, { verifyCommand: command, verifying: false });
+          localNote(`🎯 验收命令已设定,今后以它的退出码为准:\n${command}`);
         } else if (sub === 'clear') {
           st.setConversationGoal(conv.id, null); localNote('🎯 目标已清除');
         }

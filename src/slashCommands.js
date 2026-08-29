@@ -5,8 +5,8 @@
  */
 
 export const COMMANDS = [
-  { name: 'goal', args: '<目标描述> | status | pause | resume | max <轮数> | clear',
-    desc: '目标模式:设定目标后跨轮自动推进,直到达成或触发上限' },
+  { name: 'goal', args: '<目标> [--check 命令] | check <命令> | budget 5m | status | pause | resume | clear',
+    desc: '目标模式:跨轮自动推进。带 --check 时以命令退出码 0 为达成判据(强烈建议)' },
   { name: 'team', args: '<执行方>+<审查方> | status | off',
     desc: '团队模式:一个引擎干活、另一个审查,配合目标模式自动推进(如 /team claude+codex)' },
   { name: 'engine', args: 'codex | claude | deepseek | dsh',
@@ -68,6 +68,18 @@ export function parseGoalArgs(args = '') {
   // /goal max 100 —— 大任务一次把预算调够,不用反复点「继续」
   const max = lower.match(/^max\s+(\d+)$/);
   if (max) return { sub: 'max', rounds: parseInt(max[1], 10) };
+  /* /goal budget 5m —— token 预算才是真闸门(一轮可能烧 2k 也可能 200k) */
+  const budget = lower.match(/^budget\s+(\S+)$/);
+  if (budget) return { sub: 'budget', raw: budget[1] };
+  /* /goal check <命令> —— 给当前目标设一条**验收命令**,退出码 0 才算达成。
+     这是目标模式里唯一的硬判据:模型说"已完成"的成本是零,
+     而 `npm test` 或 `curl -fsS .../health` 不会撒谎。 */
+  const check = a.match(/^check\s+([\s\S]+)$/i);
+  if (check) return { sub: 'check', command: check[1].trim() };
+  /* 设目标时就带上验收命令:`/goal 部署 vLLM --check curl -fsS localhost:8000/v1/models`
+     放在末尾是因为验收命令自己常含空格和参数,只能贪婪吃到行尾。 */
+  const withCheck = a.match(/^([\s\S]+?)\s+--check\s+([\s\S]+)$/);
+  if (withCheck) return { sub: 'set', text: withCheck[1].trim(), verifyCommand: withCheck[2].trim() };
   return { sub: 'set', text: a };
 }
 

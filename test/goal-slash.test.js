@@ -5,6 +5,8 @@ const path = require('path');
 const vm = require('vm');
 
 // src 下是 ESM,测试里轻量转换加载(避免为两个小模块引入构建依赖)
+const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+
 function loadEsm(rel, names) {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', rel), 'utf8')
     .replace(/export const/g, 'const')
@@ -206,4 +208,105 @@ test('达成消息带上目标原文,清掉目标后还能找回来重设', () =
   assert.match(msg, /帮我写详细的平台使用说明书/);
   assert.match(msg, /共推进 7 轮/);
   assert.match(msg, /重新设定/);
+});
+
+/* ============================================================
+ * 对齐 codex /goal 的三点:证据判据、token 预算、收尾提示词
+ * ============================================================ */
+
+const goal2 = loadEsm('goalMode.js', [
+  'decideGoalStep', 'createGoal', 'buildContinuePrompt', 'buildCheckFailedPrompt',
+  'buildCompleteMessage', 'setGoalTokenBudget', 'fmtTokens',
+  'GOAL_DEFAULT_TOKEN_BUDGET', 'GOAL_WRAPUP_RATIO'
+]);
+const slash2 = loadEsm('slashCommands.js', ['parseGoalArgs']);
+
+test('有验收命令时,先跑命令而不是采信模型的话', () => {
+  /* 这是这次改动的核心。模型宣称完成的成本是零 —— 它随口一句就结束了目标。
+     一条 `npm test` 或 `curl -fsS .../health` 不会撒谎。 */
+  const g = { ...goal2.createGoal('部署 vLLM', { verifyCommand: 'curl -fsS localhost:8000/v1/models' }), status: 'active' };
+  const step = goal2.decideGoalStep(g, { lastText: '目标已达成' });
+  assert.equal(step.action, 'check');
+  assert.equal(step.command, 'curl -fsS localhost:8000/v1/models');
+});
+
+test('退出码 0 才算达成', () => {
+  const g = { ...goal2.createGoal('x', { verifyCommand: 'npm test' }), status: 'active' };
+  assert.equal(goal2.decideGoalStep(g, { lastText: '目标已达成', checkResult: { code: 0, output: 'ok' } }).action, 'complete');
+});
+
+test('验收失败时把命令的真实输出喂回去', () => {
+  /* 比任何"请继续推进"的话术都有用:它是具体的、可操作的,
+     而且直接反驳了模型刚才那句"已达成"。 */
+  const g = { ...goal2.createGoal('x', { verifyCommand: 'npm test' }), status: 'active' };
+  const step = goal2.decideGoalStep(g, {
+    lastText: '目标已达成', checkResult: { code: 1, output: 'FAIL src/a.test.js' }
+  });
+  assert.equal(step.action, 'continue');
+  assert.match(step.prompt, /FAIL src\/a\.test\.js/);
+  assert.match(step.prompt, /退出码是 1/);
+});
+
+test('没有验收命令时退回弱判定,并明说是弱判定', () => {
+  /* 「验收命令通过」和「模型自己说完成了」可信度天差地别,
+     界面上不该长得一样 —— 否则用户会以为都验过了。 */
+  const g = { ...goal2.createGoal('x'), status: 'active' };
+  const step = goal2.decideGoalStep(g, { lastText: '目标已达成' });
+  assert.equal(step.action, 'verify');
+  assert.match(step.message, /没设验收命令/);
+  assert.match(goal2.buildCompleteMessage(g), /模型自述/);
+  assert.match(goal2.buildCompleteMessage(g, { code: 0 }), /退出码 0/);
+});
+
+test('token 预算是真闸门,先于轮次判定', () => {
+  // 一轮可能烧 2k 也可能 200k,轮次是很差的代理指标
+  const g = { ...goal2.createGoal('x', { tokenBudget: 1000 }), status: 'active', rounds: 0 };
+  const step = goal2.decideGoalStep(g, { lastText: '继续', tokensUsed: 2000 });
+  assert.equal(step.reason, 'budget');
+  assert.match(step.message, /token 预算/);
+});
+
+test('快到预算时换成收尾提示词,不再开新工作', () => {
+  /* codex 用两份提示(continuation / budget_limit)。一直说"继续推进",
+     预算耗尽的那一刻就留下一个半拉子状态。 */
+  const g = goal2.createGoal('x', { tokenBudget: 1000 });
+  const normal = goal2.buildContinuePrompt(g, { tokensUsed: 100 });
+  const wrapup = goal2.buildContinuePrompt(g, { tokensUsed: 950 });
+  assert.match(normal, /第 1 轮/);
+  assert.match(wrapup, /收尾/);
+  assert.match(wrapup, /不要再开新的工作/);
+});
+
+test('预算写法解析', () => {
+  assert.equal(goal2.setGoalTokenBudget({}, '5m').tokenBudget, 5e6);
+  assert.equal(goal2.setGoalTokenBudget({}, '500k').tokenBudget, 5e5);
+  assert.throws(() => goal2.setGoalTokenBudget({}, '不是数字'), /预算写法/);
+  assert.throws(() => goal2.setGoalTokenBudget({}, '10'), /太小/);
+});
+
+test('斜杠命令能带上验收命令', () => {
+  /* 验收命令自己常含空格和参数,所以 --check 放在末尾贪婪吃到行尾。 */
+  const r = slash2.parseGoalArgs('部署 vLLM --check curl -fsS localhost:8000/v1/models');
+  assert.equal(r.sub, 'set');
+  assert.equal(r.text, '部署 vLLM');
+  assert.equal(r.verifyCommand, 'curl -fsS localhost:8000/v1/models');
+  assert.deepEqual(slash2.parseGoalArgs('check npm test -- --run'), { sub: 'check', command: 'npm test -- --run' });
+  assert.deepEqual(slash2.parseGoalArgs('budget 5m'), { sub: 'budget', raw: '5m' });
+});
+
+test('验收命令跑不起来时暂停,而不是当成"未达成"', () => {
+  /* 主机断了或命令写错时,让模型去修一个根本不存在的问题
+     是最浪费的一种失败方式。 */
+  const app = read('src/App.jsx');
+  assert.match(app, /验收命令没能执行/);
+  assert.match(app, /这不代表目标没达成/);
+});
+
+test('验收在主进程执行且有超时', () => {
+  // 验收命令挂住会让整个目标循环停住,而那看起来就像"任务还在跑"
+  const main = read('electron/main.js');
+  assert.match(main, /ipcMain\.handle\('goal:check'/);
+  assert.match(main, /timeoutMs: 60000/);
+  // 输出会进提示词发给模型
+  assert.match(main, /redact\(`\$\{r\.stdout/);
 });
