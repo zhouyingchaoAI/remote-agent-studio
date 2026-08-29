@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { outputSummary, looksFailed } from '../toolOutput.js';
-import { useStore, sendToAgent, isAwaitingConfirm, MAX_PANES } from '../store.js';
+import { useStore, sendToAgent, isAwaitingConfirm, refreshGoalPlan, MAX_PANES } from '../store.js';
 import { useVoiceInput } from '../useVoiceInput.js';
 import { buildPromptHistory, stepPromptHistory } from '../promptHistory.js';
 import { extractOptions } from '../quickReplies.js';
@@ -516,10 +516,10 @@ function ChatView({ hostId, conv, split = false }) {
         localNote(`全自动:${on ? '开' : '关'}`); return true;
       }
       case 'goal': {
-        const { sub, text, rounds, raw, command, verifyCommand } = parseGoalArgs(args);
+        const { sub, text, rounds, raw, command, verifyCommand, planPath } = parseGoalArgs(args);
         const goal = conv.goal;
         if (sub === 'set') {
-          const fresh = createGoal(text, { verifyCommand });
+          const fresh = createGoal(text, { verifyCommand, planPath });
           st.setConversationGoal(conv.id, fresh);
           localNote([
             `🎯 目标已设定:${text}`,
@@ -529,6 +529,9 @@ function ChatView({ hostId, conv, split = false }) {
               ? `验收命令(退出码 0 才算达成):${verifyCommand}`
               : '⚠ 没有验收命令,达成只能靠模型自述 —— 建议用 /goal check <命令> 补一条,'
                 + '\n  比如 `npm test`、`curl -fsS localhost:8000/v1/models`、`test -f /path/to/产物`。',
+            planPath
+              ? `计划文件:${planPath} —— 每轮读一次,状态条会显示「第 N / M 步」`
+              : '提示:大任务加 /goal plan <文件路径>,进度会变成「第 3 / 18 步」而不是干巴巴的轮次。',
             `预算:${fmtTokens(GOAL_DEFAULT_TOKEN_BUDGET)} token(/goal budget 5m 可调),`
               + `轮次兜底 ${GOAL_DEFAULT_MAX_ROUNDS}。`,
             '随时可用 /goal pause 暂停、/goal clear 清除。'
@@ -539,7 +542,24 @@ function ChatView({ hostId, conv, split = false }) {
         }
         if (!goal?.text) { localNote('当前没有目标。用 /goal <目标描述> 设定一个。'); return true; }
         if (sub === 'status') {
-          localNote(`🎯 目标:${goal.text}\n状态:${goal.status} · 已推进 ${goal.rounds || 0}/${goal.maxRounds || GOAL_DEFAULT_MAX_ROUNDS} 轮`);
+          localNote([
+            `🎯 目标:${goal.text}`,
+            `状态:${goal.status} · 已推进 ${goal.rounds || 0}/${goal.maxRounds || GOAL_DEFAULT_MAX_ROUNDS} 轮`,
+            goal.plan?.total
+              ? `计划:${goal.plan.text} · 当前「${goal.plan.currentText || '?'}」(${goal.planPath})`
+              : (goal.planPath ? `计划文件:${goal.planPath}(还没读到内容)` : '')
+          ].filter(Boolean).join('\n'));
+        } else if (sub === 'plan') {
+          /* 计划文件是把"第 12 轮"换成「第 3 / 18 步」的唯一来源。
+             设完立刻读一次,免得人要等下一轮结束才知道路径写对没有。 */
+          st.updateConversationGoal(conv.id, { planPath, plan: null, planHistory: [], planPushback: 0 });
+          localNote(`🎯 计划文件已设为 ${planPath},正在读取…`);
+          refreshGoalPlan(hostId, conv.id).then(() => {
+            const p = useStore.getState().conversations[conv.id]?.goal?.plan;
+            localNote(p?.total
+              ? `🎯 已读到计划:${p.text}(当前「${p.currentText}」)`
+              : '🎯 没读到清单项 —— 确认文件存在,且里面是 `- [ ] xxx` 这样的 markdown 清单。');
+          });
         } else if (sub === 'pause') {
           st.updateConversationGoal(conv.id, { status: 'paused' }); localNote('🎯 目标模式已暂停');
         } else if (sub === 'resume') {
@@ -1085,6 +1105,9 @@ function TeamBar({ conv }) {
 /* 目标模式状态条:显示目标与进度,可暂停/继续/清除 */
 function GoalBar({ conv }) {
   const goal = conv.goal;
+  /* 步骤清单默认收起。它可能有二三十条,一直摊开会把对话挤走 ——
+     而人大多数时候只需要看那句「第 3 / 18 步」。 */
+  const [openPlan, setOpenPlan] = useState(false);
   if (!goal?.text) return null;
   // 已达成的目标不再显示 —— 它不会推进了。
   // 新流程会在达成时直接清空,这里兜住历史对话里已存的 done 目标。
@@ -1094,10 +1117,23 @@ function GoalBar({ conv }) {
   const label = goal.verifying && goal.status === 'active'
     ? '核验中'
     : ({ active: '推进中', paused: '已暂停', done: '已达成' }[goal.status] || goal.status);
+  const plan = goal.plan;
   return (
     <div className={`goal-bar ${goal.status}`}>
       <span className="goal-tag">🎯 目标</span>
       <span className="goal-text" title={goal.text}>{goal.text}</span>
+      {/* **步数排在轮次前面。**「第 3 / 18 步」有信息量,「第 12 轮」没有 ——
+          后者说不出在做第几件事、还剩几件。有计划时轮次退居次要。 */}
+      {plan?.total > 0 && (
+        <button className="goal-step" onClick={() => setOpenPlan((v) => !v)}
+          title={plan.currentText ? `当前:${plan.currentText}` : '展开步骤清单'}>
+          <span className="goal-step-bar">
+            <i style={{ width: `${plan.percent}%` }} />
+          </span>
+          {plan.text}
+          <span className="muted"> {openPlan ? '▾' : '▸'}</span>
+        </button>
+      )}
       <span className="muted small">{label} · {goal.rounds || 0}/{goal.maxRounds || GOAL_DEFAULT_MAX_ROUNDS} 轮</span>
       <span className="flex1" />
       {goal.status === 'active' && (
@@ -1116,6 +1152,34 @@ function GoalBar({ conv }) {
         </button>
       )}
       <button className="btn small ghost" onClick={() => st.setConversationGoal(conv.id, null)}>清除</button>
+      {openPlan && plan?.steps?.length > 0 && <PlanList plan={plan} planPath={goal.planPath} />}
+    </div>
+  );
+}
+
+/**
+ * 步骤清单。
+ *
+ * 这份清单的**唯一来源是主机上那个文件**,不是应用自己记的账。
+ * 所以要把路径显示出来 —— 人看到某一步状态不对时,可以直接去改文件,
+ * 下一轮就生效。应用记账的话,人就只能干看着。
+ */
+function PlanList({ plan, planPath }) {
+  const ICON = { done: '✓', doing: '◐', todo: '○' };
+  return (
+    <div className="goal-plan">
+      <div className="goal-plan-head muted small">
+        {planPath}
+        <span> · 已完成 {plan.done} / {plan.total}</span>
+      </div>
+      <ol className="goal-plan-list">
+        {plan.steps.map((s, i) => (
+          <li key={i} className={`plan-step ${s.state}`}>
+            <span className="plan-mark">{ICON[s.state] || '○'}</span>
+            <span className="plan-text">{s.text}</span>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }

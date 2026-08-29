@@ -3019,6 +3019,36 @@ ipcMain.handle('goal:check', async (_e, { hostId, command } = {}) => {
   };
 });
 
+/**
+ * 读计划文件。
+ *
+ * 目标模式原来只能显示"第 12 轮",而轮次不含任何信息 —— 看不出在做第几件事、
+ * 总共几件。让智能体自己维护一份 markdown 清单(它本来就爱写 progress.md),
+ * 应用每轮读一次,就能变成「第 3 / 18 步」。
+ *
+ * 读**失败一律返回空**而不是抛错:文件还没被创建、路径写错、主机暂时断开,
+ * 这些都不该把整轮对话打断 —— 计划只是个观察窗口,不是必需品。
+ */
+ipcMain.handle('goal:readPlan', async (_e, { hostId, path: p } = {}) => {
+  const file = String(p || '').trim();
+  if (!file) return { ok: false, text: '', error: '没有计划文件路径' };
+  /* 路径来自用户输入,会拼进 shell —— 用仓库里已有的 shellQuote,
+     不要在这儿再手写一遍引用逻辑。shell 引用的边角情况多到没法靠肉眼判断,
+     每多一份实现就多一处会出错的地方。 */
+  const quoted = shellQuote(file);
+  try {
+    const s = getSession(hostId);
+    // 计划文件不该很大;截断避免有人把日志当计划
+    const r = await s.ssh.exec(`head -c 60000 ${quoted} 2>/dev/null`, { timeoutMs: 15000 });
+    if (r.code === 124) return { ok: false, text: '', error: '读取超时' };
+    const text = String(r.stdout || '');
+    if (!text.trim()) return { ok: false, text: '', error: '文件为空或不存在' };
+    return { ok: true, text };
+  } catch (e) {
+    return { ok: false, text: '', error: e.message };
+  }
+});
+
 ipcMain.handle('tasks:snapshot', (_e, scope = {}) => tasksSnapshot(scope));
 
 /* 诊断:把这一轮扫描的原始输出摆出来。

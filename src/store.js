@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { applyTheme, DEFAULT_THEME } from './themes.js';
+import { parsePlan } from './planProgress.js';
+import { mergePlan } from './goalMode.js';
 
 /**
  * 主题变化通知。
@@ -476,6 +478,28 @@ const MAX_AUTO_REPLIES = 5;
 export const MAX_AUTO_RESUME = 3;
 const autoReplyState = new Map(); // convId -> { n, last }
 export function resetAutoReplies(convId) { autoReplyState.delete(convId); }
+
+/**
+ * 读一次计划文件,把「第 N / M 步」并进目标。
+ *
+ * **永不抛错、永不阻断对话。** 计划文件可能还没被创建、路径写错、
+ * 主机刚好断了 —— 这些都只是"这次没读到",不该把目标模式打断,
+ * 更不该被当成"进度没推进"(那会让停滞判定凭空提前触发)。
+ * 所以读失败时**连历史都不写**,让判据只吃真实数据。
+ */
+export async function refreshGoalPlan(hostId, convId) {
+  const goal = useStore.getState().conversations[convId]?.goal;
+  if (!goal?.planPath) return;
+  try {
+    const r = await window.api.goal.readPlan({ hostId, path: goal.planPath });
+    if (!r?.ok) return;
+    const steps = parsePlan(r.text);
+    if (!steps.length) return;   // 不是清单格式,当作没读到
+    useStore.getState().updateConversationGoal(convId, mergePlan(goal, steps));
+  } catch {
+    /* 静默:见上。 */
+  }
+}
 /**
  * 判定是否允许自动确认:
  * - 模型重复发出同一确认请求 -> 拒绝(大概率陷入循环/幻觉流程)

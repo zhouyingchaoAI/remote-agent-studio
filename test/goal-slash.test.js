@@ -2,26 +2,17 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const vm = require('vm');
 
 // src 下是 ESM,测试里轻量转换加载(避免为两个小模块引入构建依赖)
 const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 
-function loadEsm(rel, names) {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', rel), 'utf8')
-    .replace(/export const/g, 'const')
-    .replace(/export function/g, 'function');
-  const sandbox = { module: { exports: {} } };
-  vm.runInNewContext(`${src}\nmodule.exports = { ${names.join(', ')} };`, sandbox);
-  return sandbox.module.exports;
-}
+/* 换成公用加载器:goalMode 现在 import 了 planProgress,
+   原来那种只抹掉 export 的写法碰到 import 语句会直接语法错误。 */
+const { loadEsm } = require('./helpers/loadEsm');
 
-const goal = loadEsm('goalMode.js', [
-  'classifyGoalProgress', 'isStalled', 'decideGoalStep', 'buildContinuePrompt', 'createGoal', 'GOAL_DEFAULT_MAX_ROUNDS'
-]);
-const slash = loadEsm('slashCommands.js', [
-  'COMMANDS', 'isSlashInput', 'parseSlash', 'matchCommands', 'applyCompletion', 'parseGoalArgs', 'helpText'
-]);
+const plan = loadEsm('src/planProgress.js');
+const goal = loadEsm('src/goalMode.js', { './planProgress.js': plan });
+const slash = loadEsm('src/slashCommands.js');
 
 /* ---------------- 目标模式 ---------------- */
 
@@ -214,12 +205,8 @@ test('达成消息带上目标原文,清掉目标后还能找回来重设', () =
  * 对齐 codex /goal 的三点:证据判据、token 预算、收尾提示词
  * ============================================================ */
 
-const goal2 = loadEsm('goalMode.js', [
-  'decideGoalStep', 'createGoal', 'buildContinuePrompt', 'buildCheckFailedPrompt',
-  'buildCompleteMessage', 'setGoalTokenBudget', 'fmtTokens',
-  'GOAL_DEFAULT_TOKEN_BUDGET', 'GOAL_WRAPUP_RATIO'
-]);
-const slash2 = loadEsm('slashCommands.js', ['parseGoalArgs']);
+const goal2 = goal;
+const slash2 = slash;
 
 test('有验收命令时,先跑命令而不是采信模型的话', () => {
   /* 这是这次改动的核心。模型宣称完成的成本是零 —— 它随口一句就结束了目标。
@@ -292,6 +279,37 @@ test('斜杠命令能带上验收命令', () => {
   assert.equal(r.verifyCommand, 'curl -fsS localhost:8000/v1/models');
   assert.deepEqual(slash2.parseGoalArgs('check npm test -- --run'), { sub: 'check', command: 'npm test -- --run' });
   assert.deepEqual(slash2.parseGoalArgs('budget 5m'), { sub: 'budget', raw: '5m' });
+});
+
+test('斜杠命令能带上计划文件', () => {
+  const r = slash2.parseGoalArgs('重构模块 --plan /root/progress.md');
+  assert.equal(r.sub, 'set');
+  assert.equal(r.text, '重构模块');
+  assert.equal(r.planPath, '/root/progress.md');
+  assert.deepEqual(slash2.parseGoalArgs('plan /root/PLAN.md'), { sub: 'plan', planPath: '/root/PLAN.md' });
+});
+
+test('--plan 和 --check 同时出现时都能切对', () => {
+  /* 必须**先切 --plan 再切 --check**:--check 的值会贪婪吃到行尾,
+     反过来的话 `--plan /root/x.md` 会被整段吞进验收命令里,
+     结果是验收命令跑不起来、计划也没设上 —— 两个功能一起坏。 */
+  const r = slash2.parseGoalArgs('部署服务 --check curl -fsS localhost:8000/health --plan /root/p.md');
+  assert.equal(r.text, '部署服务');
+  assert.equal(r.planPath, '/root/p.md');
+  assert.equal(r.verifyCommand, 'curl -fsS localhost:8000/health');
+
+  // 换个顺序也一样
+  const r2 = slash2.parseGoalArgs('部署服务 --plan /root/p.md --check npm test');
+  assert.equal(r2.text, '部署服务');
+  assert.equal(r2.planPath, '/root/p.md');
+  assert.equal(r2.verifyCommand, 'npm test');
+});
+
+test('目标文本里含 -- 开头的词不会被误当成后缀', () => {
+  const r = slash2.parseGoalArgs('修好 --verbose 模式下的崩溃');
+  assert.equal(r.sub, 'set');
+  assert.equal(r.text, '修好 --verbose 模式下的崩溃');
+  assert.ok(!r.planPath);
 });
 
 test('验收命令跑不起来时暂停,而不是当成"未达成"', () => {

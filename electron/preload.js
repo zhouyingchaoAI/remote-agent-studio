@@ -140,7 +140,7 @@ contextBridge.exposeInMainWorld('api', {
     saveAsBrief: invoke('prism:saveAsBrief'),
     deployPrompt: invoke('prism:deployPrompt')
   },
-  goal: { check: invoke('goal:check') },
+  goal: { check: invoke('goal:check'), readPlan: invoke('goal:readPlan') },
   brief: {
     get: invoke('brief:get'),
     run: invoke('brief:run'),

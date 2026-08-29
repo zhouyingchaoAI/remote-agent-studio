@@ -5,8 +5,8 @@
  */
 
 export const COMMANDS = [
-  { name: 'goal', args: '<目标> [--check 命令] | check <命令> | budget 5m | status | pause | resume | clear',
-    desc: '目标模式:跨轮自动推进。带 --check 时以命令退出码 0 为达成判据(强烈建议)' },
+  { name: 'goal', args: '<目标> [--check 命令] [--plan 文件] | check <命令> | plan <文件> | budget 5m | status | pause | resume | clear',
+    desc: '目标模式:跨轮自动推进。--check 以命令退出码 0 为达成判据(强烈建议);--plan 指定计划文件,状态条会显示「第 N / M 步」' },
   { name: 'team', args: '<执行方>+<审查方> | status | off',
     desc: '团队模式:一个引擎干活、另一个审查,配合目标模式自动推进(如 /team claude+codex)' },
   { name: 'engine', args: 'codex | claude | deepseek | dsh',
@@ -76,10 +76,29 @@ export function parseGoalArgs(args = '') {
      而 `npm test` 或 `curl -fsS .../health` 不会撒谎。 */
   const check = a.match(/^check\s+([\s\S]+)$/i);
   if (check) return { sub: 'check', command: check[1].trim() };
-  /* 设目标时就带上验收命令:`/goal 部署 vLLM --check curl -fsS localhost:8000/v1/models`
-     放在末尾是因为验收命令自己常含空格和参数,只能贪婪吃到行尾。 */
-  const withCheck = a.match(/^([\s\S]+?)\s+--check\s+([\s\S]+)$/);
-  if (withCheck) return { sub: 'set', text: withCheck[1].trim(), verifyCommand: withCheck[2].trim() };
+  /* /goal plan <文件路径> —— 指定一份计划文件,把"第 12 轮"换成「第 3 / 18 步」。
+     路径不含空格,所以这里可以严格些,顺手挡住把整句话当路径。 */
+  const plan = a.match(/^plan\s+(\S+)$/i);
+  if (plan) return { sub: 'plan', planPath: plan[1].trim() };
+
+  /* 设目标时就带上验收命令 / 计划文件:
+       /goal 部署 vLLM --check curl -fsS localhost:8000/v1/models
+       /goal 重构 XXX --plan /root/progress.md
+   *
+   * 两个后缀都要能识别,且**先切 --plan 再切 --check**:
+   * --check 的值会贪婪吃到行尾,先切它的话 `--plan` 就被吞进验收命令里了。
+   */
+  let rest = a;
+  let planPath = '';
+  let verifyCommand = '';
+  const mPlan = rest.match(/^([\s\S]+?)\s+--plan\s+(\S+)\s*([\s\S]*)$/);
+  if (mPlan) {
+    planPath = mPlan[2].trim();
+    rest = `${mPlan[1]}${mPlan[3] ? ' ' + mPlan[3] : ''}`.trim();
+  }
+  const mCheck = rest.match(/^([\s\S]+?)\s+--check\s+([\s\S]+)$/);
+  if (mCheck) { verifyCommand = mCheck[2].trim(); rest = mCheck[1].trim(); }
+  if (planPath || verifyCommand) return { sub: 'set', text: rest, verifyCommand, planPath };
   return { sub: 'set', text: a };
 }
 

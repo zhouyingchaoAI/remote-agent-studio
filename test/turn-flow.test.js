@@ -68,12 +68,12 @@ test('暂停原因说清楚是哪一种,不要笼统一句"已暂停"', () => {
 /* ---- 与目标模式合起来看:开着全自动也必须能连续推进 ---- */
 
 test('端到端:全自动 + 目标模式,模型自行收尾时应被踢着继续', () => {
-  const goalSrc = fs.readFileSync(path.join(__dirname, '..', 'src/goalMode.js'), 'utf8')
-    .replace(/^export\s+(function|const|let)\s+/gm, '$1 ');
-  const box = { module: { exports: {} }, console };
-  vm.createContext(box);
-  vm.runInContext(`${goalSrc}\n;__out = { decideGoalStep };`, box);
-  const { decideGoalStep } = box.__out;
+  /* 用公用加载器:goalMode 现在 import 了 planProgress,
+     原来那种就地抹掉 export 的写法碰到 import 语句会直接语法错误。 */
+  const { loadEsm } = require('./helpers/loadEsm');
+  const { decideGoalStep } = loadEsm('src/goalMode.js', {
+    './planProgress.js': loadEsm('src/planProgress.js')
+  });
 
   // 截图里的真实结尾
   const lastText = '目标尚未达成,已完成资源标记的第一层强制访问控制。'

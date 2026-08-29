@@ -408,6 +408,38 @@ progress { width: 140px; height: 6px; }
 .goal-tag { font-weight: 700; white-space: nowrap; }
 .goal-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46%; }
 
+/* 「第 3 / 18 步」+ 可展开的步骤清单。
+   步数比轮次值钱得多:轮次说不出在做第几件事、还剩几件。 */
+.goal-step {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  background: none; border: 1px solid var(--border); border-radius: 999px;
+  color: var(--text); font: inherit; padding: 1px 9px 1px 4px; cursor: pointer;
+}
+.goal-step:hover { border-color: var(--accent); }
+.goal-step-bar {
+  width: 34px; height: 5px; border-radius: 3px; overflow: hidden;
+  background: var(--border); flex: none;
+}
+.goal-step-bar i { display: block; height: 100%; background: var(--accent); }
+
+/* 清单占满一整行 —— 它是块内容,挤在按钮那一行会被压成一条缝 */
+.goal-bar { flex-wrap: wrap; }
+.goal-plan {
+  flex-basis: 100%; margin-top: 6px; padding: 8px 10px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+  max-height: 260px; overflow-y: auto;
+}
+.goal-plan-head { margin-bottom: 6px; word-break: break-all; }
+.goal-plan-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.plan-step { display: flex; gap: 8px; align-items: baseline; line-height: 1.5; }
+.plan-mark { flex: none; width: 1em; text-align: center; }
+/* 做完的压暗、划掉 —— 眼睛要能一眼跳到没做的那些 */
+.plan-step.done { color: var(--muted); }
+.plan-step.done .plan-text { text-decoration: line-through; }
+.plan-step.done .plan-mark { color: var(--ok); }
+.plan-step.doing { color: var(--text); font-weight: 600; }
+.plan-step.doing .plan-mark { color: var(--accent); }
+
 /* 斜杠命令菜单 */
 .slash-menu {
   position: absolute; bottom: calc(100% + 6px); left: 18px; right: 18px; max-height: 260px; overflow-y: auto;

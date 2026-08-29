@@ -22,7 +22,7 @@ class ErrorBoundary extends React.Component {
 }
 import {
   useStore, loadHosts, loadConversations, loadSettings, sendToAgent, runAsAgent,
-  isAwaitingConfirm, evaluateAutoConfirm, MAX_AUTO_REPLIES, MAX_AUTO_RESUME
+  isAwaitingConfirm, evaluateAutoConfirm, refreshGoalPlan, MAX_AUTO_REPLIES, MAX_AUTO_RESUME
 } from './store.js';
 import { decideGoalStep } from './goalMode.js';
 import { decideTeamStep } from './teamMode.js';
@@ -169,8 +169,15 @@ export default function App() {
           // outcome === 'idle' -> 落到下面的目标模式
         }
 
-        // 目标模式:未达成则自动追一轮,直到达成/卡住/触顶
-        if (conv?.goal?.status === 'active' && conv.goal.text) {
+        /* 目标模式:未达成则自动追一轮,直到达成/卡住/触顶。
+         *
+         * 抽成函数是因为下面要**先异步读计划文件再决策**。
+         * 注意它自己重新从 store 取 conv —— 读计划会写回 goal.plan,
+         * 用闭包里那份旧的就等于白读了。 */
+        const goalStep = () => {
+          const st = useStore.getState();
+          const conv = st.conversations[convId];
+          if (!(conv?.goal?.status === 'active' && conv.goal.text)) return;
           const agentTexts = conv.messages
             .filter((m) => m.role === 'agent' && (m.kind === 'text' || m.kind === 'result') && m.text)
             .map((m) => m.text);
@@ -248,7 +255,10 @@ export default function App() {
           if (step.action === 'continue') {
             st.updateConversationGoal(convId, {
               rounds: (conv.goal.rounds || 0) + 1,
-              ...(step.clearVerifying ? { verifying: false } : {})
+              ...(step.clearVerifying ? { verifying: false } : {}),
+              /* 拿计划驳回"已达成"的次数要记下来 —— 不记的话每轮都从 0 开始,
+                 一份陈旧的清单就能把目标永远卡在最后一步。 */
+              ...(step.planPushback != null ? { planPushback: step.planPushback } : {})
             });
             if (step.message) {
               st.pushMessage(convId, { role: 'agent', kind: 'raw', text: step.message, ts: Date.now() });
@@ -268,6 +278,18 @@ export default function App() {
             st.updateConversationGoal(convId, { status: 'paused' });
             st.pushMessage(convId, { role: 'agent', kind: 'raw', text: step.message, ts: Date.now() });
           }
+        };
+
+        /* 有计划文件就先读一遍再决策。
+           读它一是为了拿到「第 N / M 步」显示出来,二是给"计划长时间没推进"
+           那条硬停滞判据喂数据 —— 比"连续多轮输出雷同"能抓到更多真卡住的情况
+           (模型每轮都在说不同的话、却一步没勾掉,是更常见也更烧钱的那种)。
+
+           读失败不阻断:refreshGoalPlan 内部吞掉错误,计划只是观察窗口。 */
+        if (conv?.goal?.status === 'active' && conv.goal.planPath) {
+          refreshGoalPlan(conv.hostId, convId).then(goalStep);
+        } else {
+          goalStep();
         }
         return;
       }
