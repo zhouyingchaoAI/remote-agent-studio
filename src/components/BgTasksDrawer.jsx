@@ -87,6 +87,79 @@ function ProgressBar({ p, note }) {
   );
 }
 
+const TARGET_STATE = {
+  starting: { text: '启动中', cls: 's-running' },
+  active: { text: '运行中', cls: 's-done' },
+  failed: { text: '失败', cls: 's-failed' },
+  running: { text: '进行中', cls: 's-running' },
+  idle: { text: '当前无进程', cls: 's-ended' },
+  watching: { text: '监控中', cls: 's-running' },
+  unknown: { text: '本轮没查到', cls: 's-ended' }
+};
+
+/** 一条极简趋势线:只要能看出"在涨/平了"就够,不需要坐标轴 */
+function Spark({ points = [] }) {
+  if (points.length < 2) return null;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const span = max - min || 1;
+  const d = points.map((v, i) =>
+    `${(i / (points.length - 1)) * 100},${20 - ((v - min) / span) * 18}`).join(' ');
+  return (
+    <svg className="bg-spark" viewBox="0 0 100 20" preserveAspectRatio="none">
+      <polyline points={d} fill="none" stroke="currentColor" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+/**
+ * 对话启动的后台目标。
+ *
+ * 和上面那些"应用自己发起的任务"分开显示,因为信息完整度不是一回事:
+ * 这里是**跨采样累积**出来的 —— 从开始到现在涨了多少、现在还动不动,
+ * 而不是某一刻的进程快照。进程消失不影响这条卡片存在。
+ */
+function TargetRow({ rec, hostName }) {
+  const st = TARGET_STATE[rec.state] || { text: rec.state, cls: '' };
+  return (
+    <div className={`bg-task st-${rec.state === 'failed' ? 'failed' : 'running'}`}>
+      <div className="row gap bg-task-head">
+        <span className="bg-kind">{rec.label}</span>
+        <span className="bg-title" title={rec.command || rec.name}>{rec.name}</span>
+        <span className="flex1" />
+        <span className={`bg-state ${st.cls}`}>{st.text}</span>
+      </div>
+
+      <div className="row gap bg-task-meta small muted">
+        {hostName && <span>{hostName}</span>}
+        <span>已持续 {fmtDur(Date.now() - (rec.firstSeenAt || Date.now()))}</span>
+        {/* 「涨了多少」比「现在多大」有用:后者看不出这段时间有没有推进 */}
+        {rec.grownBytes != null && <span>已增长 {fmtBytes(rec.grownBytes)}</span>}
+        {rec.bytesPerSec != null && <span>{fmtBytes(rec.bytesPerSec)}/s</span>}
+        {rec.activeState && <span>{rec.activeState}/{rec.subState}</span>}
+        {rec.pid && <span>PID {rec.pid}</span>}
+      </div>
+
+      {rec.sparkline?.length >= 2 && <Spark points={rec.sparkline} />}
+
+      {rec.lastLog && <pre className="bg-log" title={rec.lastLog}>{rec.lastLog}</pre>}
+
+      {rec.idle && (
+        <p className="bg-stall small">
+          ⚠ 两分钟没有新增数据 —— 可能已经完成,也可能卡住了
+        </p>
+      )}
+      {rec.state === 'idle' && (
+        /* 「当前没有进程」不等于「结束了」:重试脚本在 sleep 间隙、
+           systemd 在两次重启之间,都会有一段时间没有进程。 */
+        <p className="bg-note small muted">
+          这一刻没扫到进程 —— 重试型任务在两次尝试之间本来就没有进程,继续观察。
+        </p>
+      )}
+    </div>
+  );
+}
+
 function TaskRow({ task, hostName }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -235,6 +308,7 @@ export default function BgTasksDrawer({ open, onClose, hostName, hostId = '', co
 
   // 状态和作用域的筛选在主进程做(见 taskRegistry.snapshot),这里只管"其他长跑进程"
   const tasks = (snap.tasks || []).filter((t) => showOther || !t.longRunning);
+  const nothing = tasks.length === 0 && (snap.targets || []).length === 0;
   const otherCount = (snap.tasks || []).filter((t) => t.longRunning).length;
 
   return (
@@ -278,7 +352,7 @@ export default function BgTasksDrawer({ open, onClose, hostName, hostId = '', co
             </p>
           ))}
 
-          {tasks.length === 0 && (
+          {nothing && (
             <p className="muted small pad center">
               {snap.watching
                 ? `正在盯 ${snap.watching} 个目标,暂时都没有动静。`
@@ -303,6 +377,11 @@ export default function BgTasksDrawer({ open, onClose, hostName, hostId = '', co
               {typeof diag === 'string' ? diag : JSON.stringify(diag, null, 1)}
             </pre>
           )}
+
+          {/* 对话启动的目标排在最前:那才是你打开这个面板要看的东西 */}
+          {(snap.targets || []).map((r) => (
+            <TargetRow key={r.key} rec={r} hostName={hostName?.(r.hostId) || r.hostId} />
+          ))}
 
           {tasks.map((t) => (
             <TaskRow key={t.id} task={t} hostName={t.hostId ? (hostName?.(t.hostId) || t.hostId) : ''} />

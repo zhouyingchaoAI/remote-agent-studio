@@ -2788,6 +2788,7 @@ ipcMain.handle('term:resize', (_e, { hostId, termId = 'default', cols, rows }) =
 const bgTasks = require('./bgTasks');
 
 const { WatchList } = require('./watchTargets');
+const targetMonitor = require('./targetMonitor');
 /* 每台主机一份"该盯什么"的清单,内容来自**对话里智能体实际执行的命令**。
    这是这个面板的取景框:没被对话提到的东西一律不监控 —— 之前全机扫描,
    结果是该看的漏、不该看的一堆。 */
@@ -2853,6 +2854,17 @@ async function bgScanHost(hostId) {
     // 存到 st 上:算快照的是另一个函数,拿不到这里的 scan
     st.pathSizes = scan.pathSizes || new Map();
     st.watchCount = wl.size;
+    /* **以目标为中心累积**。进程是瞬时的(restart --no-block 一秒就退、
+       重试脚本在 sleep 间隙没有进程),按进程建模的话记录随时会消失,
+       "持续进度"永远攒不起来。目标(服务/目录)从头到尾都在。 */
+    const watch = {
+      units: wl.list('units'), paths: wl.list('paths'),
+      scripts: wl.list('scripts'), images: wl.list('images')
+    };
+    st.targets = targetMonitor.dropUnwatched(
+      targetMonitor.updateTargets(st.targets || [], { watch, scan, now: Date.now() }),
+      watch
+    );
     st.warning = bgTasks.diskWarning(scan.disks);
     st.at = now;
     st.error = '';
@@ -2900,6 +2912,11 @@ function tasksSnapshot(scope = {}) {
     }
   }
   const tasks = taskRegistry.snapshot({ now, hostTasks, ...scope });
+  /* 对话启动的后台活儿走这条:每个目标一条记录,带累积进度。
+     和上面那些"应用自己发起的任务"分开 —— 它们的信息完整度不是一回事。 */
+  const targets = [...bgState.entries()]
+    .filter(([hostId]) => !scope.hostId || hostId === scope.hostId)
+    .flatMap(([hostId, st]) => (st.targets || []).map((r) => ({ ...r, hostId })));
   /* 磁盘预警只报当前主机的。之前是把所有已连接主机的都堆上来,
      于是你在看 A 机器,却收到 B 机器的告警 —— 看着像当前这台快满了。 */
   const warnings = [...bgState.entries()]
@@ -2913,6 +2930,7 @@ function tasksSnapshot(scope = {}) {
     .map(([hostId, st]) => ({ hostId, message: st.error }));
   return {
     tasks,
+    targets,
     warnings,
     errors,
     /* 面板要能告诉人"我在盯什么" —— 空列表时,"一个目标都没有"和
