@@ -993,6 +993,19 @@ progress { width: 140px; height: 6px; }
 }
 /* 失败的输出默认展开,并且看一眼就知道 */
 .tool-output.failed .tool-output-body { border-color: var(--red); }
+
+/* 命令还在跑:边框亮起来 + 一颗呼吸的点。
+   "还在跑"和"跑完了"必须一眼分得出 —— 否则一条卡死的命令
+   和一条正常结束的命令长得完全一样。 */
+.tool-output.running .tool-output-body { border-color: var(--accent); }
+.live-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); margin-right: 2px; vertical-align: middle;
+  animation: live-pulse 1.2s ease-in-out infinite;
+}
+@keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+/* 无障碍:关掉动效时保留颜色,只是不闪 */
+@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
 .exit-bad { color: var(--red); }
 .bg-bar-wrap { margin: 6px 0 2px; }
 .bg-bar-wrap .bg-bar { margin: 0; }

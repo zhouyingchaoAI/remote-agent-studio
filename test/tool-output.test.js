@@ -32,7 +32,10 @@ test('tool 消息会渲染它携带的 output', () => {
 test('后端在 tool 消息上带出输出和退出码', () => {
   const s = read('electron/ssh/AgentSession.js');
   assert.match(s, /kind: 'tool', name: '执行命令', detail: item\.command, output/);
-  assert.match(s, /exitCode: item\.exit_code/);
+  /* 退出码现在先取到变量里(实时日志要靠它判断命令是不是还在跑),
+     所以这里查的是"取值来源对不对",不是那一行长什么样。 */
+  assert.match(s, /const exitCode = item\.exit_code \?\? item\.exitCode \?\? null;/);
+  assert.match(s, /kind: 'tool'[\s\S]{0,400}\n\s*exitCode,/);
   // claude 的工具失败用 is_error 标记,比猜关键词准
   assert.match(s, /exitCode: b\.is_error \? 1 : null/);
 });
@@ -119,7 +122,9 @@ test('失败的输出默认展开', () => {
   // 成功的折起来省地方;失败的那条正是你想看的,不该还要多点一下
   const chat = read('src/components/ChatPanel.jsx');
   assert.match(chat, /const failed = looksFailed\(output, exitCode\);/);
-  assert.match(chat, /useState\(failed\)/);
+  /* 还在跑的也默认展开 —— 想看进度的时刻正是它还在跑的时刻。
+     两个条件都要在,少一个就有一类输出要多点一下才能看见。 */
+  assert.match(chat, /useState\(failed \|\| running\)/);
 });
 
 test('退出码非 0 时显著标出来', () => {

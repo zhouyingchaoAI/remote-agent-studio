@@ -192,6 +192,43 @@ export const useStore = create((set, get) => ({
       if (!c) return {};
       // 单对话消息上限:超出后丢弃最旧的,保护渲染与持久化性能
       const MAX_MESSAGES = 2000;
+
+      /* **同一条命令的后续事件要就地更新,不能追加。**
+         引擎在命令跑的过程中会不断发同一条 item(输出越来越长),
+         无脑追加的话对话里会出现一串几乎一样的「执行命令」;
+         而按 id 合并,它就变成一块**原地刷新的日志**。 */
+      const idx = msg.id
+        ? c.messages.findIndex((m) => m.id === msg.id && m.kind === msg.kind)
+        : -1;
+      if (idx >= 0) {
+        const next = [...c.messages];
+        /* 保留原来的 ts —— 用新时间会让这条消息在按时间排序时跳位,
+           而它其实还是原来那条。 */
+        next[idx] = { ...next[idx], ...msg, ts: next[idx].ts };
+        return {
+          conversations: {
+            ...s.conversations, [convId]: { ...c, messages: next, updatedAt: Date.now() }
+          }
+        };
+      }
+      /* end 事件单独发 tool_output,但它属于前面那条 tool。
+         找得到就合进去,找不到再退回追加(兼容老对话)。 */
+      if (msg.kind === 'tool_output' && msg.id) {
+        const ti = c.messages.findIndex((m) => m.id === msg.id && m.kind === 'tool');
+        if (ti >= 0) {
+          const next = [...c.messages];
+          next[ti] = {
+            ...next[ti], running: false,
+            output: msg.output || next[ti].output, exitCode: msg.exitCode
+          };
+          return {
+            conversations: {
+              ...s.conversations, [convId]: { ...c, messages: next, updatedAt: Date.now() }
+            }
+          };
+        }
+      }
+
       const messages = [...c.messages, msg];
       const updated = {
         ...c,
@@ -227,6 +264,53 @@ export const useStore = create((set, get) => ({
   },
 
   /** 流式增量:追加到当前流式气泡,没有则新建 */
+  /**
+   * 命令还在跑时的增量输出。
+   *
+   * 老格式(exec_command_output_delta)只给一小块新增文本,不给全量,
+   * 所以这里必须**追加**而不是替换。
+   *
+   * 只留最后一段:一条 `docker build` 能刷出几十万字符,
+   * 全存进对话既会把渲染拖垮,也会被写进持久化文件。
+   * 实时日志要看的本来就是**最新那几屏**。
+   */
+  appendToolDelta: (convId, id, chunk) => {
+    if (!id || !chunk) return;
+    set((s) => {
+      const c = s.conversations[convId];
+      if (!c) return {};
+      const i = c.messages.findIndex((m) => m.id === id && m.kind === 'tool');
+      if (i < 0) return {};
+      const LIVE_LIMIT = 20000;
+      const merged = (c.messages[i].output || '') + chunk;
+      const next = [...c.messages];
+      next[i] = {
+        ...next[i], running: true,
+        output: merged.length > LIVE_LIMIT ? merged.slice(-LIVE_LIMIT) : merged
+      };
+      return {
+        conversations: {
+          ...s.conversations, [convId]: { ...c, messages: next, updatedAt: Date.now() }
+        }
+      };
+    });
+    persist();
+  },
+
+  /** 本轮结束时,把还挂着"运行中"的工具调用收尾 */
+  clearRunningTools: (convId) => {
+    set((s) => {
+      const c = s.conversations[convId];
+      if (!c || !c.messages.some((m) => m.running)) return {};
+      return {
+        conversations: {
+          ...s.conversations,
+          [convId]: { ...c, messages: c.messages.map((m) => (m.running ? { ...m, running: false } : m)) }
+        }
+      };
+    });
+  },
+
   appendStreamDelta: (convId, kind, chunk) => {
     set((s) => {
       const c = s.conversations[convId];

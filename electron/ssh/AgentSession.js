@@ -20,6 +20,42 @@ const {
 const { codexReasoningFlag } = require('./codexOptions');
 const { isTransientAgentError, describeTransient } = require('../transientErrors');
 
+/**
+ * 解出增量输出的那一块。
+ *
+ * codex 不同版本对 `chunk` 的编码不一样:Rust 侧 `Vec<u8>` 序列化成
+ * **数字数组**,有的版本又发 **base64 字符串**。只认一种的话,
+ * 在另一半版本上表现为"实时日志永远是空的",而且不会有任何报错 ——
+ * 这种沉默的坏法最难查,所以两种都认。
+ */
+function decodeChunk(chunk) {
+  if (chunk == null) return '';
+  if (Array.isArray(chunk)) return Buffer.from(chunk).toString('utf8');
+  const s = String(chunk);
+  if (!s) return '';
+
+  /* 判据不是"它像不像 base64",而是**"解出来像不像人话"**。
+   *
+   * 一开始我用的是"字符集合法 + 往返能对上",结果被 `done` 打脸:
+   * 它本身就是一段合法 base64,往返也完全对得上,于是一句
+   * "done" 被解成了乱码。**短字符串根本无法从形态上区分两者** ——
+   * 这条路是死的。
+   *
+   * 换个判据就清楚了:命令输出一定是可读文本。
+   * 解码后只要出现替换字符或控制字符,就说明它本来就不是 base64。
+   * `done` 解出 `v��`,当场被挡掉。
+   *
+   * 仍有理论上的漏网之鱼(某些纯文本恰好解出合法 UTF-8),
+   * 所以再加一条:**带空格或换行的一律按原文处理** ——
+   * 真的 base64 块里不会有空白,而命令输出几乎必然有。
+   */
+  if (/\s/.test(s) || s.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(s)) return s;
+  const decoded = Buffer.from(s, 'base64').toString('utf8');
+  // \t \n \r 是正常的;其余控制字符和 U+FFFD(解码失败的记号)说明它本来就不是 base64
+  if (!decoded || /[\uFFFD\x00-\x08\x0B\x0C\x0E-\x1F]/.test(decoded)) return s;
+  return decoded;
+}
+
 const AGENT_PATH = 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"; ' +
   'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1; ' +
   '[ -s "$HOME/.remote-agent-node-env.sh" ] && . "$HOME/.remote-agent-node-env.sh"; ' +
@@ -434,12 +470,20 @@ class AgentSession extends EventEmitter {
         if (it === 'agent_message') return this._emitMsg({ kind: 'text', text: item.text || '' });
         if (it === 'reasoning') return this._emitMsg({ kind: 'reasoning', text: item.text || '' });
         if (it === 'command_execution') {
+          const exitCode = item.exit_code ?? item.exitCode ?? null;
+          /* **item.updated 在命令还在跑的时候就会来**,带着不断变长的
+             aggregated_output。以前这里把它和 item.completed 一视同仁,
+             又不带 id —— 于是渲染端分不清"同一条命令又长了一截"和
+             "另起了一条命令",实时日志就这么丢了。 */
+          const running = t === 'item.updated' && exitCode == null;
           const output = clipOutput(item.aggregated_output || '');
-          this._maybeEmitPermissionHint(output);
+          // 权限提示只在命令真的结束后判,跑到一半的输出容易误报
+          if (!running) this._maybeEmitPermissionHint(output);
           return this._emitMsg({
             kind: 'tool', name: '执行命令', detail: item.command, output,
+            id: item.id || item.item_id || null, running,
             // 退出码是确定事实,有它就不用靠关键词猜命令成没成
-            exitCode: item.exit_code ?? item.exitCode ?? null,
+            exitCode,
             dangerous: isDangerousCommand(item.command)
           });
         }
@@ -464,12 +508,28 @@ class AgentSession extends EventEmitter {
         return msg.unified_diff ? this._emitMsg({ kind: 'diff', text: msg.unified_diff }) : undefined;
       case 'exec_command_begin': {
         const cmd = Array.isArray(msg.command) ? msg.command.join(' ') : msg.command;
-        return this._emitMsg({ kind: 'tool', name: '执行命令', detail: cmd, dangerous: isDangerousCommand(cmd) });
+        return this._emitMsg({
+          kind: 'tool', name: '执行命令', detail: cmd,
+          // call_id 把 begin / output_delta / end 三个事件串成同一条命令
+          id: msg.call_id || null, running: true,
+          dangerous: isDangerousCommand(cmd)
+        });
+      }
+      /* 命令还在跑时的增量输出。
+         以前完全没处理这个事件 —— 于是一条跑十分钟的命令,
+         在它结束之前界面上什么都没有,只能干等。 */
+      case 'exec_command_output_delta': {
+        const text = decodeChunk(msg.chunk);
+        if (!text) return;
+        return this._emitMsg({ kind: 'tool_delta', id: msg.call_id || null, text });
       }
       case 'exec_command_end': {
         const output = clipOutput(msg.aggregated_output || '');
         this._maybeEmitPermissionHint(output);
-        return this._emitMsg({ kind: 'tool_output', output, exitCode: msg.exit_code ?? null });
+        return this._emitMsg({
+          kind: 'tool_output', id: msg.call_id || null,
+          output, exitCode: msg.exit_code ?? null
+        });
       }
       case 'patch_apply_begin':
         return this._emitMsg({ kind: 'tool', name: '修改文件', detail: Object.keys(msg.changes || {}).join('\n') });

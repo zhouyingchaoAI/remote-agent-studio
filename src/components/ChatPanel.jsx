@@ -30,16 +30,39 @@ import { normalizePastedPath, looksLikePath } from '../pastePath.js';
  * 折叠但给一行摘要:全展开会把对话冲垮,全折起来等于没有中间过程。
  * 失败的默认展开 —— 那正是你想看的那种。
  */
-function ToolOutput({ output = '', exitCode }) {
+function ToolOutput({ output = '', exitCode, running = false, onStop = null }) {
   const failed = looksFailed(output, exitCode);
-  const [open, setOpen] = useState(failed);
+  /* 跑着的默认展开。命令跑了十分钟你却要先点一下才能看见它在干什么,
+     等于这个日志不存在 —— 想看进度的时刻正是它还在跑的时刻。 */
+  const [open, setOpen] = useState(failed || running);
+  const bodyRef = useRef(null);
+  const followRef = useRef(true);
+
+  /* 跟随到底部,但**只在用户本来就贴着底部时**。
+     日志一直在长,如果不管三七二十一都滚到底,
+     人正往上翻看某一行报错时会被反复拽回去 —— 那比不自动滚更烦。 */
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el || !open || !running) return;
+    if (followRef.current) el.scrollTop = el.scrollHeight;
+  }, [output, open, running]);
+
+  const onScroll = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  };
+
   const { lines, preview } = outputSummary(output);
-  if (!String(output).trim()) return null;
+  // 跑着但还没有输出时也要出现:否则界面上什么都没有,和卡死没区别
+  if (!String(output).trim() && !running) return null;
   return (
-    <div className={`tool-output${failed ? ' failed' : ''}`}>
+    <div className={`tool-output${failed ? ' failed' : ''}${running ? ' running' : ''}`}>
       <button className="tool-output-head" onClick={() => setOpen(!open)}>
-        <span className="chip">{failed ? '⚠' : '📄'} 输出 {open ? '▾' : '▸'}</span>
-        <span className="muted small">{lines} 行</span>
+        <span className="chip">
+          {running ? <span className="live-dot" /> : (failed ? '⚠' : '📄')} 输出 {open ? '▾' : '▸'}
+        </span>
+        <span className="muted small">{lines} 行{running ? ' · 持续输出中' : ''}</span>
         {exitCode != null && (
           <span className={`small ${Number(exitCode) === 0 ? 'muted' : 'exit-bad'}`}>退出码 {exitCode}</span>
         )}
@@ -48,10 +71,21 @@ function ToolOutput({ output = '', exitCode }) {
       </button>
       {open && (
         <>
-          <pre className="dim tool-output-body">{output}</pre>
-          <button className="btn tiny ghost" onClick={() => window.api.clipboard.writeText(output)}>
-            复制输出
-          </button>
+          <pre className="dim tool-output-body" ref={bodyRef} onScroll={onScroll}>
+            {output || '(还没有输出)'}
+          </pre>
+          <div className="row gap">
+            <button className="btn tiny ghost" onClick={() => window.api.clipboard.writeText(output)}>
+              复制输出
+            </button>
+            {running && onStop && (
+              /* 复用会话本身的取消通道 —— 它会 kill 远端进程。
+                 在这儿另写一套"停止命令"必然和它不一致。 */
+              <button className="btn tiny ghost" onClick={onStop} title="中断当前这一轮,并结束远端进程">
+                停止
+              </button>
+            )}
+          </div>
         </>
       )}
     </div>
@@ -59,9 +93,12 @@ function ToolOutput({ output = '', exitCode }) {
 }
 
 /** 一次工具调用:命令 + 它的输出 */
-function ToolCall({ m }) {
+function ToolCall({ m, hostId = '', convId = '' }) {
   const [showFull, setShowFull] = useState(false);
   const detail = String(m.detail || '');
+  const stop = (hostId && convId)
+    ? () => window.api.agent.cancel({ hostId, convId }).catch(() => {})
+    : null;
   // 200 字符经常正好把命令切在关键参数上,所以留一个"看全"的出口
   const long = detail.length > 200;
   return (
@@ -81,7 +118,7 @@ function ToolCall({ m }) {
       </div>
       {m.diff && <EditDiff diff={m.diff} />}
       {/* 这一行是这次修复的核心:输出本来就传过来了,只是从没被画出来 */}
-      <ToolOutput output={m.output} exitCode={m.exitCode} />
+      <ToolOutput output={m.output} exitCode={m.exitCode} running={m.running} onStop={stop} />
     </div>
   );
 }
@@ -1292,7 +1329,7 @@ function Message({ m, hostId, convId, onEnableSystemMode, isLast, running, onQui
         </div>
       );
     case 'tool':
-      return <ToolCall m={m} />;
+      return <ToolCall m={m} hostId={hostId} convId={convId} />;
     case 'diff':
       return (
         <div className="msg thin" onClick={() => setOpen(!open)}>

@@ -83,6 +83,10 @@ export default function App() {
       const st = useStore.getState();
       if (msg.kind === 'done') {
         st.setAgentRunning(convId, false);
+        /* 本轮结束时把还标着"运行中"的命令收掉。
+           不清的话,一条被中断的命令会永远转着圈 ——
+           而"永远在跑"和"跑了很久"在界面上长得一模一样。 */
+        st.clearRunningTools(convId);
         st.updateConvResume(convId, {
           claudeSessionId: msg.claudeSessionId,
           codexSessionId: msg.codexSessionId,
@@ -295,6 +299,9 @@ export default function App() {
       }
       if (msg.kind === 'status') return;
       if (msg.kind === 'usage') return st.addUsage(convId, msg);
+      /* 命令跑到一半的增量输出 —— 追加到对应那条工具调用上,
+         让它变成一块实时刷新的日志,而不是等命令结束才一次性出现。 */
+      if (msg.kind === 'tool_delta') return st.appendToolDelta(convId, msg.id, msg.text);
       // 流式增量与收尾
       if (msg.kind === 'text_delta') return st.appendStreamDelta(convId, 'text', msg.text);
       if (msg.kind === 'reasoning_delta') return st.appendStreamDelta(convId, 'reasoning', msg.text);
