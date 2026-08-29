@@ -5,6 +5,7 @@ import { useVoiceInput } from '../useVoiceInput.js';
 import { buildPromptHistory, stepPromptHistory } from '../promptHistory.js';
 import { extractOptions } from '../quickReplies.js';
 import { matchCommands, applyCompletion, parseSlash, parseGoalArgs, helpText } from '../slashCommands.js';
+import { buildDecomposePrompt, defaultPlanPath } from '../planProgress.js';
 import {
   createGoal, buildContinuePrompt, resumeGoalPatch, setGoalMaxRounds, setGoalTokenBudget,
   fmtTokens, GOAL_DEFAULT_MAX_ROUNDS, GOAL_EXTEND_ROUNDS, GOAL_DEFAULT_TOKEN_BUDGET
@@ -519,7 +520,11 @@ function ChatView({ hostId, conv, split = false }) {
         const { sub, text, rounds, raw, command, verifyCommand, planPath } = parseGoalArgs(args);
         const goal = conv.goal;
         if (sub === 'set') {
-          const fresh = createGoal(text, { verifyCommand, planPath });
+          /* **拆解默认发生。** 没给路径就用默认的 —— 要用户先想出一个路径
+             再手敲 --plan,这个功能就只有极少数人会用到,而它恰恰是
+             "目标模式"和"跑 25 轮然后停"之间的全部差别。 */
+          const file = planPath || defaultPlanPath(conv.id);
+          const fresh = createGoal(text, { verifyCommand, planPath: file });
           st.setConversationGoal(conv.id, fresh);
           localNote([
             `🎯 目标已设定:${text}`,
@@ -529,15 +534,15 @@ function ChatView({ hostId, conv, split = false }) {
               ? `验收命令(退出码 0 才算达成):${verifyCommand}`
               : '⚠ 没有验收命令,达成只能靠模型自述 —— 建议用 /goal check <命令> 补一条,'
                 + '\n  比如 `npm test`、`curl -fsS localhost:8000/v1/models`、`test -f /path/to/产物`。',
-            planPath
-              ? `计划文件:${planPath} —— 每轮读一次,状态条会显示「第 N / M 步」`
-              : '提示:大任务加 /goal plan <文件路径>,进度会变成「第 3 / 18 步」而不是干巴巴的轮次。',
-            `预算:${fmtTokens(GOAL_DEFAULT_TOKEN_BUDGET)} token(/goal budget 5m 可调),`
-              + `轮次兜底 ${GOAL_DEFAULT_MAX_ROUNDS}。`,
+            `第一轮先拆解成清单并写入 ${file},之后状态条按「第 N / M 步」走。`,
+            `预算:${fmtTokens(GOAL_DEFAULT_TOKEN_BUDGET)} token(/goal budget 5m 可调);`
+              + `轮次兜底 ${GOAL_DEFAULT_MAX_ROUNDS},读到计划后会按步数自动上调。`,
             '随时可用 /goal pause 暂停、/goal clear 清除。'
           ].join('\n'));
-          // 立刻开跑
-          setTimeout(() => sendToAgent(hostId, conv.id, buildContinuePrompt({ ...fresh, rounds: 0 }), [], { auto: true }), 0);
+          /* 第 0 轮是**拆解**,不是"继续推进"。
+             原来一上来就说"继续推进",模型只能边想边做,
+             于是进度永远只能用轮次表示 —— 而轮次说不出还剩多少活儿。 */
+          setTimeout(() => sendToAgent(hostId, conv.id, buildDecomposePrompt(fresh), [], { auto: true }), 0);
           return true;
         }
         if (!goal?.text) { localNote('当前没有目标。用 /goal <目标描述> 设定一个。'); return true; }
@@ -552,14 +557,26 @@ function ChatView({ hostId, conv, split = false }) {
         } else if (sub === 'plan') {
           /* 计划文件是把"第 12 轮"换成「第 3 / 18 步」的唯一来源。
              设完立刻读一次,免得人要等下一轮结束才知道路径写对没有。 */
-          st.updateConversationGoal(conv.id, { planPath, plan: null, planHistory: [], planPushback: 0 });
+          st.updateConversationGoal(conv.id, {
+            planPath, plan: null, planHistory: [], planPushback: 0, planScaled: false, planSource: ''
+          });
           localNote(`🎯 计划文件已设为 ${planPath},正在读取…`);
           refreshGoalPlan(hostId, conv.id).then(() => {
-            const p = useStore.getState().conversations[conv.id]?.goal?.plan;
-            localNote(p?.total
-              ? `🎯 已读到计划:${p.text}(当前「${p.currentText}」)`
-              : '🎯 没读到清单项 —— 确认文件存在,且里面是 `- [ ] xxx` 这样的 markdown 清单。');
+            const g = useStore.getState().conversations[conv.id]?.goal;
+            localNote(g?.planSource === 'file'
+              ? `🎯 已读到计划:${g.plan.text}(当前「${g.plan.currentText}」)`
+              : `🎯 这个文件里没有 \`- [ ] xxx\` 形式的清单。`
+                + `\n用 /goal replan 让它按当前目标拆一份出来。`);
           });
+        } else if (sub === 'replan') {
+          /* 拆坏了要能重来:粒度太粗看不出进度、太细全是琐事,
+             都得靠人看一眼才知道。没有这条命令的话,唯一办法是清掉目标重设,
+             那会把已经推进的轮次和预算一起丢掉。 */
+          st.updateConversationGoal(conv.id, {
+            plan: null, planHistory: [], planPushback: 0, planScaled: false, planSource: ''
+          });
+          localNote(`🎯 重新拆解中,清单会写到 ${goal.planPath || '(未设置计划文件)'}`);
+          setTimeout(() => sendToAgent(hostId, conv.id, buildDecomposePrompt(goal), [], { auto: true }), 0);
         } else if (sub === 'pause') {
           st.updateConversationGoal(conv.id, { status: 'paused' }); localNote('🎯 目标模式已暂停');
         } else if (sub === 'resume') {
@@ -1118,6 +1135,7 @@ function GoalBar({ conv }) {
     ? '核验中'
     : ({ active: '推进中', paused: '已暂停', done: '已达成' }[goal.status] || goal.status);
   const plan = goal.plan;
+  const hasSteps = plan?.steps?.length > 0;
   return (
     <div className={`goal-bar ${goal.status}`}>
       <span className="goal-tag">🎯 目标</span>
@@ -1125,13 +1143,19 @@ function GoalBar({ conv }) {
       {/* **步数排在轮次前面。**「第 3 / 18 步」有信息量,「第 12 轮」没有 ——
           后者说不出在做第几件事、还剩几件。有计划时轮次退居次要。 */}
       {plan?.total > 0 && (
-        <button className="goal-step" onClick={() => setOpenPlan((v) => !v)}
-          title={plan.currentText ? `当前:${plan.currentText}` : '展开步骤清单'}>
+        /* **来源要看得出来。** 从计划文件读到的是可核对的事实,
+           从模型正文里捞的("我在第 12/67 步")只是它的一面之词 ——
+           两者长得一样的话,人会把后者也当成确凿进度。 */
+        <button className="goal-step" disabled={!hasSteps}
+          onClick={() => hasSteps && setOpenPlan((v) => !v)}
+          title={hasSteps
+            ? (plan.currentText ? `当前:${plan.currentText}` : '展开步骤清单')
+            : '这个步数是模型在回复里自己说的,没有对应的计划文件 —— 用 /goal replan 让它拆一份'}>
           <span className="goal-step-bar">
             <i style={{ width: `${plan.percent}%` }} />
           </span>
           {plan.text}
-          <span className="muted"> {openPlan ? '▾' : '▸'}</span>
+          <span className="muted"> {hasSteps ? (openPlan ? '▾' : '▸') : '(自述)'}</span>
         </button>
       )}
       <span className="muted small">{label} · {goal.rounds || 0}/{goal.maxRounds || GOAL_DEFAULT_MAX_ROUNDS} 轮</span>
@@ -1152,7 +1176,7 @@ function GoalBar({ conv }) {
         </button>
       )}
       <button className="btn small ghost" onClick={() => st.setConversationGoal(conv.id, null)}>清除</button>
-      {openPlan && plan?.steps?.length > 0 && <PlanList plan={plan} planPath={goal.planPath} />}
+      {openPlan && hasSteps && <PlanList plan={plan} planPath={goal.planPath} />}
     </div>
   );
 }

@@ -436,7 +436,34 @@ export function createGoal(text, {
     plan: null,          // 最近一次解析结果 { total, done, current, text, steps }
     planHistory: [],     // [{ at, done, total }] —— 用来判断计划有没有在推进
     planPushback: 0,     // 已经拿计划驳回过几次"已达成"
+    planScaled: false,   // 是否已按计划规模抬过轮次上限(只抬一次)
     verifying: false, createdAt: Date.now()
+  };
+}
+
+/**
+ * 按计划规模调整轮次上限。
+ *
+ * 67 步的活儿配 25 轮上限,注定要反复触顶 —— 每次都得人来点一下「继续」,
+ * 而这个功能存在的意义本来就是不用人守着。
+ *
+ * **真正的闸门始终是 token 预算**(见 decideGoalStep 的顺序),
+ * 轮次上限一直只是"防死循环"的兜底,按活儿的大小调它是合理的。
+ * 但必须**只抬一次并且说出来** —— 悄悄放大用户设的上限,
+ * 等于替他决定多花多少钱。
+ */
+export function scaleRoundsForPlan(goal, plan) {
+  if (!plan?.total || goal?.planScaled) return null;
+  const want = Math.min(plan.total * 2, GOAL_MAX_ROUNDS_CAP);
+  const cur = goal?.maxRounds || GOAL_DEFAULT_MAX_ROUNDS;
+  if (want <= cur) return { planScaled: true };   // 够用,只标记不改
+  return {
+    planScaled: true,
+    maxRounds: want,
+    message: `🎯 计划共 ${plan.total} 步,轮次上限从 ${cur} 抬到 ${want}(每步约 2 轮),`
+      + `免得跑到一半反复触顶要你点「继续」。\n`
+      + `真正的闸门仍是 token 预算(${fmtTokens(goal?.tokenBudget || GOAL_DEFAULT_TOKEN_BUDGET)});`
+      + `不想这样就用 /goal max ${cur} 调回去。`
   };
 }
 

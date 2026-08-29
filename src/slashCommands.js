@@ -5,8 +5,8 @@
  */
 
 export const COMMANDS = [
-  { name: 'goal', args: '<目标> [--check 命令] [--plan 文件] | check <命令> | plan <文件> | budget 5m | status | pause | resume | clear',
-    desc: '目标模式:跨轮自动推进。--check 以命令退出码 0 为达成判据(强烈建议);--plan 指定计划文件,状态条会显示「第 N / M 步」' },
+  { name: 'goal', args: '<目标> [--check 命令] [--plan 文件] | check <命令> | plan <文件> | replan | budget 5m | status | pause | resume | clear',
+    desc: '目标模式:先拆成清单再逐条推进,状态条显示「第 N / M 步」。--check 以命令退出码 0 为达成判据(强烈建议);replan 重新拆解' },
   { name: 'team', args: '<执行方>+<审查方> | status | off',
     desc: '团队模式:一个引擎干活、另一个审查,配合目标模式自动推进(如 /team claude+codex)' },
   { name: 'engine', args: 'codex | claude | deepseek | dsh',
@@ -62,7 +62,7 @@ export function parseGoalArgs(args = '') {
   const a = String(args || '').trim();
   if (!a) return { sub: 'status' };
   const lower = a.toLowerCase();
-  if (['status', 'pause', 'resume', 'clear', 'stop'].includes(lower)) {
+  if (['status', 'pause', 'resume', 'clear', 'stop', 'replan'].includes(lower)) {
     return { sub: lower === 'stop' ? 'pause' : lower };
   }
   // /goal max 100 —— 大任务一次把预算调够,不用反复点「继续」

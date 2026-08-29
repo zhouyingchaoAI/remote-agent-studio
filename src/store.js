@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { applyTheme, DEFAULT_THEME } from './themes.js';
-import { parsePlan } from './planProgress.js';
-import { mergePlan } from './goalMode.js';
+import { parsePlan, parseProseProgress } from './planProgress.js';
+import { mergePlan, scaleRoundsForPlan } from './goalMode.js';
 
 /**
  * 主题变化通知。
@@ -488,17 +488,60 @@ export function resetAutoReplies(convId) { autoReplyState.delete(convId); }
  * 所以读失败时**连历史都不写**,让判据只吃真实数据。
  */
 export async function refreshGoalPlan(hostId, convId) {
-  const goal = useStore.getState().conversations[convId]?.goal;
+  const st = useStore.getState();
+  const goal = st.conversations[convId]?.goal;
   if (!goal?.planPath) return;
   try {
     const r = await window.api.goal.readPlan({ hostId, path: goal.planPath });
-    if (!r?.ok) return;
+    if (!r?.ok) return fallbackToProse(convId);
     const steps = parsePlan(r.text);
-    if (!steps.length) return;   // 不是清单格式,当作没读到
-    useStore.getState().updateConversationGoal(convId, mergePlan(goal, steps));
+    if (!steps.length) return fallbackToProse(convId);   // 不是清单格式,当作没读到
+
+    const patch = mergePlan(goal, steps);
+    /* 67 步的活儿配 25 轮上限注定反复触顶,而这个功能本来就是为了不用人守着。
+       只抬一次,并且把消息发出来 —— 悄悄放大用户设的上限,
+       等于替他决定多花多少钱。 */
+    const scaled = scaleRoundsForPlan(goal, patch.plan);
+    if (scaled?.message) {
+      useStore.getState().pushMessage(convId, {
+        role: 'agent', kind: 'raw', text: scaled.message, ts: Date.now()
+      });
+    }
+    const { message, ...scalePatch } = scaled || {};
+    useStore.getState().updateConversationGoal(convId, {
+      ...patch, ...scalePatch, planSource: 'file'
+    });
   } catch {
-    /* 静默:见上。 */
+    fallbackToProse(convId);
   }
+}
+
+/**
+ * 读不到计划文件时,退回从模型正文里捞进度。
+ *
+ * 起因是一次很刺眼的对比:模型在回复里写着「当前仍在第 12/67 步」,
+ * 而状态条显示「0/25 轮」—— **信息就在眼前,应用却视而不见。**
+ *
+ * 这条路**只有步数、没有清单内容**,而且来源是模型的一面之词,
+ * 所以标成 planSource: 'prose',界面上会注明是自述、不能点开看条目。
+ * 不写 planHistory:模型可能把上一轮的数字原样复读,
+ * 拿它喂停滞判定会得出一个看似确凿、实则没有依据的结论。
+ */
+function fallbackToProse(convId) {
+  const conv = useStore.getState().conversations[convId];
+  if (!conv || conv.goal?.planSource === 'file') return;   // 有过文件就不退回猜的
+  const last = [...conv.messages].reverse()
+    .find((m) => m.role === 'agent' && (m.kind === 'text' || m.kind === 'result') && m.text);
+  const hit = last && parseProseProgress(last.text);
+  if (!hit) return;
+  useStore.getState().updateConversationGoal(convId, {
+    plan: {
+      total: hit.total, done: hit.current - 1, current: hit.current,
+      percent: Math.round(((hit.current - 1) / hit.total) * 100),
+      text: `第 ${hit.current} / ${hit.total} 步`, currentText: '', steps: []
+    },
+    planSource: 'prose'
+  });
 }
 /**
  * 判定是否允许自动确认:

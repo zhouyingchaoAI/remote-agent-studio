@@ -415,7 +415,9 @@ progress { width: 140px; height: 6px; }
   background: none; border: 1px solid var(--border); border-radius: 999px;
   color: var(--text); font: inherit; padding: 1px 9px 1px 4px; cursor: pointer;
 }
-.goal-step:hover { border-color: var(--accent); }
+.goal-step:hover:not(:disabled) { border-color: var(--accent); }
+/* 模型自述的步数:能看,但点不开 —— 它背后没有可核对的清单 */
+.goal-step:disabled { cursor: default; opacity: 0.75; }
 .goal-step-bar {
   width: 34px; height: 5px; border-radius: 3px; overflow: hidden;
   background: var(--border); flex: none;

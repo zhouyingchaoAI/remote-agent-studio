@@ -239,7 +239,139 @@ test('历史有长度上限', () => {
   assert.equal(g.planHistory.length, G.PLAN_HISTORY_MAX);
 });
 
+/* ------------------------------------------------------------ 自动拆解 */
+
+test('拆解提示词要求真的写文件,并且写完接着干', () => {
+  /* 两条都是踩出来的:
+     只说"拆成清单"→ 模型在回复里列一张漂亮的清单然后就没了,应用读不到;
+     不说"别停"→ 它写完计划会停下来等你说"开始"。 */
+  const p = P.buildDecomposePrompt({ text: '部署 ragflow', planPath: '/root/p.md' });
+  assert.match(p, /\/root\/p\.md/);
+  assert.match(p, /不要只在回复里列清单/);
+  assert.match(p, /不要停下来等我确认/);
+  assert.match(p, /8~40 条/, '不给粒度会拆出 5 条或 200 条,两种都没法看进度');
+});
+
+test('默认计划路径按对话隔离,且文件名安全', () => {
+  /* 有默认路径,拆解才能默认发生 —— 要用户先想出一个路径再手敲 --plan,
+     这个功能就只有极少数人会用到。 */
+  assert.notEqual(P.defaultPlanPath('conv-a'), P.defaultPlanPath('conv-b'));
+  assert.match(P.defaultPlanPath('conv-a'), /^~\/\.remote-agent-studio\/goals\//);
+  // 对话 id 会拼进路径,不能带斜杠或引号
+  assert.ok(!/[/'"$;]/.test(P.defaultPlanPath('../../etc/passwd').replace(/^~\/\.remote-agent-studio\/goals\//, '')));
+});
+
+/* ------------------------------------------------------------ 正文兜底 */
+
+test('从模型正文里捞出「第 12/67 步」', () => {
+  /* 真实场景:模型在回复里写着这句,状态条却显示「0/25 轮」——
+     信息就在眼前,应用视而不见。 */
+  assert.deepEqual(P.parseProseProgress('当前仍在第 12/67 步,apt 正在更新索引'), { current: 12, total: 67 });
+  assert.deepEqual(P.parseProseProgress('第3/18步'), { current: 3, total: 18 });
+  assert.deepEqual(P.parseProseProgress('步骤 5/9 完成'), { current: 5, total: 9 });
+  assert.deepEqual(P.parseProseProgress('Step 4 of 12'), { current: 4, total: 12 });
+});
+
+test('正文里的普通分数不会被当成进度', () => {
+  /* `12/67` 这种片段在正文里太常见(版本号、比例、日期)。
+     误判一次就会显示一个凭空捏造的进度 —— 宁可不显示。 */
+  for (const s of [
+    '磁盘用了 12/67 GB',
+    '准确率 3/18',
+    '2026/08/29 开始构建',
+    'v1.2/3.4 版本',
+    ''
+  ]) assert.equal(P.parseProseProgress(s), null, s);
+});
+
+test('反过来的、越界的步数一律不认', () => {
+  assert.equal(P.parseProseProgress('第 67/12 步'), null, '当前不该大于总数');
+  assert.equal(P.parseProseProgress('第 1/1 步'), null, '总数为 1 没有信息量');
+  assert.equal(P.parseProseProgress('第 0/9 步'), null);
+});
+
+/* ------------------------------------------------------------ 轮次自适应 */
+
+test('计划远大于轮次上限时把上限抬上去', () => {
+  /* 67 步配 25 轮注定反复触顶,每次都要人点「继续」——
+     而这个功能存在的意义本来就是不用人守着。 */
+  const g = G.createGoal('x');
+  const r = G.scaleRoundsForPlan(g, { total: 67 });
+  assert.equal(r.maxRounds, 134);
+  assert.equal(r.planScaled, true);
+  assert.match(r.message, /67 步/);
+  assert.match(r.message, /token 预算/, '要说清真正的闸门仍是 token');
+  assert.match(r.message, /\/goal max 25/, '要给出调回去的办法');
+});
+
+test('只抬一次,不会每轮都往上加', () => {
+  // 悄悄地一轮轮放大用户设的上限,等于替他决定多花多少钱
+  const g = { ...G.createGoal('x'), planScaled: true };
+  assert.equal(G.scaleRoundsForPlan(g, { total: 200 }), null);
+});
+
+test('上限本来就够就不动它', () => {
+  const g = { ...G.createGoal('x'), maxRounds: 100 };
+  const r = G.scaleRoundsForPlan(g, { total: 8 });
+  assert.equal(r.maxRounds, undefined, '不该往下调 —— 那是用户自己设的');
+  assert.equal(r.planScaled, true);
+});
+
+test('再大的计划也不能超过硬上限', () => {
+  const r = G.scaleRoundsForPlan(G.createGoal('x'), { total: 9999 });
+  assert.equal(r.maxRounds, G.GOAL_MAX_ROUNDS_CAP);
+});
+
 /* ------------------------------------------------------------ 接线 */
+
+test('设定目标后第一轮是拆解,不是"继续推进"', () => {
+  /* 一上来就说"继续推进",模型只能边想边做,
+     进度就永远只能用轮次表示 —— 而轮次说不出还剩多少活儿。 */
+  const chat = read('src/components/ChatPanel.jsx');
+  assert.match(chat, /sendToAgent\(hostId, conv\.id, buildDecomposePrompt\(fresh\)/);
+  assert.match(chat, /planPath \|\| defaultPlanPath\(conv\.id\)/, '没给路径要用默认的');
+});
+
+test('正文兜底不写进 planHistory', () => {
+  /* 模型可能把上一轮的数字原样复读。拿它喂停滞判定,
+     会得出一个看似确凿、实则没有依据的结论。 */
+  const store = read('src/store.js');
+  const fn = store.slice(store.indexOf('function fallbackToProse'));
+  assert.ok(!/planHistory/.test(fn.slice(0, 900)));
+  assert.match(fn.slice(0, 900), /planSource: 'prose'/);
+});
+
+test('读到过文件就不再退回正文自述', () => {
+  // 可核对的事实一旦有了,就不该被模型的一面之词覆盖
+  const store = read('src/store.js');
+  assert.match(store, /planSource === 'file'\) return;/);
+});
+
+test('界面上区分"清单"和"模型自述的步数"', () => {
+  /* 两者长得一样的话,人会把后者也当成确凿进度。 */
+  const chat = read('src/components/ChatPanel.jsx');
+  assert.match(chat, /disabled=\{!hasSteps\}/);
+  assert.match(chat, /自述/);
+});
+
+test('默认计划路径里的 ~ 会被展开', () => {
+  /* 整段引起来的话 `~` 不展开,会去找一个名字里真带波浪号的目录 ——
+     而默认路径正是 `~/.remote-agent-studio/…`,不处理这个功能默认就是坏的。 */
+  const main = read('electron/main.js');
+  const h = main.slice(main.indexOf(`ipcMain.handle('goal:readPlan'`), main.indexOf(`ipcMain.handle('tasks:snapshot'`));
+  assert.match(h, /startsWith\('~\/'\)/);
+  assert.match(h, /"\$HOME"/);
+
+  // 用真的 bash 验证展开后仍然是安全的
+  const { shellQuote } = require('../electron/ssh/SSHManager');
+  const build = (f) => (f.startsWith('~/') ? `"$HOME"/${shellQuote(f.slice(2))}` : shellQuote(f));
+  /* HOME 必须**单独一条语句**先赋值:写成 `HOME=x printf "$HOME"` 的话,
+     $HOME 在调用 printf 之前就被外层 shell 展开了,测的其实是本机的 HOME。 */
+  const out = execFileSync('bash', ['-c',
+    `HOME=/tmp/h\nprintf '%s\\n' ${build('~/a b/x.md')} ${build('~/$(echo NO).md')}`
+  ], { encoding: 'utf8' }).trim().split('\n');
+  assert.deepEqual(out, ['/tmp/h/a b/x.md', '/tmp/h/$(echo NO).md']);
+});
 
 test('计划文件路径拼进 shell 前必须被引用', () => {
   /* 路径是用户输入的,直接拼进命令行就是命令注入。
@@ -284,9 +416,13 @@ test('前端读计划失败时不写历史', () => {
   /* 把"这次没读到"记成一条历史,等于告诉停滞判定"进度没涨",
      会让它凭空提前触发。 */
   const store = read('src/store.js');
-  const fn = store.slice(store.indexOf('export async function refreshGoalPlan'));
-  assert.match(fn.slice(0, 900), /if \(!r\?\.ok\) return;/);
-  assert.match(fn.slice(0, 900), /if \(!steps\.length\) return;/);
+  const fn = store.slice(store.indexOf('export async function refreshGoalPlan'), store.indexOf('function fallbackToProse'));
+  /* 两条失败路径都必须在 mergePlan 之前就返回 —— 只要走到 mergePlan,
+     就会往 planHistory 里追加一条"进度没涨",让停滞判定凭空提前触发。 */
+  assert.match(fn, /if \(!r\?\.ok\) return fallbackToProse/);
+  assert.match(fn, /if \(!steps\.length\) return fallbackToProse/);
+  const beforeMerge = fn.slice(0, fn.indexOf('mergePlan'));
+  assert.ok(/!r\?\.ok/.test(beforeMerge) && /!steps\.length/.test(beforeMerge));
 });
 
 test('决策前先刷新计划,而且用刷新后的 goal', () => {

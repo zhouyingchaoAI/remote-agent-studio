@@ -3034,8 +3034,15 @@ ipcMain.handle('goal:readPlan', async (_e, { hostId, path: p } = {}) => {
   if (!file) return { ok: false, text: '', error: '没有计划文件路径' };
   /* 路径来自用户输入,会拼进 shell —— 用仓库里已有的 shellQuote,
      不要在这儿再手写一遍引用逻辑。shell 引用的边角情况多到没法靠肉眼判断,
-     每多一份实现就多一处会出错的地方。 */
-  const quoted = shellQuote(file);
+     每多一份实现就多一处会出错的地方。
+
+     `~/` 要单独处理:整段引起来的话 `~` 不会展开,会去找一个名字里
+     真带波浪号的目录 —— 默认计划路径正是 `~/.remote-agent-studio/…`,
+     不处理的话这个功能默认就是坏的。展开交给 shell 的 $HOME,
+     剩下的部分照常引用,注入面没变大。 */
+  const quoted = file.startsWith('~/')
+    ? `"$HOME"/${shellQuote(file.slice(2))}`
+    : shellQuote(file);
   try {
     const s = getSession(hostId);
     // 计划文件不该很大;截断避免有人把日志当计划
