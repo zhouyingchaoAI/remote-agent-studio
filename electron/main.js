@@ -1101,6 +1101,8 @@ async function mobileStartTask({ hostId, prompt, convId, cwd = '', engine, model
       if (msg.dangerous) task.dangerous.push(String(msg.detail || '').slice(0, 200));
     }
     if (msg.kind === 'error' || msg.kind === 'stderr') task.error += `${msg.text || ''}\n`;
+    // 智能体跑的每条命令都可能引入新的监控目标(见 noteAgentActivity)
+    noteAgentActivity(hostId, msg);
     send('agent:message', { hostId, convId: targetConvId, msg });
   });
 
@@ -1808,6 +1810,7 @@ ipcMain.handle('agent:start', async (_e, { hostId, convId, opts, resume }) => {
       msg.agent = agent.opts.agent; // 本轮实际执行的引擎
       msg.transient = agent.transient || null; // 本轮是否被网络/代理掐断(可自动续跑)
     }
+    noteAgentActivity(hostId, msg);
     send('agent:message', { hostId, convId, msg });
   });
   s.agents.set(convId, agent);
@@ -2784,6 +2787,16 @@ ipcMain.handle('term:resize', (_e, { hostId, termId = 'default', cols, rows }) =
  */
 const bgTasks = require('./bgTasks');
 
+const { WatchList } = require('./watchTargets');
+/* 每台主机一份"该盯什么"的清单,内容来自**对话里智能体实际执行的命令**。
+   这是这个面板的取景框:没被对话提到的东西一律不监控 —— 之前全机扫描,
+   结果是该看的漏、不该看的一堆。 */
+const watchLists = new Map();
+function watchListFor(hostId) {
+  if (!watchLists.has(hostId)) watchLists.set(hostId, new WatchList());
+  return watchLists.get(hostId);
+}
+
 const bgState = new Map();      // hostId -> { tasks, disks, at, scanning }
 let bgTimer = null;
 let bgFast = false;
@@ -2807,8 +2820,17 @@ async function bgScanHost(hostId) {
     const s = getSession(hostId);
     /* 要量的目录来自**上一轮**的结果:这一轮才知道有哪些任务、下到哪儿。
        用一轮(6 秒)的延迟换掉一次额外的 SSH 往返,划算。 */
+    /* **取景框来自对话**:只盯智能体说过要跑的那几个单元/脚本/目录。
+       全机扫描那一版是错的方向 —— 该看的漏、不该看的一堆,
+       每修一次就换一种错法。 */
+    const wl = watchListFor(hostId);
     const r = await s.ssh.exec(
-      bgTasks.buildScanCommand({ watchPaths: st.watchPaths || [], extraUnits: st.extraUnits || [] }),
+      bgTasks.buildScanCommand({
+        watchPaths: wl.list('paths'),
+        extraUnits: wl.list('units'),
+        // 进程按这些关键词认:脚本名、镜像名、compose 项目名
+        tokens: [...wl.list('scripts'), ...wl.list('images')]
+      }),
       { timeoutMs: BG_SCAN_TIMEOUT_MS });
     /* **超时不抛异常,只返回 code 124。**
        不显式检查的话,stdout 是残缺的、解析不出任何任务,而面板会显示
@@ -2826,13 +2848,11 @@ async function bgScanHost(hostId) {
     st.disks = scan.disks;
     st.units = scan.units || [];
     st.uptimeSec = scan.uptimeSec || 0;
-    st.watchPaths = bgTasks.collectWatchPaths(scan);
-    /* 下一轮把"正在跑下载的进程所属的单元"也纳入 journal 抓取 ——
-       它们的日志里往往正带着分层进度,而单元名不含 pull/download,
-       按名字过滤永远扫不到。 */
-    st.extraUnits = bgTasks.collectUnits(scan);
+    /* 不再从上一轮扫描结果反推该盯什么 —— 那正是噪音的来源。
+       现在的目标全部来自对话(watchListFor)。 */
     // 存到 st 上:算快照的是另一个函数,拿不到这里的 scan
     st.pathSizes = scan.pathSizes || new Map();
+    st.watchCount = wl.size;
     st.warning = bgTasks.diskWarning(scan.disks);
     st.at = now;
     st.error = '';
@@ -2853,6 +2873,14 @@ async function bgScanHost(hostId) {
  * 主机侧要经过 mergeHostTasks —— 进程从 ps 里消失时得留下一条终态,
  * 否则"下完了"和"下挂了"表现完全一样,而那恰恰是最该被回答的问题。
  */
+/* 智能体每跑一条命令、每写一个文件,都可能引入新的监控目标。
+   挂在消息转发处 —— 那是唯一一个所有引擎、所有对话都必经的地方。 */
+function noteAgentActivity(hostId, msg) {
+  if (!hostId || !msg) return;
+  const text = msg.kind === 'tool' ? `${msg.detail || ''} ${msg.name || ''}` : '';
+  if (text.trim()) watchListFor(hostId).addFromCommand(text);
+}
+
 function tasksSnapshot(scope = {}) {
   const now = Date.now();
   const hostTasks = [];
@@ -2887,6 +2915,11 @@ function tasksSnapshot(scope = {}) {
     tasks,
     warnings,
     errors,
+    /* 面板要能告诉人"我在盯什么" —— 空列表时,"一个目标都没有"和
+       "盯着 3 个但都没动静"是完全不同的两件事。 */
+    watching: [...bgState.entries()]
+      .filter(([hostId]) => !scope.hostId || hostId === scope.hostId)
+      .reduce((n, [, st]) => n + (st.watchCount || 0), 0),
     running: tasks.filter((t) => t.state === 'running').length,
     stalled: tasks.filter((t) => t.state === 'stalled').length,
     failed: tasks.filter((t) => t.state === 'failed').length

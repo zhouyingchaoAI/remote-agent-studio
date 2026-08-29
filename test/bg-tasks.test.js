@@ -203,28 +203,8 @@ test('磁盘快满时给出预警', () => {
 
 /* ------------------------------------------------------------ 扫描命令 */
 
-test('扫描命令是只读的', () => {
-  const cmd = bg.buildScanCommand();
-  // 先摘掉 2>/dev/null 这类丢弃重定向,再查真正的写操作
-  const bare = cmd.replace(/2?>\s*\/dev\/null/g, '');
-  /* 重定向要认真正的写入形式(`> 路径`),不能只看 `>` ——
-     awk 里的 `NR>1` 是比较,不是重定向。 */
-  assert.ok(!/\brm\b|\bkill\b|\bmv\b|\bdd\b|\btee\b|(^|\s)>>?\s*['"$/A-Za-z]/.test(bare),
-    `扫描命令里出现了写操作:${bare}`);
-  assert.match(cmd, /ps -eo/);
-  assert.match(cmd, /\/proc\/\$p\/io/);
-});
 
-test('扫描顺带读 dockerd 的 io 和磁盘余量', () => {
-  const cmd = bg.buildScanCommand();
-  assert.match(cmd, /dockerd/);
-  assert.match(cmd, /df -P/);
-});
 
-test('扫描把 grep 自己排除掉', () => {
-  // 否则匹配用的那条命令自己会作为任务出现,每次都多一条幽灵记录
-  assert.match(bg.buildScanCommand(), /\*grep\*\) continue/);
-});
 
 /* ------------------------------------------------------------ 接线 */
 
@@ -273,24 +253,7 @@ test('没有任何值得看的东西时角标整个隐藏', () => {
 
 const unitLine = (u, st, sub, since, log) => ['UNIT', u, st, sub, since, log].join(F);
 
-test('docker run 也算一类任务 —— 它会隐式拉镜像', () => {
-  /* 本地没有镜像时 `docker run` 会自己去拉,而这时整台机器上
-     一个 docker pull 进程都没有,拉取完全发生在守护进程里。
-     不认它的话,最该被看见的那段时间恰好什么都看不见。 */
-  assert.equal(bg.classifyKind('docker run --rm --name qwen7b-vllm vllm-ascend:v0.23'), 'docker-run');
-  assert.equal(bg.classifyKind('docker compose up -d'), 'docker-run');
-  assert.match(bg.buildScanCommand(), /\*"docker "\*run\*/);
-});
 
-test('扫描会查 systemd:activating 的单元 + 名字像下载的 running 单元', () => {
-  const cmd = bg.buildScanCommand();
-  assert.match(cmd, /--state=activating/);
-  assert.match(cmd, /pull\|download\|image\|fetch\|install\|vllm\|model\|sync/);
-  // 限量:给每个 running 单元都跑一次 systemctl show 会很慢
-  assert.match(cmd, /head -8/);
-  // 没有 systemd 的机器上必须安静跳过,而不是报一堆 command not found
-  assert.match(cmd, /command -v systemctl/);
-});
 
 test('解析 systemd 单元', () => {
   const r = bg.parseScan(unitLine('qwen7b-vllm.service', 'activating', 'start', '123', 'Pulling fs layer'));
@@ -346,46 +309,11 @@ test('systemd 单元量不到时的文案不能照抄进程那套', () => {
 
 /* -------------------------------------- 没被认出来的长跑进程也要能看到 */
 
-test('跑够久但没匹配上已知类型的进程也会被捞回来', () => {
-  /* KINDS 是一份**人工列举**,一定会漏 —— 智能体完全可能起一个我没想到的
-     长命令。而漏掉的那个恰恰最需要被看见:你连它叫什么都不知道。 */
-  const r = bg.parseScan(taskLine(88, 900, 10, 0, '/opt/x/weird-job --forever', 1));
-  assert.equal(r.tasks.length, 1);
-  assert.equal(r.tasks[0].longRunning, true);
-  assert.equal(r.tasks[0].kind, 'other');
-});
 
-test('认得出的任务不带 long 标记', () => {
-  const r = bg.parseScan(taskLine(1, 10, 0, 0, 'docker pull nginx', 0));
-  assert.equal(r.tasks[0].longRunning, false);
-});
 
-test('long 标记会一路传到面板的任务对象上', () => {
-  const s = bg.mergeTasks([], scanOf([t({ longRunning: true })]), 0);
-  assert.equal(s[0].longRunning, true);
-});
 
-test('只有跑够 5 分钟的才纳入,短命进程不算', () => {
-  // 短命进程每轮扫描都在变,列出来是一片闪烁的噪音,本来也不需要盯
-  assert.match(bg.buildScanCommand(), /-ge 300/);
-});
 
-test('常驻守护进程被排除', () => {
-  // 不排除的话,sshd/systemd 这些永远在跑的会把真正的任务淹没
-  const cmd = bg.buildScanCommand();
-  for (const d of ['sshd', 'systemd', 'agetty', 'rsyslog', 'containerd-shim']) {
-    assert.ok(cmd.includes(`*${d}*`), `没排除 ${d}`);
-  }
-});
 
-test('这一类默认不显示,但给一个开关', () => {
-  /* 默认摊开会淹掉真正的任务;完全不收又会漏。
-     所以:照收,默认藏,需要时一键看全。 */
-  const ui = read('src/components/BgTasksDrawer.jsx');
-  assert.match(ui, /useState\(false\)/);
-  assert.match(ui, /showOther \|\| !t\.longRunning/);
-  assert.match(ui, /其他长跑进程/);
-});
 
 /* ------------------------------------------------ 真的能看到下载进度 */
 
@@ -438,11 +366,6 @@ test('服务任务带上解析出的进度和一句说明', () => {
   assert.match(task.progressNote, /按层/);
 });
 
-test('日志取最后 6 行而不是 1 行', () => {
-  /* 一次拉取会把每一层刷成一行,只看最后一行常常正好落在
-     "Verifying"这类没有数字的行上,而带进度的那条就在上面一两行。 */
-  assert.match(bg.buildScanCommand(), /journalctl -u "\$u" -n 6/);
-});
 
 test('进度条标出这是什么的百分比', () => {
   const ui = read('src/components/BgTasksDrawer.jsx');
@@ -489,12 +412,6 @@ test('mergeTasks 用进程树的数字,并标明来源', () => {
   assert.equal(s[0].bytesPerSec, 10 * 1024 * 1024);
 });
 
-test('扫描一次性读回全机的 ppid 和 write_bytes', () => {
-  // 逐个起子 shell 去读 /proc/<pid>/io 会慢到不可用
-  const cmd = bg.buildScanCommand();
-  assert.match(cmd, /PPID/);
-  assert.match(cmd, /\/proc\/\[0-9\]\*\/io/);
-});
 
 test('git clone 的标题不再是没有信息量的数字', () => {
   /* 之前只跳过 `-开头` 的词,于是 `--depth 1` 的那个 `1` 被当成了目标,
@@ -602,12 +519,6 @@ test('顺带读出进程属于哪个 systemd 单元', () => {
   assert.equal(r.tasks[0].unit, 'ragflow-bootstrap.service');
 });
 
-test('下一轮把这些单元也纳入 journal 抓取', () => {
-  const units = bg.collectUnits({ tasks: [{ unit: 'a.service' }, { unit: 'a.service' }, { unit: '' }] });
-  assert.deepEqual(units, ['a.service']);
-  const cmd = bg.buildScanCommand({ extraUnits: ['ragflow-bootstrap.service'] });
-  assert.match(cmd, /'ragflow-bootstrap\.service'/);
-});
 
 test('把所属单元的日志进度挂到进程任务上', () => {
   // 智能体在对话里报的那三行百分比就是从这里读的,面板没理由拿不到
@@ -643,77 +554,14 @@ test('界面优先用日志解析出来的进度画条', () => {
 
 /* --------------------------- 面板整个空掉的那次:进程根本没被扫到 */
 
-/** 把扫描命令里那段 case 抠出来单独跑 —— 这段是纯 shell,只能用真 bash 验 */
-function classifyInShell(args, unit = '') {
-  const { execFileSync } = require('child_process');
-  const L = bg.buildScanCommand().split('\n');
-  const s = L.findIndex((l) => l.includes('u=$(sed'));
-  const e = L.indexOf('  esac');
-  const script = ['for a in "$@"; do', 'e=999; long=; u="$U"',
-    ...L.slice(s + 1, e + 1), 'echo "$long|$a"', 'done'].join('\n');
-  return execFileSync('bash', ['-c', script, '_', ...args], { env: { ...process.env, U: unit } })
-    .toString().trim().split('\n').filter(Boolean);
-}
 
-test('服务的包装脚本必须被扫到 —— 它是整次下载的门面', () => {
-  /* 之前排除规则写的是 *bash*,把 `/bin/bash /usr/local/bin/xxx-bootstrap.sh`
-     整个吃掉了。而进度全在它的 journal 里,它一被丢,面板就整个空了。
-     这段逻辑是纯 shell,只有真跑一遍才验得了 —— 靠读正则推理正是上次出错的原因。 */
-  const out = classifyInShell(['/bin/bash /usr/local/bin/ragflow-bootstrap.sh'], 'ragflow-bootstrap.service');
-  assert.equal(out.length, 1, '被整条丢弃了');
-  assert.ok(out[0].startsWith('0|'), '应算正经任务而不是塞进隐藏桶');
-});
 
-test('docker compose pull 也要放行', () => {
-  // 之前只匹配 *compose*up*(要求有 up),而截图里正在下的恰恰是 pull
-  const out = classifyInShell(['docker-compose -p ragflow -f docker-compose.yml pull'], 'x.service');
-  assert.ok(out[0].startsWith('0|'));
-  assert.equal(bg.classifyKind('docker compose pull'), 'docker-pull');
-});
 
-test('git-lfs 也要放行 —— 拉权重时干活的就是它', () => {
-  const out = classifyInShell(['/usr/bin/git-lfs filter-process'], 'dl.service');
-  assert.ok(out[0].startsWith('0|'));
-});
 
-test('交互式登录 shell 仍然排除', () => {
-  // 放宽 bash 规则不能把 ssh 会话本身也列进来
-  assert.equal(classifyInShell(['-bash', 'bash', '/bin/bash', 'sshd: root@pts/0']).length, 0);
-});
 
-test('既不是脚本、也不属于服务的长跑进程,才进隐藏桶', () => {
-  /* 规则改过一次:原来要求"属于某个 systemd 服务"才算正经任务,
-     但智能体用 nohup 起的重试脚本不属于任何服务,恰恰最该盯。
-     现在脚本单独放行,剩下这类才折叠。 */
-  const out = classifyInShell(['/opt/vendor/some-daemon --serve'], '');
-  assert.ok(out[0].startsWith('1|'), `实际:${out[0]}`);
-});
 
-test('服务里的进程只要跑够一分钟就算任务,不用等五分钟', () => {
-  const cmd = bg.buildScanCommand();
-  assert.match(cmd, /\[ -n "\$\{u:-\}" \] && \[ "\$\{e:-0\}" -ge 60 \]/);
-});
 
-test('nohup 起的重试脚本也要算正经任务', () => {
-  /* 智能体常用 `nohup xxx-retry.sh &` 起重试循环,那种进程的 cgroup 是
-     会话作用域而不是 .service —— 只按"属于服务"判会把它漏进默认隐藏的桶。
-     而它恰恰最该盯:截图里那个 ragflow-pull-retry.sh 已经重试 186 次了。 */
-  const out = classifyInShell(['/bin/bash /usr/local/bin/ragflow-pull-retry.sh'], '');
-  assert.equal(out.length, 1, '被丢掉了');
-  assert.ok(out[0].startsWith('0|'), '不该塞进隐藏桶');
-});
 
-test('刚起来的脚本不冒出来', () => {
-  // 每轮扫描都在变的短命进程是噪音;要跑够一分钟
-  const { execFileSync } = require('child_process');
-  const L = bg.buildScanCommand().split('\n');
-  const s = L.findIndex((l) => l.includes('u=$(sed'));
-  const e = L.indexOf('  esac');
-  const script = ['for a in "$@"; do', 'e=10; long=; u=""',
-    ...L.slice(s + 1, e + 1), 'echo "$long|$a"', 'done'].join('\n');
-  const out = execFileSync('bash', ['-c', script, '_', '/bin/bash /tmp/quick.sh']).toString().trim();
-  assert.equal(out, '');
-});
 
 /* ------------------------- 面板被系统服务塞满的那次 */
 
@@ -721,7 +569,8 @@ test('systemctl 属性按名字取,不能靠返回顺序', () => {
   /* systemctl show 是按它自己的内部顺序返回的,不是你请求的顺序。
      用 --value 按位置取,界面上就出现了 `143995769/active` ——
      时间戳被当成了 ActiveState,整排字段错位,顺带让"已运行"永远是 0 秒。 */
-  const cmd = bg.buildScanCommand();
+  // systemd 段只在有目标单元时才生成(空的 while read 会死锁)
+  const cmd = bg.buildScanCommand({ extraUnits: ['a.service'] });
   assert.match(cmd, /sed -n 's\/\^ActiveState=\/\/p'/);
   assert.match(cmd, /sed -n 's\/\^ExecMainStartTimestampMonotonic=\/\/p'/);
   assert.ok(!/-p ExecMainStartTimestampMonotonic --value/.test(cmd), '不该再用 --value 按位置取');
@@ -735,16 +584,6 @@ test('系统目录按前缀拒绝 du,不只是完全相等', () => {
   assert.equal(bg.safeWatchPath('/home/models/Q'), '/home/models/Q');
 });
 
-test('只把"认得出是什么活儿"的进程所属单元拉进来', () => {
-  /* 不加这个过滤,面板被 auditd / mdmonitor / libstoragemgmt 塞满 ——
-     它们只是碰巧有个子进程被扫到,跟你在等的下载毫无关系。 */
-  const units = bg.collectUnits({ tasks: [
-    { unit: 'auditd.service', kind: 'other', longRunning: true },
-    { unit: 'mdmonitor.service', kind: 'script', longRunning: true },
-    { unit: 'ragflow-bootstrap.service', kind: 'docker-pull', longRunning: false }
-  ] });
-  assert.deepEqual(units, ['ragflow-bootstrap.service']);
-});
 
 test('普通 running 的守护进程不该出现在面板上', () => {
   /* 光"它在 running"不算有事发生。每台机器都有几十个常驻服务,

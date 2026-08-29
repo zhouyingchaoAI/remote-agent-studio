@@ -381,7 +381,8 @@ test('扫描里的慢环节各自限时', () => {
   /* du 和 journalctl 都可能很慢,而它们只是锦上添花 ——
      不该把整轮扫描拖到超时,导致连"有哪些任务"都显示不出来。 */
   const bg = require('../electron/bgTasks');
-  const cmd = bg.buildScanCommand({ watchPaths: ['/tmp'] });
+  // journalctl 在 systemd 段里,只有传了目标单元才生成
+  const cmd = bg.buildScanCommand({ watchPaths: ['/tmp'], extraUnits: ['a.service'] });
   assert.match(cmd, /timeout 4 du -sb/);
   assert.match(cmd, /timeout 3 journalctl/);
 });

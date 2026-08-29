@@ -81,73 +81,25 @@ const FIELD = '\x1f';
  * 客户端进程几乎不写盘。只看客户端会得出"一直 0 B/s"的结论,
  * 从而把一个正常的拉取误报成卡住 —— 这正是最要避免的错误。
  */
-function buildScanCommand({ watchPaths = [], extraUnits = [] } = {}) {
+function buildScanCommand({ watchPaths = [], extraUnits = [], tokens = [] } = {}) {
   const pattern = KINDS.map((k) => k.id).join('|');   // 仅用于注释,真正的匹配在下面
   return [
     `# kinds: ${pattern}`,
     'LC_ALL=C ps -eo pid=,ppid=,etimes=,args= 2>/dev/null | while read -r p pp e a; do',
-    /* 先取"它属于哪个 systemd 单元"—— cgroup 路径里就写着。
-       这一步必须在分类之前:一个进程**属于某个服务**本身就说明它是后台任务,
-       下面的兜底分支要靠它判断。 */
-    `  u=$(sed -n 's/.*\\/\\([A-Za-z0-9@._-]*\\.service\\).*/\\1/p' /proc/$p/cgroup 2>/dev/null | head -1)`,
+    /* **只认对话里点过名的那些**(tokens = 脚本名/镜像名/compose 项目名,
+       units = 服务名)。没有 tokens 就一个进程都不列 ——
+       宁可空着,也不要再回到"满屏 auditd、真正在下的看不见"那个状态。 */
     '  case "$a" in',
-    '    *grep*) continue ;;',
-    '    *"docker "*pull*|*"docker "*load*|*ollama*pull*|*huggingface-cli*download*'
-      + '|*modelscope*download*|*"git "*clone*|*pip*install*|*npm*install*|*pnpm*install*'
-      + '|*yarn*add*|*apt-get*install*|*apt*install*|*yum*install*|*dnf*install*'
-      + '|*rsync*|*scp*|*wget*|*curl*-O*|*curl*-o*'
-      + '|*"docker "*build*|*make*|*cmake*|*ninja*|*cargo*build*|*"go "*build*'
-      + '|*mvn*|*gradle*|*torchrun*|*deepspeed*|*accelerate*launch*'
-      + '|*"docker "*run*|*"docker "*create*|*docker-compose*up*|*"docker "*compose*up*'
-      /* compose 的 pull 之前完全没放行:`docker-compose ... pull` 只匹配到
-         *compose*up*(要求有 up),于是掉进"其他长跑进程"那个默认隐藏的桶里。
-         而截图里正在下的就是它。 */
-      + '|*docker-compose*pull*|*"docker "*compose*pull*|*git-lfs*|*lfs*smudge*) long=0 ;;',
-    /* 没匹配上的:只要跑够久,也留一条(打 LONG 标记,界面默认不显示)。
-       KINDS 是一份**人工列举**,一定会漏 —— 智能体完全可能起一个我没想到的
-       长命令。漏掉的那个恰恰最需要被看见,因为你连它叫什么都不知道。
-       但默认全列会被 sshd/agetty 这类常驻守护进程淹没,所以做成开关。 */
-    '    *) case "$a" in',
-    /* 常驻守护进程排除掉:它们永远在跑,列出来只会把真正的任务淹没。
-       模式里不放引号和反斜杠 —— case 的 glob 里它们的转义规则很绕,
-       写错了不会报错,只会静默地不匹配。 */
-    /* 只排交互式登录 shell,**不能排所有 bash**。
-       之前写的是 *bash*,结果把 `/bin/bash /usr/local/bin/xxx-bootstrap.sh`
-       也吃掉了 —— 而那个包装脚本正是拥有整个下载的进程,
-       它一被丢掉,整个任务就从面板上消失了(截图里面板全空就是这么来的)。 */
-    '         -bash|-sh|-zsh|bash|sh|zsh|/bin/bash|/bin/sh|/usr/bin/bash|/usr/bin/zsh) continue ;;',
-    '         *sshd*|*systemd*|*agetty*|*crond*|*cron*|*rsyslog*|*dbus*|*polkit*'
-      + '|*NetworkManager*|*containerd-shim*|*docker-proxy*|*chronyd*|*ntpd*'
-      + '|*auditd*|*irqbalance*|*udev*|*"login "*) continue ;;',
-    '       esac',
-    /* 兜底分支的三档,按"这东西多像一个后台作业"从强到弱:
-     *
-     * 1. **shell 脚本跑够一分钟** —— 不管归不归某个服务。智能体很爱用
-     *    `nohup xxx-retry.sh &` 起重试循环,那种进程的 cgroup 是会话作用域
-     *    而不是 .service,只按"属于服务"判会把它漏进隐藏桶。
-     *    而它恰恰最该盯:截图里那个 ragflow-pull-retry.sh 已经重试 186 次了。
-     * 2. **属于某个 systemd 服务且跑够一分钟** —— "属于一个服务"就是
-     *    "有人特意让它在后台跑"的证据。
-     * 3. 其余的按"跑够 5 分钟"收进默认隐藏的桶。短命进程每轮扫描都在变,
-     *    列出来是一片闪烁的噪音。
-     *
-     * glob 里的空格必须加引号(`*".sh "*`),不加会被 case 当成语法错误。
-     */
-    '       isjob=0',
-    '       case "$a" in',
-    '         *.sh|*".sh "*|*"bash -c"*|*"sh -c"*) isjob=1 ;;',
-    '       esac',
-    '       if [ "$isjob" = 1 ] && [ "${e:-0}" -ge 60 ] 2>/dev/null; then long=0;',
-    '       elif [ -n "${u:-}" ] && [ "${e:-0}" -ge 60 ] 2>/dev/null; then long=0;',
-    '       else [ "${e:-0}" -ge 300 ] 2>/dev/null || continue; long=1; fi ;;',
+    ...(tokens.length
+      ? [`    ${tokens.map((t) => `*${shellQuote(t)}*`).join('|')}) long=0 ;;`]
+      : []),
+    '    *) continue ;;',
     '  esac',
+    /* 它属于哪个 systemd 单元 —— 用来把进程和它的服务日志对上 */
+    `  u=$(sed -n 's/.*\\/\\([A-Za-z0-9@._-]*\\.service\\).*/\\1/p' /proc/$p/cgroup 2>/dev/null | head -1)`,
     `  w=$(awk '/^write_bytes:/{print $2}' /proc/$p/io 2>/dev/null || echo -1)`,
     `  r=$(awk '/^rchar:/{print $2}' /proc/$p/io 2>/dev/null || echo -1)`,
-    /* 这个进程属于哪个 systemd 单元 —— cgroup 路径里就写着。
-       靠它才能把进程和"它的服务日志"对上:截图里那条 docker compose pull
-       的分层进度只存在于 ragflow-bootstrap.service 的 journal 里,
-       而那个单元名不含 pull/download,按名字过滤根本扫不到。 */
-    `  printf 'TASK%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\\n' "\x1f" "$p" "\x1f" "\${pp:-0}" "\x1f" "$e" "\x1f" "\${w:--1}" "\x1f" "\${r:--1}" "\x1f" "\${long:-0}" "\x1f" "\${u:-}" "\x1f$a"`,
+    `  printf 'TASK%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\\n' "\x1f" "$p" "\x1f" "\${pp:-0}" "\x1f" "$e" "\x1f" "\${w:--1}" "\x1f" "\${r:--1}" "\x1f" "0" "\x1f" "\${u:-}" "\x1f$a"`,
     'done',
     /* 全机进程的父子关系 + 写入量,各来一遍。
      *
@@ -179,41 +131,41 @@ function buildScanCommand({ watchPaths = [], extraUnits = [] } = {}) {
      * 只看 activating 的 + 名字像下载/镜像的 running 单元,并限量 —— 
      * 给每个 running 单元都跑一次 systemctl show 会很慢。
      */
-    'if command -v systemctl >/dev/null 2>&1; then',
-    '  { systemctl list-units --type=service --state=activating --no-legend --plain 2>/dev/null;',
-    '    systemctl list-units --type=service --state=running --no-legend --plain 2>/dev/null'
-      + " | grep -Ei 'pull|download|image|fetch|install|vllm|model|sync';"
-      /* 再加上"正在跑下载任务的那些进程所属的单元"。
-         名字过滤一定会漏 —— 截图里的 ragflow-bootstrap.service 不含任何
-         下载相关的词,可它的 journal 里正是那份分层进度。 */
-      + extraUnits.map((u) => ` printf '%s\\n' ${shellQuote(u)};`).join('')
-      + " }"
-      // 管道必须留在上一行末尾:`}` 换行再 `| awk` 在 sh 里是语法错误
-      + " | awk '{print $1}' | sort -u | head -8 | while read -r u; do",
-    '    [ -n "$u" ] || continue',
-    /* 一次 systemctl show 取三个属性(跑三次太慢:8 个单元 × 3 = 24 次进程启动)。
-       **但绝不能用 --value 按位置取** —— systemctl 是按它自己的内部顺序返回的,
-       不是你请求的顺序。界面上出现过 `143995769/active` 这种东西,
-       就是把时间戳当成了 ActiveState:字段整体错位了。
-       所以保留 KEY=VALUE 形式,按名字各取各的。 */
-    '    v=$(systemctl show "$u" -p ActiveState -p SubState'
-      + ' -p ExecMainStartTimestampMonotonic 2>/dev/null)',
-    `    st=$(printf '%s\\n' "$v" | sed -n 's/^ActiveState=//p' | head -1)`,
-    `    sub=$(printf '%s\\n' "$v" | sed -n 's/^SubState=//p' | head -1)`,
-    `    since=$(printf '%s\\n' "$v" | sed -n 's/^ExecMainStartTimestampMonotonic=//p' | head -1)`,
-    '    st=${st:-?}; sub=${sub:-?}; since=${since:-0}',
-    /* 最后一行日志:服务在拉镜像时,进度和报错**都只在这里**。
-       没有它,面板只能说"在启动中",等于没说。
-       顺手删掉日志里的分隔符,否则里面正好出现一个就会把字段切错位。 */
-    /* 取最后 6 行而不是 1 行:一次拉取会把每一层刷成一行,
-       只看最后一行常常正好落在"Verifying"这类没有数字的行上,
-       而带 `1.2GB/4.5GB` 的那条就在它上面一两行。合成一行传回来。 */
-    '    last=$(timeout 3 journalctl -u "$u" -n 6 --no-pager -o cat 2>/dev/null'
-      + " | tr -d '\\037' | tr '\\n' '|' | tail -c 400)",
-    "    printf 'UNIT\\037%s\\037%s\\037%s\\037%s\\037%s\\n'"
-      + ' "$u" "$st" "$sub" "$since" "$last"',
-    '  done',
-    'fi',
+    /* **没有目标单元时整段都不生成。**
+       曾经在这里留了个 `while read -r u; do :` 作为空分支 ——
+       没有管道输入的 `while read` 会去读 stdin 然后永远挂住,
+       整轮扫描直接死锁。空分支比缺分支危险得多。 */
+    ...(extraUnits.length ? [
+      'if command -v systemctl >/dev/null 2>&1; then',
+      /* 单元也只看对话点过名的。原来还按名字 grep(pull|download|image|…),
+         既漏(ragflow-bootstrap 一个词都不含)又滥(把系统服务捞进来)。 */
+      `  { ${extraUnits.map((u) => `printf '%s\\n' ${shellQuote(u)};`).join(' ')} }`
+        + ' | sort -u | head -8 | while read -r u; do',
+      '    [ -n "$u" ] || continue',
+      /* 一次 systemctl show 取三个属性(跑三次太慢:8 个单元 × 3 = 24 次进程启动)。
+         **但绝不能用 --value 按位置取** —— systemctl 是按它自己的内部顺序返回的,
+         不是你请求的顺序。界面上出现过 `143995769/active` 这种东西,
+         就是把时间戳当成了 ActiveState:字段整体错位了。
+         所以保留 KEY=VALUE 形式,按名字各取各的。 */
+      '    v=$(systemctl show "$u" -p ActiveState -p SubState'
+        + ' -p ExecMainStartTimestampMonotonic 2>/dev/null)',
+      `    st=$(printf '%s\\n' "$v" | sed -n 's/^ActiveState=//p' | head -1)`,
+      `    sub=$(printf '%s\\n' "$v" | sed -n 's/^SubState=//p' | head -1)`,
+      `    since=$(printf '%s\\n' "$v" | sed -n 's/^ExecMainStartTimestampMonotonic=//p' | head -1)`,
+      '    st=${st:-?}; sub=${sub:-?}; since=${since:-0}',
+      /* 最后一行日志:服务在拉镜像时,进度和报错**都只在这里**。
+         没有它,面板只能说"在启动中",等于没说。
+         顺手删掉日志里的分隔符,否则里面正好出现一个就会把字段切错位。 */
+      /* 取最后 6 行而不是 1 行:一次拉取会把每一层刷成一行,
+         只看最后一行常常正好落在"Verifying"这类没有数字的行上,
+         而带 `1.2GB/4.5GB` 的那条就在它上面一两行。合成一行传回来。 */
+      '    last=$(timeout 3 journalctl -u "$u" -n 6 --no-pager -o cat 2>/dev/null'
+        + " | tr -d '\\037' | tr '\\n' '|' | tail -c 400)",
+      "    printf 'UNIT\\037%s\\037%s\\037%s\\037%s\\037%s\\n'"
+        + ' "$u" "$st" "$sub" "$since" "$last"',
+      '  done',
+      'fi',
+    ] : []),
     /* 系统运行时长。systemd 给的是**单调时钟**的时间戳(开机以来的微秒数),
        不减去它就没法换算成"这个单元跑了多久" —— 界面上会一直显示「已运行 0 秒」,
        而那个服务其实已经下了半小时。 */

@@ -280,9 +280,14 @@ export default function BgTasksDrawer({ open, onClose, hostName, hostId = '', co
 
           {tasks.length === 0 && (
             <p className="muted small pad center">
-              这台主机上没有正在跑的后台任务。
+              {snap.watching
+                ? `正在盯 ${snap.watching} 个目标,暂时都没有动静。`
+                : '还没有可监控的目标。'}
               <br />
-              勾选「显示全部」可以查看刚跑完的、以及其他主机上的。
+              监控范围来自**对话里智能体实际执行的命令** —— 它起过哪个服务、
+              跑过哪个脚本、下到哪个目录,才会出现在这里。
+              <br />
+              (这样做是为了不把整台机器的进程都摊开:那样该看的会被淹没。)
               <br />
               <button className="btn tiny ghost" style={{ marginTop: 10 }}
                 onClick={runDiagnose} disabled={diag === 'loading'}>
