@@ -2,6 +2,7 @@ import React, { useEffect, useImperativeHandle, useRef, useState, forwardRef } f
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { fitExact } from '../termFit.js';
 
 /**
  * 嵌入式本机终端 —— 给引导流程用(安装 OpenClaw、微信扫码登录等)。
@@ -50,7 +51,7 @@ const SetupTerminal = forwardRef(function SetupTerminal({ termId, fontSize = 12,
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(boxRef.current);
-    fit.fit();
+    fitExact(term, fit, boxRef.current);
     termRef.current = term;
     fitRef.current = fit;
 
@@ -78,7 +79,8 @@ const SetupTerminal = forwardRef(function SetupTerminal({ termId, fontSize = 12,
 
     const disp = term.onData((d) => window.api.term.write({ hostId: 'local', termId, data: d }).catch(() => {}));
     const onResize = () => {
-      fit.fit();
+      // 和主终端同一套:fit 之后实测渲染高度,超出容器就减一行
+      fitExact(term, fit, boxRef.current);
       window.api.term.resize({ hostId: 'local', termId, cols: term.cols, rows: term.rows }).catch(() => {});
     };
     window.addEventListener('resize', onResize);
@@ -98,7 +100,7 @@ const SetupTerminal = forwardRef(function SetupTerminal({ termId, fontSize = 12,
   useEffect(() => {
     if (!termRef.current) return;
     termRef.current.options.fontSize = fontSize;
-    fitRef.current?.fit();
+    fitExact(termRef.current, fitRef.current, boxRef.current);
     window.api.term.resize({
       hostId: 'local', termId,
       cols: termRef.current.cols, rows: termRef.current.rows

@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import AskShell from './AskShell.jsx';
 import { useStore, onThemeChange, themeVar } from '../store.js';
+import { fitExact } from '../termFit.js';
 
 /**
  * 终端配色跟随皮肤。
@@ -106,7 +107,7 @@ function TermView({ hostId, termId, active }) {
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(boxRef.current);
-    fit.fit();
+    fitExact(term, fit, boxRef.current);
     termRef.current = term;
     fitRef.current = fit;
 
@@ -177,7 +178,9 @@ function TermView({ hostId, termId, active }) {
          无条件滚会把正在翻历史的人一把拽到最后 —— 而调整窗口大小
          恰恰是翻历史时最常做的事(想看清一点)。 */
       const atBottom = isAtBottom(term);
-      fit.fit();
+      /* fitExact:fit() 之后**实测**渲染高度,超出容器就减一行。
+         上次靠加底部内边距去凑,是在猜差多少,所以没修好。 */
+      fitExact(term, fit, boxRef.current);
       if (atBottom) term.scrollToBottom();
       window.api.term.resize({ hostId, termId, cols: term.cols, rows: term.rows }).catch(() => {});
     };
@@ -203,7 +206,7 @@ function TermView({ hostId, termId, active }) {
       const term = termRef.current;
       const fit = fitRef.current;
       if (!term || !fit) return;
-      fit.fit();
+      fitExact(term, fit, boxRef.current);
       // 标签页隐藏时高度为 0,重新显示后必须滚到底,否则停在旧位置、看不到当前提示符
       term.scrollToBottom();
       window.api.term.resize({ hostId, termId, cols: term.cols, rows: term.rows }).catch(() => {});
@@ -247,7 +250,7 @@ function TermView({ hostId, termId, active }) {
     term.reset();
     term.write('\x1b[36m正在重连终端并加载最新代理/环境...\x1b[0m\r\n');
     window.api.term.reconnect({ hostId, termId, cols: term.cols, rows: term.rows })
-      .then(() => fit && fit.fit())
+      .then(() => fitExact(term, fit, boxRef.current))
       .catch((e) => term.write(`\x1b[31m${e.message}\x1b[0m\r\n`));
   };
 

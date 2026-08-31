@@ -305,7 +305,14 @@ progress { width: 140px; height: 6px; }
    那一行就被吃掉一半,而它恰恰是当前提示符,最需要看清的一行。
    FitAddon 按父元素的内容高度算行数,所以这里的 padding 会被正确扣掉,
    加大它只会少一行、不会造成裁切。 */
-.terminal-box { flex: 1; min-height: 0; background: var(--bg); padding: 6px 6px 14px; }
+/* 底部留白现在**只是视觉留白**,不再承担"别让最后一行溢出"的职责 ——
+   那件事交给 termFit.js 的实测校准。以前靠加内边距去凑,是在猜差多少。
+   overflow: hidden 是最后一道保险:万一还有溢出,宁可整行不显示,
+   也不要露出被横切一半的半行 —— 半行会让人以为终端花了。 */
+.terminal-box {
+  flex: 1; min-height: 0; overflow: hidden;
+  background: var(--bg); padding: 6px 6px 10px;
+}
 .terminal-context-menu {
   position: absolute; z-index: 50; display: grid; min-width: 120px; padding: 4px;
   border: 1px solid var(--border); border-radius: 6px; background: var(--bg2);
@@ -635,7 +642,7 @@ progress { width: 140px; height: 6px; }
 /* 扫码时给足高度:二维码约 40 行,放大后需要更大画布 */
 .term-host.zoom { height: 620px; }
 .setup-term { height: 100%; display: flex; flex-direction: column; }
-.setup-term-box { flex: 1; min-height: 0; padding: 6px; }
+.setup-term-box { flex: 1; min-height: 0; overflow: hidden; padding: 6px; }
 
 /* ---------------- 代码块与图片:可复制 ---------------- */
 .btn.tiny { padding: 1px 7px; font-size: 11px; line-height: 1.7; }
