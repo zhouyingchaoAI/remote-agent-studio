@@ -6,6 +6,7 @@ import { buildPromptHistory, stepPromptHistory } from '../promptHistory.js';
 import { extractOptions } from '../quickReplies.js';
 import { matchCommands, applyCompletion, parseSlash, parseGoalArgs, helpText } from '../slashCommands.js';
 import { buildDecomposePrompt, defaultPlanPath } from '../planProgress.js';
+import { toAttachment, attachmentProblem } from '../attachmentFile.js';
 import {
   createGoal, buildContinuePrompt, resumeGoalPatch, setGoalMaxRounds, setGoalTokenBudget,
   fmtTokens, GOAL_DEFAULT_MAX_ROUNDS, GOAL_EXTEND_ROUNDS, GOAL_DEFAULT_TOKEN_BUDGET
@@ -665,6 +666,15 @@ function ChatView({ hostId, conv, split = false }) {
     historyRef.current.draft = '';
     if (textOverride == null) setInput('');
     const files = textOverride == null ? pendingFiles : [];
+    /* 附件信息不全就**别发**,而且别清空输入框。
+       让它发出去的话,要到主进程上传时才抛一句「附件信息不完整」——
+       那时候用户既不知道是哪个文件,也不知道为什么,而消息已经没了。 */
+    const broken = files.map((f) => [f, attachmentProblem(f)]).find(([, p]) => p);
+    if (broken) {
+      setAttachmentError(`${broken[0].name || '附件'}:${broken[1]}`);
+      if (textOverride == null) setInput(raw);
+      return;
+    }
     if (textOverride == null) setPendingFiles([]);
     // 正在执行/未初始化 -> 进入排队,本轮结束后自动发送
     if (running || !started) {
@@ -677,14 +687,29 @@ function ChatView({ hostId, conv, split = false }) {
     await sendToAgent(hostId, conv.id, prompt, files);
   };
 
-  const addFiles = (files) => {
+  const addFiles = (rawFiles) => {
     const MAX_MB = 200;   // 与主进程 MAX_ATTACHMENT_BYTES 保持一致
     const limit = MAX_MB * 1024 * 1024;
+    /* **一进来就抄成普通对象,后面不再持有 File 实例。**
+       File 的 name/size 是原型 getter,`{ ...file, thumb }` 展开后会
+       悄无声息地只剩 path —— 附件到了主进程才报「信息不完整」。
+       在入口归一化,后面怎么展开都不会掉东西。 */
+    const files = Array.from(rawFiles || []).map(toAttachment).filter(Boolean);
     const next = files.filter((file) => file.path && file.size <= limit);
     const oversized = files.find((file) => file.size > limit);
-    setAttachmentError(oversized
-      ? `${oversized.name} 超过 ${MAX_MB} MB 上限(实际 ${Math.round(oversized.size / 1024 / 1024)} MB)`
-      : '');
+    /* **拿不到路径的要说出来。**
+       原来这类文件被 `file.path &&` 直接滤掉,一声不吭 —— 从浏览器里
+       拖过来的图片、某些应用给的内存数据都会走到这儿,用户看到的就是
+       "图片拖进去没了"。丢东西可以,但不能不告诉人。 */
+    const noPath = files.find((file) => !file.path);
+    setAttachmentError(
+      oversized
+        ? `${oversized.name} 超过 ${MAX_MB} MB 上限(实际 ${Math.round(oversized.size / 1024 / 1024)} MB)`
+        : noPath
+          ? `${noPath.name || '这个文件'}拿不到磁盘路径,没能加进来 —— `
+            + '它可能是网页里的图片或内存数据,先存成本地文件再拖进来,或直接复制后粘贴。'
+          : ''
+    );
     setPendingFiles((current) => {
       const known = new Set(current.map((file) => file.path));
       return [...current, ...next.filter((file) => !known.has(file.path))];
@@ -933,6 +958,13 @@ function ChatView({ hostId, conv, split = false }) {
               <div className="queue-item" key={q.id}>
                 <span className="chip">⏳ 排队 {i + 1}</span>
                 <span className="queue-text">{q.text.slice(0, 80)}</span>
+                {/* 把附件数显示出来 —— 排队时看不到附件,人根本无从发现它丢了。
+                    这次这个 bug 之所以拖到现在,一半原因就是它不可见。 */}
+                {q.files?.length > 0 && (
+                  <span className="muted small" title={q.files.map((f) => f.name).join('\n')}>
+                    📎 {q.files.length}
+                  </span>
+                )}
                 <button className="icon-btn" title="移出队列"
                   onClick={() => useStore.getState().removeQueued(conv.id, q.id)}>✕</button>
               </div>
