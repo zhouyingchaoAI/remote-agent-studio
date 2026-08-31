@@ -54,7 +54,10 @@ const TABS = [
   { key: 'browser', label: '浏览', icon: '🌐' },
   { key: 'mobile', label: '移动接入', icon: '📱' },
   { key: 'errors', label: '异常日志', icon: '🩺' },
-  { key: 'setup', label: '环境配置', icon: '⚙️' }
+  /* 图标特意不用齿轮:这里配的是**主机上的运行环境**(装引擎、下发密钥),
+     和「设置」(皮肤、字号这些应用自己的偏好)是两回事。
+     两个都用齿轮的话,找皮肤的人一定会先点这个显眼的,然后以为功能不存在。 */
+  { key: 'setup', label: '环境配置', icon: '🧰' }
 ];
 
 export default function App() {
@@ -322,10 +325,20 @@ export default function App() {
     window.addEventListener('error', onWinError);
     window.addEventListener('unhandledrejection', onRejection);
 
+    /* ⌘, / Ctrl+, 打开设置(皮肤在第一项)。
+       这是各家桌面应用的通用位置,找不到入口的人第一反应就是按它。 */
+    const onSettingsKey = (e) => {
+      if (e.key !== ',' || !(e.metaKey || e.ctrlKey)) return;
+      e.preventDefault();
+      useStore.getState().setShowSettings(true);
+    };
+    window.addEventListener('keydown', onSettingsKey);
+
     return () => {
       offStatus(); offLog(); offMsg(); offMobileConv(); 
       window.removeEventListener('error', onWinError);
       window.removeEventListener('unhandledrejection', onRejection);
+      window.removeEventListener('keydown', onSettingsKey);
     };
   }, []);
 

@@ -105,7 +105,11 @@ export default function Sidebar() {
         <button className="btn ghost add-host" onClick={() => setEditingHost({})}>
           + 添加主机
         </button>
-        <button className="icon-btn" title="设置" onClick={() => useStore.getState().setShowSettings(true)}>⚙</button>
+        {/* **带上文字。** 原来是个光秃秃的 ⚙,而顶栏「环境配置」用的也是齿轮 ——
+            找皮肤的人会去点那个显眼的、有文字的,翻不到就以为功能没做。
+            齿轮现在只代表这一个入口。 */}
+        <button className="btn ghost settings-btn" title="设置(⌘,)"
+          onClick={() => useStore.getState().setShowSettings(true)}>⚙ 设置</button>
       </div>
       {preview && (
         <FilePreview hostId={preview.hostId} filePath={preview.path} name={preview.name}

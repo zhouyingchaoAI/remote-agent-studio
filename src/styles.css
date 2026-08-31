@@ -526,6 +526,8 @@ progress { width: 140px; height: 6px; }
 .settings-row select { min-width: 170px; padding: 5px 8px; }
 .sidebar-footer { display: flex; align-items: center; gap: 6px; }
 .sidebar-footer .add-host { flex: 1; }
+/* 设置按钮带文字了,给它固定的呼吸空间,别被「添加主机」挤成一条 */
+.settings-btn { margin: 10px 10px 10px 0; white-space: nowrap; flex: none; }
 .file-preview-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 200; }
 .file-preview { width: min(860px, 92vw); max-height: 86vh; display: flex; flex-direction: column; background: var(--panel, #171a22); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .file-preview-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
