@@ -24,7 +24,12 @@ test('ChatPanel exposes the system-mode toggle, confirmation, badge, restart, an
 test('styles keep system-mode status and permission hints visible and actionable', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8');
 
-  assert.match(source, /\.badge\.system-mode/);
+  /* 「系统权限」原来是徽标 + 复选框两个控件(同一个状态显示两遍,
+     还把顶栏挤到换行),现在合并成一个开关,红色由它自己承担。
+     这里查的仍是同一件事:**开着的时候必须一眼看出来**。 */
+  assert.match(source, /\.chip-toggle\.on\.danger/);
+  const danger = source.slice(source.indexOf('.chip-toggle.on.danger'));
+  assert.match(danger.slice(0, 200), /var\(--red\)/);
   assert.match(source, /\.system-mode-notice/);
   assert.match(source, /\.permission-hint/);
   assert.match(source, /\.permission-hint-action/);

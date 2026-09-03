@@ -202,9 +202,27 @@ input[type="checkbox"], input[type="radio"] { width: auto; }
 .badge.deepseek { color: #93b4ff; }
 .badge.grok { color: #f2a8a8; }
 .badge.warn { color: var(--yellow); border-color: var(--yellow); }
-.badge.system-mode { color: #fecaca; border-color: var(--red); background: rgba(255,92,92,0.12); }
 .permission-switch { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--text); font-size: 12px; white-space: nowrap; cursor: pointer; }
 .permission-switch input { accent-color: var(--red); }
+
+/* 开关式小标签 —— 替掉原来的「复选框 + 文字」。
+   复选框自带的方框和间距在这一行里很占地方,而这一行本来就快装不下了。
+   状态靠底色表达:灭着=关,亮着=开,红的=有风险。 */
+.chip-toggle {
+  display: inline-flex; align-items: center; gap: 4px; flex: none;
+  padding: 3px 10px; border-radius: 999px; cursor: pointer;
+  font-size: 12px; white-space: nowrap;
+  background: transparent; border: 1px solid var(--border); color: var(--muted);
+}
+.chip-toggle:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+.chip-toggle.on {
+  background: rgba(79,140,255,0.14); border-color: var(--accent); color: var(--text);
+}
+/* 系统权限开着 = 能改工作目录之外的东西,这个必须一眼看出来 */
+.chip-toggle.on.danger {
+  background: rgba(255,92,92,0.14); border-color: var(--red); color: #fecaca;
+}
+.chip-toggle:disabled { opacity: 0.5; cursor: default; }
 /* 自适应阅读栏:窄屏铺满,宽屏把内容收进居中的 --chat-column(避免一行横跨整屏难读)。
    左右内边距随窗口自动增长,不需要断点也能平滑适配任意分辨率。 */
 .chat-list {
@@ -335,7 +353,16 @@ progress { width: 140px; height: 6px; }
 }
 .conv-card:hover { border-color: var(--accent); }
 .conv-card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.conv-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 标题也要封顶。它没有上限的话,一个长标题照样能把整行顶到换行 ——
+   这次的问题是路径和标题一起造成的,只修一个还会复发。 */
+.conv-title {
+  font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0; max-width: 22ch;
+}
+/* 把权限类开关推到最右:它们是"这轮怎么跑"的设定,
+   和左边"在哪跑、用什么跑"是两组,分开更好扫。
+   换行时这条会失效,但那正是我们希望的 —— 窄窗口下挤在一起更糟。 */
+.push-right { margin-left: auto; }
 /* 目录:已经在 JS 里按显示宽度缩过,这里只是最后一道封顶 ——
    单段超长路径(没有可省的中间段)只能靠 CSS 截。
    min-width: 0 是关键:不写的话 flex 子元素不肯收缩,
@@ -493,7 +520,6 @@ progress { width: 140px; height: 6px; }
 .grok-add-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
 .grok-custom-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .grok-custom-row { padding: 4px 0; border-top: 1px solid var(--border); }
-.auto-switch input { accent-color: var(--accent, #4c8bf5); }
 /* diff 渲染 */
 .diff-view { margin: 6px 0 0; padding: 8px 0; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; line-height: 1.5; overflow-x: auto; }
 .diff-line { padding: 0 10px; white-space: pre; }

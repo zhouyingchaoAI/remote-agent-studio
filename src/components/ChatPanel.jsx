@@ -915,25 +915,25 @@ function ChatView({ hostId, conv, split = false }) {
             }).catch(() => null);
             if (r?.saved) useStore.getState().pushMessage(conv.id, { role: 'agent', kind: 'raw', text: `已导出到 ${r.path}`, ts: Date.now() });
           }}>⇩</button>
-        {permissionMode === 'system' && <span className="badge system-mode">系统权限</span>}
-        <label className="permission-switch auto-switch"
-          title="全自动:模型请求确认时自动回复「确认,继续」,并提示模型自行决策;连续 5 次后暂停防失控">
-          <input
-            type="checkbox"
-            checked={!!conv.autoConfirm}
-            onChange={(e) => useStore.getState().updateConversationAutoConfirm(conv.id, e.target.checked)}
-          />
-          <span>全自动</span>
-        </label>
-        <label className="permission-switch" title="允许此对话使用 Docker 和主机级命令">
-          <input
-            type="checkbox"
-            checked={permissionMode === 'system'}
-            disabled={running}
-            onChange={(e) => changePermissionMode(e.target.checked ? 'system' : 'workspace')}
-          />
-          <span>System Mode</span>
-        </label>
+        {/* 「系统权限」徽标 + 「System Mode」复选框原来是**同一个状态显示两遍**
+            (都由 permissionMode === 'system' 驱动),白占一大截宽度,
+            也是这一行被挤到换行的直接原因。合成一个开关:开着就是红的,
+            警示作用由它自己承担,不需要旁边再挂个徽标。
+            顺带把 System Mode 改成中文 —— 徽标本来就叫「系统权限」,
+            同一件事在同一行里有两个名字,只会让人以为是两回事。 */}
+        <button type="button"
+          className={`chip-toggle push-right${conv.autoConfirm ? ' on' : ''}`}
+          title="全自动:模型请求确认时自动回复「确认,继续」,并提示模型自行决策;连续 5 次后暂停防失控"
+          onClick={() => useStore.getState().updateConversationAutoConfirm(conv.id, !conv.autoConfirm)}>
+          ⚡ 全自动
+        </button>
+        <button type="button"
+          className={`chip-toggle${permissionMode === 'system' ? ' on danger' : ''}`}
+          disabled={running}
+          title="系统权限:允许此对话使用 Docker 和主机级命令,可修改工作目录之外的文件与服务"
+          onClick={() => changePermissionMode(permissionMode === 'system' ? 'workspace' : 'system')}>
+          {permissionMode === 'system' ? '🔓 系统权限' : '🔒 工作区'}
+        </button>
       </div>
       <TeamBar conv={conv} />
       <GoalBar conv={conv} />
