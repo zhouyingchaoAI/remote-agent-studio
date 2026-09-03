@@ -26,6 +26,7 @@ class SSHManager extends EventEmitter {
     // 通道闸门:主动排队,而不是等 sshd 拒绝再报「Channel open failure」
     this.channels = new ChannelPool();
     this.sftpRelease = null;
+    this.sftpPromise = null;       // 初始化中的 SFTP 会话(并发请求共用)
   }
 
   _setStatus(status, detail) {
@@ -90,6 +91,7 @@ class SSHManager extends EventEmitter {
           const wasConnected = this.status === 'connected';
           this.sftpSession = null;
           this.sftpRelease = null;
+          this.sftpPromise = null;
           this.shells.clear();
           // 通道随连接一起没了:清空占用并让排队者立刻失败,不要挂到超时
           this.channels.reset(new Error('SSH 连接已断开'));
@@ -156,6 +158,7 @@ class SSHManager extends EventEmitter {
     if (!this.sftpSession) return false;
     try { this.sftpSession.end(); } catch (_) {}
     this.sftpSession = null;
+    this.sftpPromise = null;
     // end() 的 close 事件不一定同步到达,这里显式归还名额(release 幂等)
     if (this.sftpRelease) { this.sftpRelease(); this.sftpRelease = null; }
     return true;
@@ -300,17 +303,29 @@ class SSHManager extends EventEmitter {
   /** SFTP 会话(懒加载,同样占一个通道名额) */
   async sftp() {
     if (this.sftpSession) return this.sftpSession;
-    const release = await this.channels.acquire({ label: 'sftp' });
-    return new Promise((resolve, reject) => {
-      if (!this.client) { release(); return reject(new Error('未连接')); }
-      this.client.sftp((err, sftp) => {
-        if (err) { release(); return reject(err); }
-        this.sftpSession = sftp;
-        this.sftpRelease = release;
-        sftp.on('close', () => { this.sftpSession = null; this.sftpRelease = null; release(); });
-        resolve(sftp);
+    // 对话恢复会同时拉取多张图片。首个 sftp() 还在握手时，
+    // 不能让后续调用各开一条 SFTP 通道，否则很快耗尽 MaxSessions。
+    if (this.sftpPromise) return this.sftpPromise;
+    this.sftpPromise = (async () => {
+      const release = await this.channels.acquire({ label: 'sftp' });
+      return new Promise((resolve, reject) => {
+        if (!this.client) { release(); return reject(new Error('未连接')); }
+        this.client.sftp((err, sftp) => {
+          if (err) { release(); return reject(err); }
+          this.sftpSession = sftp;
+          this.sftpRelease = release;
+          sftp.on('close', () => {
+            this.sftpSession = null;
+            this.sftpRelease = null;
+            this.sftpPromise = null;
+            release();
+          });
+          resolve(sftp);
+        });
       });
-    });
+    })();
+    this.sftpPromise.catch(() => { this.sftpPromise = null; });
+    return this.sftpPromise;
   }
 
   /** SFTP realpath(promise 化):解析 ~ / 符号链接 / 相对路径 */

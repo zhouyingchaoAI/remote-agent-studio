@@ -65,3 +65,20 @@ test('non-exhaustion errors propagate immediately without retrying', async () =>
   await assert.rejects(() => mgr.exec('echo hi'), /Permission denied/);
   assert.equal(calls, 1); // 不做无意义重试
 });
+
+test('并发预览图片时只创建一个进行中的 SFTP 会话', async () => {
+  const mgr = new SSHManager({ host: 'h', username: 'u' });
+  let calls = 0;
+  mgr.client = {
+    sftp(cb) {
+      calls += 1;
+      setImmediate(() => cb(null, { on() {} }));
+    }
+  };
+
+  const [first, second] = await Promise.all([mgr.sftp(), mgr.sftp()]);
+
+  assert.equal(calls, 1, '初始化尚未完成时，后续请求应复用同一个 SFTP 创建任务');
+  assert.equal(first, second);
+  assert.equal(mgr.channels.stats().inUse, 1, '只占用一条 SFTP SSH 通道');
+});

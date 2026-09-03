@@ -7,6 +7,7 @@ import { extractOptions } from '../quickReplies.js';
 import { matchCommands, applyCompletion, parseSlash, parseGoalArgs, helpText } from '../slashCommands.js';
 import { buildDecomposePrompt, defaultPlanPath } from '../planProgress.js';
 import { toAttachment, attachmentProblem } from '../attachmentFile.js';
+import { shortenPath } from '../shortenPath.js';
 import {
   createGoal, buildContinuePrompt, resumeGoalPatch, setGoalMaxRounds, setGoalTokenBudget,
   fmtTokens, GOAL_DEFAULT_MAX_ROUNDS, GOAL_EXTEND_ROUNDS, GOAL_DEFAULT_TOKEN_BUDGET
@@ -300,7 +301,7 @@ function ConvCard({ conv }) {
             del(conv.id);
           }}>✕</button>
       </div>
-      <div className="conv-card-path muted small">{conv.cwd || '~'}</div>
+      <div className="conv-card-path muted small" title={conv.cwd || '~'}>{shortenPath(conv.cwd)}</div>
       {last && <div className="conv-card-last muted small">最近: {last.text.slice(0, 60)}</div>}
       <div className="conv-card-meta muted small">{conv.messages.length} 条消息 · {when}</div>
     </div>
@@ -851,7 +852,13 @@ function ChatView({ hostId, conv, split = false }) {
         {/* 同理:要 push 的时候人在这里,没登录不该逼人切去环境配置 */}
         <GithubBadge hostId={hostId} isLocal={hostId === 'local'} hostLabel={hostName} />
         <b className="conv-title">{conv.title}</b>
-        <span className="muted small">{conv.cwd || '~'}</span>
+        {/* 路径缩短显示:保尾不保头 —— 有信息量的是项目名,
+            而 `/Users/<用户名>/` 每条路径都一样。完整路径在 tooltip 里,
+            点一下复制(要粘到终端里的时候不用手抄)。 */}
+        <span className="muted small conv-cwd" title={`${conv.cwd || '~'}\n(点击复制)`}
+          onClick={() => window.api.clipboard.writeText(conv.cwd || '')}>
+          {shortenPath(conv.cwd)}
+        </span>
         <ModelPicker
           agent={conv.agent}
           value={conv.model || ''}

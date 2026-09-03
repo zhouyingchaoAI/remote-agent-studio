@@ -336,6 +336,16 @@ progress { width: 140px; height: 6px; }
 .conv-card:hover { border-color: var(--accent); }
 .conv-card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .conv-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 目录:已经在 JS 里按显示宽度缩过,这里只是最后一道封顶 ——
+   单段超长路径(没有可省的中间段)只能靠 CSS 截。
+   min-width: 0 是关键:不写的话 flex 子元素不肯收缩,
+   照样会把后面的模型选择器挤出去。 */
+.conv-cwd {
+  font-family: Menlo, Consolas, monospace;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0; max-width: 30ch; cursor: pointer;
+}
+.conv-cwd:hover { color: var(--text); }
 .conv-title-input { flex: 1; min-width: 120px; font-weight: 600; padding: 2px 6px; }
 .model-select { max-width: 200px; padding: 4px 8px; font-size: 12px; }
 .agent-select { padding: 4px 8px; font-size: 12px; font-weight: 600; border-radius: 6px; }

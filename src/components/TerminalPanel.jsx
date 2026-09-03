@@ -197,6 +197,9 @@ function TermView({ hostId, termId, active }) {
       window.clearTimeout(resizeTimer);
       window.removeEventListener('resize', onResize);
       term.dispose();
+      // TerminalPanel 在切换到其他顶栏页面时会卸载。若只销毁 xterm 视图,
+      // 远端 shell 会继续占一条 SSH 通道；反复切换最终会耗尽 MaxSessions。
+      window.api.term.close({ hostId, termId }).catch(() => {});
     };
   }, [hostId, termId]);
 
