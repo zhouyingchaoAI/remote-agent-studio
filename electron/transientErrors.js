@@ -41,6 +41,42 @@ const PERMANENT_PATTERNS = [
   /invalid_request_error|model not found/i
 ];
 
+/**
+ * codex 线程存储被占用。
+ *
+ *   thread-store conflict: thread <id> already has an active writer
+ *   thread/resume failed: ... (code -32600)
+ *
+ * 这是一类**很特别的失败**,单独识别是因为它有三个反直觉的性质:
+ *
+ * 1. 它**看起来像连不上**(一发消息就红框、每次都一样),
+ *    实际跟网络毫无关系 —— 是本机/远端还有个 codex 进程占着这个线程的写锁,
+ *    或者上次的进程被 KILL 掉、锁没释放干净。
+ *
+ * 2. **重试一万次也是同样结果。** 应用把 thread id 存了下来,每轮都
+ *    `codex exec resume <同一个 id>`,于是永远撞在同一把锁上 ——
+ *    用户看到的就是"一直连不上"。
+ *
+ * 3. 所以正确的动作不是重试,是**别再 resume 这个线程**。
+ */
+const THREAD_LOCK_RE = /thread-store conflict|already has an active writer|thread\/resume failed/i;
+function isThreadLockError(text = '') {
+  return THREAD_LOCK_RE.test(String(text || ''));
+}
+
+/** 给用户的说明:说清它不是网络问题,并给出能自己动手的那一步 */
+function describeThreadLock(text = '') {
+  const id = (String(text || '').match(/thread ([0-9a-f-]{8,})/i) || [])[1] || '';
+  return [
+    '⚠ 这不是网络问题,是 codex 的会话线程被占用了' + (id ? `(${id})` : '') + '。',
+    '原因通常是上一个 codex 进程还活着,或者被强制杀掉后没释放锁。',
+    '',
+    '已自动改用新线程继续(本轮上下文会带过去)。若仍然失败,到那台机器上执行:',
+    '  pgrep -af "codex exec" ; # 看看还有没有残留进程,有就 kill 掉',
+    '  rm -f ~/.codex/threads/*.lock 2>/dev/null  # 清理残留锁(路径以实际安装为准)'
+  ].join('\n');
+}
+
 const testAny = (patterns, text) => patterns.some((re) => re.test(text));
 
 /**
@@ -51,6 +87,12 @@ function isTransientAgentError(text = '') {
   const s = String(text || '');
   if (!s.trim()) return false;
   if (testAny(PERMANENT_PATTERNS, s)) return false;
+  /* 线程锁冲突绝不能当成瞬时错误。
+     它的报文里常夹着 "timeout waiting for child process to exit",
+     一不留神就会被 TRANSIENT 里的 timeout 规则捞进去 —— 那样应用会
+     拿着同一个 thread id 一遍遍 resume,每次都撞同一把锁,
+     退避重试只是把"立刻失败"变成"慢慢地一直失败"。 */
+  if (isThreadLockError(s)) return false;
   return testAny(TRANSIENT_PATTERNS, s);
 }
 
@@ -73,5 +115,6 @@ function retryDelayMs(attempt, { base = 2000, max = 20000 } = {}) {
 
 module.exports = {
   isTransientAgentError, describeTransient, retryDelayMs,
+  isThreadLockError, describeThreadLock,
   TRANSIENT_PATTERNS, PERMANENT_PATTERNS
 };

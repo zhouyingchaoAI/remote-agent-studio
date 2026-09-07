@@ -18,7 +18,9 @@ const {
   dshEnvPosix, dshEnvPowershell, dshArgs, withHistory, describeExit, explainSilence
 } = require('./dsh');
 const { codexReasoningFlag } = require('./codexOptions');
-const { isTransientAgentError, describeTransient } = require('../transientErrors');
+const {
+  isTransientAgentError, describeTransient, isThreadLockError, describeThreadLock
+} = require('../transientErrors');
 
 /**
  * 解出增量输出的那一块。
@@ -340,6 +342,14 @@ class AgentSession extends EventEmitter {
             // dsh 以 0=完成、1=未完成,退 1 不一定是崩溃,措辞别误导
             const r = describeExit(code, this.dshBuffer, this.lastStderr);
             this._emitMsg({ kind: 'error', text: r.message });
+          } else if (isThreadLockError(detail)) {
+            /* **线程锁冲突:必须把 thread id 丢掉。**
+               不丢的话下一轮还会 `resume <同一个 id>`,再撞同一把锁 ——
+               用户看到的就是"一直连不上",而它跟网络毫无关系。
+               丢掉之后下一轮开新线程,对话能继续走下去。 */
+            this.codexSessionId = null;
+            this.codexStarted = false;
+            this._emitMsg({ kind: 'error', text: describeThreadLock(detail) });
           } else {
             this._emitMsg({
               kind: 'error',
