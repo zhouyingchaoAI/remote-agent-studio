@@ -869,13 +869,13 @@ function ChatView({ hostId, conv, split = false }) {
             放在模型旁边,因为这两个是同一件事的两个维度 */}
         {conv.agent === 'codex' && (
           <select className="reasoning-picker" disabled={running}
-            title="推理强度 model_reasoning_effort。极高(xhigh)取决于模型是否提供,不是所有模型都支持"
-            value={conv.reasoningEffort || ''}
+            title="推理强度取决于模型支持；GPT-6 Astra 最低为 low，支持 max。默认跟随 CLI 配置。"
+            value={conv.model === 'gpt-6-astra' && conv.reasoningEffort === 'minimal' ? 'low' : (conv.reasoningEffort || '')}
             onChange={(e) => {
               setStarted(false);
               useStore.getState().updateConversationReasoning(conv.id, e.target.value);
             }}>
-            {REASONING_EFFORTS.map((r) => (
+            {REASONING_EFFORTS.filter((r) => conv.model !== 'gpt-6-astra' || r.value !== 'minimal').map((r) => (
               <option key={r.value} value={r.value}>
                 {r.value ? `🧠 ${r.label}` : '🧠 默认'}
               </option>
@@ -1075,7 +1075,7 @@ function ChatView({ hostId, conv, split = false }) {
 /* 模型选择器:预设 + 自定义输入,留空表示跟随 CLI 自身配置(~/.codex/config.toml 等)
  * deepseek 留空时后端默认 deepseek-v4-pro[1m] */
 const MODEL_PRESETS = {
-  codex: ['gpt-5.6-terra', 'gpt-5-codex', 'gpt-5'],
+  codex: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5-codex', 'gpt-5'],
   claude: ['sonnet', 'opus', 'haiku'],
   deepseek: ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'],
   // dsh 没有 --model 开关:模型由它自己的 profile 配置决定,这里给不出可选项
@@ -1688,10 +1688,7 @@ function SessionSetup({ hostId, onCancel }) {
         <label>工作目录({hostId === 'local' ? '本机' : '远程'})
           <RemoteDirPicker hostId={hostId} value={cwd} onChange={setCwd} />
         </label>
-        <label>模型(可选)<input value={model} onChange={(e) => setModel(e.target.value)} placeholder={
-          agent === 'codex' ? '如 gpt-5-codex' :
-          agent === 'deepseek' ? '默认 deepseek-v4-pro[1m]' :
-          agent === 'dsh' ? '(dsh 不支持指定模型)' : '如 sonnet / opus'} /></label>
+        <label>模型(可选)<ModelPicker agent={agent} value={model} onChange={setModel} disabled={agent === 'dsh'} /></label>
         <div className="system-mode-setting">
           <label className="row checkbox">
             <input

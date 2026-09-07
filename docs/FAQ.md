@@ -555,6 +555,57 @@ pull/download/image/vllm/model 之类的 `running` 单元,最多 8 个。
 命令行在展示前会脱敏:`ps` 输出是密钥最典型的泄露点(`curl -H "Authorization: Bearer …"`、
 带账号密码的 URL),key/token 会被替换成 `***`。
 
+## 「一直连不上」:其实是会话线程被锁住
+
+报错长这样,而且**每一轮一模一样**:
+
+```
+thread-store conflict: thread 01a041fc-… already has an active writer
+Error: thread/resume failed: … (code -32600)
+```
+
+**它跟网络没关系。** SSH 是通的,命令也发出去了 —— 挂的是 codex 自己:
+另一个 codex 进程还占着这个线程的写锁。
+
+### 完整的因果链
+
+1. **上游端点不稳。** 中转/自建端点常不支持长连接,codex 报
+   `Falling back from WebSockets to HTTPS transport. stream disconnected
+   before completion`
+2. **进程挂死。** 连接不稳时 codex 拉模型列表的子进程卡住
+   (`failed to refresh available models: timeout waiting for child
+   process to exit`),父进程等它退出,一起卡成僵尸
+3. **应用没有超时。** 原来 `execStream` 一直等进程退出 —— 于是永远等下去,
+   那个线程的写锁也永远不释放
+4. **每一轮都撞同一把锁。** 应用把 thread id 存了下来,每轮
+   `codex exec resume <同一个 id>`,于是次次失败、次次一样
+
+`pgrep -af "codex exec"` 能直接看到罪证:一句「在吗」的进程还活着。
+
+### 现在的四层防护
+
+- **开跑前先清场**:要 resume 某个线程之前,先去远端问"还有谁占着它",
+  有就请它退场。这是唯一**跨应用重启**有效的一层 ——
+  `AgentSession.running` 只在内存里,重启就归零,而远端进程还活着,
+  这正是以前"重启也救不回来"的原因
+- **挂死看门狗**:10 分钟没有任何输出就判定挂死并终止。判据是
+  "没有输出"而不是"总时长" —— 一轮跑一小时是正常的,而 codex 干活时
+  stdout 一直有事件流
+- **杀得干净**:先 TERM,**确认进程真的退了**才收工,超过 8 秒还赖着才 KILL。
+  原来 TERM 完 2 秒就硬杀,codex 来不及把 thread store 落盘 ——
+  清理动作本身在制造脏锁
+- **真撞上了也能继续**:丢掉 thread id 开新线程,并明说"这不是网络问题"
+
+### 如果还在发生
+
+多半是上游端点的问题(第 1 层不在应用能修的范围内)。可以:
+换一个稳定的端点、或在 codex 配置里关掉 websocket 传输。
+手工清场:
+
+```bash
+pgrep -af "codex exec"   # 有残留就 kill
+```
+
 ## 命令的实时日志
 
 对话里的「执行命令」点开就是一块**持续刷新的日志**,一直到命令结束

@@ -15,7 +15,7 @@ const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 
 test('取值与官方一致,含 xhigh(极高)', () => {
   const values = REASONING_EFFORTS.map((r) => r.value).filter(Boolean);
-  assert.deepEqual(values, ['minimal', 'low', 'medium', 'high', 'xhigh']);
+  assert.deepEqual(values, ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
   assert.equal(REASONING_EFFORTS.find((r) => r.value === 'xhigh').label, '极高');
 });
 

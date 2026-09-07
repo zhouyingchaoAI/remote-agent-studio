@@ -21,6 +21,11 @@ const { codexReasoningFlag } = require('./codexOptions');
 const {
   isTransientAgentError, describeTransient, isThreadLockError, describeThreadLock
 } = require('../transientErrors');
+const {
+  isSafeThreadId, buildFindOwnersCommand, parseOwnerPids, buildReleaseCommand, RELEASE_GRACE_MS
+} = require('./threadGuard');
+
+const STALL_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
  * 解出增量输出的那一块。
@@ -214,7 +219,7 @@ class AgentSession extends EventEmitter {
         ].filter(Boolean))]
           .map((dir) => `--add-dir ${powershellQuote(dir)}`)
           .join(' ');
-        const effort = codexReasoningFlag(this.opts.reasoningEffort);
+        const effort = codexReasoningFlag(this.opts.reasoningEffort, model);
         const flags = `--json --skip-git-repo-check ${approval} ${modelArg} ${effort} ${images} ${writableDirs}`;
         // 优先用会话 ID 精确 resume;仅在拿不到 ID 时退回 --last(同目录多会话时可能串线)
         const resume = this.codexSessionId
@@ -264,7 +269,7 @@ class AgentSession extends EventEmitter {
       // 全局选项(--json/--skip-git-repo-check/--sandbox/-m)必须放在 resume 子命令之前
       // 推理强度用 -c 覆盖而不是改远程 config.toml —— 后者是全局的,
       // 会影响用户在终端里的其他 codex 会话
-      const effort = codexReasoningFlag(this.opts.reasoningEffort);
+      const effort = codexReasoningFlag(this.opts.reasoningEffort, model);
       const flags = `--json --skip-git-repo-check ${approval} ${m} ${effort} ${images} ${writableDirs}`;
       // 优先用会话 ID 精确 resume;仅在拿不到 ID 时退回 --last(同目录多会话时可能串线)
       if (this.codexSessionId)
@@ -299,6 +304,13 @@ class AgentSession extends EventEmitter {
       throw e;
     }
 
+    /* **开跑之前先确认没人占着这个线程。**
+       这一步是根治的关键,也是唯一能跨应用重启生效的一层:
+       它问的是操作系统"还有谁在跑这个 thread",而不是应用自己的内存。
+       AgentSession.running 只在当前对象里,重启就归零,而远端那个
+       挂死的进程还活着 —— 那正是"重启也救不回来"的原因。 */
+    await this._releaseStaleThreadOwners();
+
     this.running = true;
     this.imagePaths = [];
     this.lastLines = [];   // 最近的 stdout 行(诊断用)
@@ -309,10 +321,41 @@ class AgentSession extends EventEmitter {
     this._emitMsg({ kind: 'status', text: '正在远程执行...' });
 
     let buffer = '';
+    /**
+     * 挂死看门狗。
+     *
+     * 这是"锁为什么会产生"的那一层。用户机器上抓到的现场:
+     * 一句「在吗」的 codex 进程卡在 `failed to refresh available models:
+     * timeout waiting for child process to exit` 出不来,而应用这边
+     * **没有任何超时** —— execStream 一直等进程退出,于是永远等下去,
+     * 那个线程的写锁也就永远不释放。
+     *
+     * 判据取"完全没有输出",不是"总时长" —— 一轮跑一小时是正常的,
+     * 而 codex 干活时 stdout 一直有事件流。**连一个字节都没有**
+     * 持续这么久,才说明它卡住了。
+     */
+    let stallTimer = null;
+    const bumpStall = () => {
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        /* 标成 transient:清掉残留后重开一轮通常就好了,
+           而自动续跑本来就有次数上限,不会无限空转。 */
+        this.transient = `远端进程 ${Math.round(STALL_TIMEOUT_MS / 60000)} 分钟没有任何输出,判定为挂死并已终止`;
+        this._emitMsg({
+          kind: 'error',
+          text: `⏳ 远端 codex 进程已经 ${Math.round(STALL_TIMEOUT_MS / 60000)} 分钟没有任何输出,判定为挂死,已终止它。\n`
+            + '常见原因是上游端点不稳(拉模型列表的子进程卡住)。\n'
+            + '不终止的话它会一直占着会话线程的写锁,之后每一轮都会失败。'
+        });
+        this.cancel();
+      }, STALL_TIMEOUT_MS);
+    };
     try {
       const stream = await this.ssh.execStream(cmd);
       this.stream = stream;
+      bumpStall();
       stream.on('data', (d) => {
+        bumpStall();
         buffer += d.toString();
         let idx;
         while ((idx = buffer.indexOf('\n')) >= 0) {
@@ -322,6 +365,7 @@ class AgentSession extends EventEmitter {
         }
       });
       stream.stderr.on('data', (d) => {
+        bumpStall();
         const t = d.toString();
         this._maybeEmitPermissionHint(t);
         this.lastStderr = (this.lastStderr + t).slice(-1000);
@@ -329,6 +373,7 @@ class AgentSession extends EventEmitter {
         if (informative.trim()) this._emitMsg({ kind: 'stderr', text: informative });
       });
       const exitCode = await new Promise((resolve) => stream.on('close', (code) => {
+        if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
         if (buffer.trim()) this._parseLine(buffer.trim());
         // 判定本轮是不是被网络/代理掐断的(可自动续跑),而不是认证之类的硬错误
         const diag = [this.lastStderr, ...(this.lastLines || []), this.lastResultText || ''].join('\n');
@@ -381,19 +426,56 @@ class AgentSession extends EventEmitter {
       }
       return { imagePaths: [...this.imagePaths] };
     } finally {
+      if (stallTimer) clearTimeout(stallTimer);
       this.running = false;
       this.stream = null;
     }
   }
 
+  /**
+   * resume 之前清掉还占着这个线程的残留进程。
+   *
+   * 只在**要 resume 某个具体线程**时才做:新开线程不存在冲突,
+   * 无谓地去 pgrep 一遍只是给每轮加延迟。
+   *
+   * 失败一律吞掉 —— 这是一步预防性清理,它自己不该成为发消息的阻碍。
+   */
+  async _releaseStaleThreadOwners() {
+    const id = this.codexSessionId;
+    if (this.opts.agent !== 'codex' || !id || !isSafeThreadId(id)) return;
+    try {
+      const find = buildFindOwnersCommand(id);
+      if (!find) return;
+      const r = await this.ssh.exec(find, { timeoutMs: 8000 });
+      const pids = parseOwnerPids(r.stdout);
+      if (!pids.length) return;
+
+      /* 走到这儿说明:有进程正拿着这个线程,而我们正要 resume 它。
+         这不是正常状态 —— 上一轮要么挂死了,要么被强杀后没退干净。
+         说出来,不然用户只会看到一次莫名其妙的停顿。 */
+      this._emitMsg({
+        kind: 'status',
+        text: `清理占用会话线程的残留进程(${pids.join(', ')})…`
+      });
+      await this.ssh.exec(buildReleaseCommand(pids), { timeoutMs: RELEASE_GRACE_MS + 6000 });
+    } catch (_) {
+      /* 清不掉也接着往下走:真撞上锁了,上面还有一层"丢掉 thread id
+         开新线程"的兜底。两层都失败才会让用户看到错误。 */
+    }
+  }
+
   cancel() {
     if (this.stream) { try { this.stream.signal('INT'); this.stream.close(); } catch (_) {} }
-    // 兜底:SSH 信号不一定送达,按记录的远端 PID 精确终止(先 TERM,2 秒后 KILL)
+    /* 兜底:SSH 信号不一定送达,按记录的远端 PID 精确终止。
+     *
+     * **必须等它自己退干净再考虑 KILL。** 原来是 TERM 完 2 秒直接 KILL,
+     * 而 codex 需要时间把 thread store 落盘、释放线程写锁 ——
+     * 杀得太早,每取消一次就留下一把永久的脏锁,
+     * 下次 resume 必然撞上。清理动作本身变成了故障来源。
+     */
     if (this.remotePid && !this.ssh?.isLocal) {
       const pid = this.remotePid;
-      this.ssh.exec(
-        `kill -TERM ${pid} 2>/dev/null; (sleep 2; kill -KILL ${pid} 2>/dev/null) >/dev/null 2>&1 &`
-      ).catch(() => {});
+      this.ssh.exec(`{ ${buildReleaseCommand([pid])} } >/dev/null 2>&1 &`).catch(() => {});
       this.remotePid = null;
     }
     this.running = false;

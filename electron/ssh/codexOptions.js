@@ -14,7 +14,8 @@ const REASONING_EFFORTS = [
   { value: 'low', label: '低' },
   { value: 'medium', label: '中' },
   { value: 'high', label: '高' },
-  { value: 'xhigh', label: '极高' }
+  { value: 'xhigh', label: '极高' },
+  { value: 'max', label: '最高(需模型支持)' }
 ];
 
 const VALID = new Set(REASONING_EFFORTS.map((e) => e.value).filter(Boolean));
@@ -25,8 +26,10 @@ const VALID = new Set(REASONING_EFFORTS.map((e) => e.value).filter(Boolean));
  * 而那种报错读起来完全不像「你选错了强度」。
  * @returns {string} 形如 `-c model_reasoning_effort=xhigh`,未设置则空串
  */
-function codexReasoningFlag(effort) {
-  const v = String(effort || '').trim().toLowerCase();
+function codexReasoningFlag(effort, model = '') {
+  let v = String(effort || '').trim().toLowerCase();
+  // 旧对话切换到 Astra 时仍可能保存 minimal；Astra 的最低强度是 low。
+  if (model === 'gpt-6-astra' && v === 'minimal') v = 'low';
   if (!v) return '';
   if (!VALID.has(v)) throw new Error(`不支持的推理强度:${effort}(可选 ${[...VALID].join('/')})`);
   return `-c model_reasoning_effort=${v}`;

@@ -9,5 +9,6 @@ export const REASONING_EFFORTS = [
   { value: 'low', label: '低' },
   { value: 'medium', label: '中' },
   { value: 'high', label: '高' },
-  { value: 'xhigh', label: '极高' }
+  { value: 'xhigh', label: '极高' },
+  { value: 'max', label: '最高(需模型支持)' }
 ];
