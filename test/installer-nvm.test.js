@@ -61,14 +61,28 @@ test('ensureNode falls back to a Node 22 glibc 2.17 build on legacy x64 Linux', 
 });
 
 test('remote execution paths load the compatibility Node override after nvm', () => {
-  const files = [
-    'electron/ssh/Installer.js',
-    'electron/ssh/AgentSession.js',
-    'electron/ssh/SSHManager.js',
-    'electron/main.js'
-  ];
+  /* 这段环境前缀原来在四个文件里各写一份,顺序还不一致
+     (检测是追加 PATH、执行是前置),导致"检测说 codex 可用、
+     实际跑的是另一个二进制"。现在收敛到 agentEnv.js 一处。
 
-  for (const relativePath of files) {
+     所以这条测试也跟着改:**在唯一的那处**校验顺序,
+     再确认每个执行入口都确实走它 —— 而不是逐个文件找字符串,
+     那样只要有人把定义抽走,测试就会误报。 */
+  const shared = fs.readFileSync(path.join(__dirname, '..', 'electron/ssh/agentEnv.js'), 'utf8');
+  assert.match(shared, /remote-agent-node-env\.sh/);
+  assert.ok(
+    shared.indexOf('nvm.sh') < shared.indexOf('remote-agent-node-env.sh'),
+    'compat 路径必须排在 nvm 之后才能覆盖它'
+  );
+
+  // 走共享定义的入口
+  for (const relativePath of ['electron/ssh/Installer.js', 'electron/ssh/AgentSession.js']) {
+    const source = fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
+    assert.match(source, /require\('\.\/agentEnv'\)/, `${relativePath} 应该引用共享定义`);
+  }
+
+  // 自己另起一套 shell 前缀的入口,仍然要各自满足顺序要求
+  for (const relativePath of ['electron/ssh/SSHManager.js', 'electron/main.js']) {
     const source = fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
     assert.match(source, /remote-agent-node-env\.sh/, `${relativePath} must load the compatibility environment`);
     assert.ok(

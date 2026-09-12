@@ -85,8 +85,17 @@ export default function SetupPanel({ hostId, host }) {
           <table className="env-table"><tbody>
             <tr><td>系统</td><td>{env?.os || '-'}</td></tr>
             <tr><td>Node.js</td><td>{env?.node || <Miss />}</td></tr>
-            <tr><td>Codex</td><td>{env?.codex || <Miss />}</td></tr>
-            <tr><td>Claude Code</td><td>{env?.claude || <Miss />}</td></tr>
+            {/* 把解析到的**路径**也显示出来。
+                光一个版本号看不出用的是哪一份 —— 而"系统里另有一个 codex"
+                恰恰是"这台机器就是跑不起来"最常见的成因。 */}
+            <tr><td>Codex</td><td>
+              {env?.codex || <Miss />}
+              {env?.codexBin && <div className="muted small mono">{env.codexBin}</div>}
+            </td></tr>
+            <tr><td>Claude Code</td><td>
+              {env?.claude || <Miss />}
+              {env?.claudeBin && <div className="muted small mono">{env.claudeBin}</div>}
+            </td></tr>
             <tr><td>DeepSeek Harness</td><td>{env?.dsh || <Miss />}</td></tr>
           </tbody></table>
           <div className="row gap">

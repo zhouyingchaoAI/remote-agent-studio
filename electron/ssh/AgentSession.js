@@ -63,10 +63,9 @@ function decodeChunk(chunk) {
   return decoded;
 }
 
-const AGENT_PATH = 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"; ' +
-  'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1; ' +
-  '[ -s "$HOME/.remote-agent-node-env.sh" ] && . "$HOME/.remote-agent-node-env.sh"; ' +
-  '[ -s "$HOME/.remote-agent-env.sh" ] && . "$HOME/.remote-agent-env.sh";';
+/* 这段以前在这里和 Installer 各写一份,而且 PATH 顺序相反 ——
+   检测到的和实际执行的可能是两个不同的 codex。见 agentEnv.js。 */
+const { AGENT_ENV: AGENT_PATH } = require('./agentEnv');
 const DOCKER_PERMISSION_ERROR = /(?:docker\.sock|docker daemon|docker:)[\s\S]*(?:operation not permitted|permission denied|no new privileges)|(?:operation not permitted|permission denied|no new privileges)[\s\S]*(?:docker\.sock|docker daemon|docker:)/i;
 // tracing 风格的运行日志(2026-07-15T05:55:46Z ERROR ...):不在聊天里冒泡,
 // 仅保留在诊断缓冲中,进程失败时随错误消息一起展示

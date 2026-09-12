@@ -3,6 +3,8 @@
  */
 const { dshInstallCommand } = require('./dsh');
 
+const { BIN_PATH: SHARED_BIN_PATH, AGENT_ENV } = require('./agentEnv');
+
 class Installer {
   constructor(ssh, proxyService) {
     this.ssh = ssh;
@@ -12,9 +14,7 @@ class Installer {
   _env() { return this.proxy ? this.proxy.envPrefix() : ''; }
 
   /** PATH 前缀:各安装位置的统一顺序(校验与清理都要用同一套,否则查的不是实际执行的那个) */
-  static get BIN_PATH() {
-    return 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH";';
-  }
+  static get BIN_PATH() { return SHARED_BIN_PATH; }
 
   /** 探测远程架构,用于选包与给出准确的错误提示 */
   async remoteArch() {
@@ -64,17 +64,23 @@ class Installer {
   /** 检测远程环境: node/npm/codex/claude 版本、系统信息 */
   async detect() {
     if (this.ssh.isWindowsNative) return this.ssh.detectEnvironment();
+    /* **必须和实际执行用同一份环境前缀。**
+       以前这里是 `PATH="$PATH:...家目录"`(追加),而执行时是
+       `PATH="家目录:...:$PATH"`(前置)。系统里另有一个 codex 时,
+       两边解析到的是**不同的二进制** —— 界面显示「可用」、实际却跑不起来,
+       而且从界面上完全看不出矛盾。 */
     const script = `
       echo "OS=$(uname -sm)";
-      export NVM_DIR="$HOME/.nvm";
-      [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1;
-      [ -s "$HOME/.remote-agent-node-env.sh" ] && . "$HOME/.remote-agent-node-env.sh";
+      ${AGENT_ENV}
       command -v node >/dev/null 2>&1 && echo "NODE=$(node -v)" || echo "NODE=";
       command -v npm  >/dev/null 2>&1 && echo "NPM=$(npm -v)"  || echo "NPM=";
-      export PATH="$PATH:$HOME/.npm-global/bin:$HOME/.local/bin";
       command -v codex  >/dev/null 2>&1 && echo "CODEX=$(codex --version 2>/dev/null | head -1)"  || echo "CODEX=";
       command -v claude >/dev/null 2>&1 && echo "CLAUDE=$(claude --version 2>/dev/null | head -1)" || echo "CLAUDE=";
       command -v dsh    >/dev/null 2>&1 && echo "DSH=$(dsh --version 2>/dev/null | head -1)"     || echo "DSH=";
+      # 把解析到的路径也报上来:光说"可用"没法判断用的是哪一个,
+      # 而"装了好几份 codex"恰恰是这类问题最常见的成因。
+      echo "CODEX_BIN=$(command -v codex 2>/dev/null)";
+      echo "CLAUDE_BIN=$(command -v claude 2>/dev/null)";
     `;
     const { stdout } = await this.ssh.exec(script);
     const get = (k) => (stdout.match(new RegExp(`^${k}=(.*)$`, 'm')) || [])[1]?.trim() || '';
@@ -84,7 +90,9 @@ class Installer {
       npm: get('NPM'),
       codex: get('CODEX'),
       claude: get('CLAUDE'),
-      dsh: get('DSH')
+      dsh: get('DSH'),
+      codexBin: get('CODEX_BIN'),
+      claudeBin: get('CLAUDE_BIN')
     };
   }
 
