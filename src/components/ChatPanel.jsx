@@ -8,6 +8,7 @@ import { matchCommands, applyCompletion, parseSlash, parseGoalArgs, helpText } f
 import { buildDecomposePrompt, defaultPlanPath } from '../planProgress.js';
 import { toAttachment, attachmentProblem } from '../attachmentFile.js';
 import { shortenPath } from '../shortenPath.js';
+import { CLAUDE_MODELS, modelVersionProblem } from '../claudeModels.js';
 import {
   createGoal, buildContinuePrompt, resumeGoalPatch, setGoalMaxRounds, setGoalTokenBudget,
   fmtTokens, GOAL_DEFAULT_MAX_ROUNDS, GOAL_EXTEND_ROUNDS, GOAL_DEFAULT_TOKEN_BUDGET
@@ -393,6 +394,9 @@ function ChatView({ hostId, conv, split = false }) {
   const updateConversationPermission = useStore((s) => s.updateConversationPermission);
   const updateConversationModel = useStore((s) => s.updateConversationModel);
   const updateConversationAgent = useStore((s) => s.updateConversationAgent);
+  /* 这台机器的环境检测结果。这里只用它的 claude 版本号 ——
+     新模型对 CLI 有最低版本要求,拿它在选之前就能提示。 */
+  const hostEnv = useStore((s) => s.envInfo[hostId]);
   const [input, setInput] = useState('');
   const [started, setStarted] = useState(false);
   const [pendingFiles, setPendingFiles] = useState([]);
@@ -863,6 +867,8 @@ function ChatView({ hostId, conv, split = false }) {
           agent={conv.agent}
           value={conv.model || ''}
           disabled={running}
+          /* 环境检测本来就拿到了 claude 版本号,拿来比一下就能在选之前提示 */
+          cliVersion={hostEnv?.claude || ''}
           onChange={(m) => { setStarted(false); updateConversationModel(conv.id, m); }}
         />
         {/* 推理强度只有 codex 有(model_reasoning_effort);
@@ -1076,7 +1082,9 @@ function ChatView({ hostId, conv, split = false }) {
  * deepseek 留空时后端默认 deepseek-v4-pro[1m] */
 const MODEL_PRESETS = {
   codex: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5-codex', 'gpt-5'],
-  claude: ['sonnet', 'opus', 'haiku'],
+  /* claude 这份带版本门槛(新模型对 CLI 有最低版本要求),
+     所以单独放在 claudeModels.js 里,是 {value,label,minCli} 结构。 */
+  claude: CLAUDE_MODELS,
   deepseek: ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'],
   // dsh 没有 --model 开关:模型由它自己的 profile 配置决定,这里给不出可选项
   dsh: []
@@ -1095,9 +1103,18 @@ const agentCliInstalled = (env, agent) => {
 const CUSTOM_MODEL = '__custom__';
 const EMPTY_QUEUE = []; // 稳定引用:避免 selector 每次返回新数组导致无限重渲染
 
-function ModelPicker({ agent, value, disabled, onChange }) {
-  const presets = (MODEL_PRESETS[agent] || []).map((m) => ({ value: m, label: m }));
+function ModelPicker({ agent, value, disabled, onChange, cliVersion = '' }) {
+  /* 预设项既可能是纯字符串(codex/deepseek),也可能是 {value,label,minCli}
+     (claude —— 新模型有 CLI 版本门槛)。两种都认,省得为了加一个字段
+     把另外两个引擎的列表也改一遍。 */
+  const presets = (MODEL_PRESETS[agent] || []).map(
+    (m) => (typeof m === 'string' ? { value: m, label: m } : m)
+  );
   const presetValues = presets.map((p) => p.value);
+  /* 版本不够时在**选之前**就说清楚。
+     不拦着不让选 —— 检测可能不准,而拦错了是凭空堵住一个本来能用的模型;
+     但也不能不说,否则 CLI 甩一句自己的错误,人完全联想不到是版本太旧。 */
+  const versionNote = agent === 'claude' ? modelVersionProblem(value, cliVersion) : '';
   const isPreset = value === '' || presetValues.includes(value);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -1132,21 +1149,24 @@ function ModelPicker({ agent, value, disabled, onChange }) {
   }
 
   return (
-    <select
-      className="model-select"
-      value={value}
-      disabled={disabled}
-      title="切换模型(立即生效,上下文保留)"
-      onChange={(e) => {
-        if (e.target.value === CUSTOM_MODEL) { setDraft(value); setEditing(true); return; }
-        onChange(e.target.value);
-      }}>
-      <option value="">{
-        agent === 'deepseek' ? '默认(deepseek-v4-pro[1m])' :
-        agent === 'dsh' ? '由 dsh profile 决定(此处选择无效)' : '默认模型(跟随 CLI 配置)'}</option>
-      {presets.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-      <option value={CUSTOM_MODEL}>自定义…</option>
-    </select>
+    <>
+      <select
+        className="model-select"
+        value={value}
+        disabled={disabled}
+        title="切换模型(立即生效,上下文保留)"
+        onChange={(e) => {
+          if (e.target.value === CUSTOM_MODEL) { setDraft(value); setEditing(true); return; }
+          onChange(e.target.value);
+        }}>
+        <option value="">{
+          agent === 'deepseek' ? '默认(deepseek-v4-pro[1m])' :
+          agent === 'dsh' ? '由 dsh profile 决定(此处选择无效)' : '默认模型(跟随 CLI 配置)'}</option>
+        {presets.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+        <option value={CUSTOM_MODEL}>自定义…</option>
+      </select>
+      {versionNote && <span className="model-warn" title={versionNote}>⚠ 版本不足</span>}
+    </>
   );
 }
 

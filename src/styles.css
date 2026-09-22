@@ -600,6 +600,13 @@ progress { width: 140px; height: 6px; }
 .conv-card-path { font-family: Menlo, monospace; }
 /* 路径、命令这类要逐字看的内容用等宽 —— 比例字体下 l/1/I 分不清 */
 .mono { font-family: Menlo, Consolas, monospace; word-break: break-all; }
+/* 模型版本不足的提示:黄色警示,不拦着不让选 —— 检测可能不准,
+   拦错了是凭空堵住一个本来能用的模型。悬停看完整说明。 */
+.model-warn {
+  flex: none; white-space: nowrap; cursor: help; font-size: 12px;
+  color: var(--yellow); border: 1px solid var(--yellow); border-radius: 999px;
+  padding: 1px 8px; background: rgba(240,180,41,0.10);
+}
 .conv-card-last { margin-top: 4px; }
 .conv-card-meta { margin-top: 6px; }
 .conv-card .icon-btn { opacity: 0; }
