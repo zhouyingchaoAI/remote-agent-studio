@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { applyTheme, DEFAULT_THEME } from './themes.js';
 import { parsePlan, parseProseProgress } from './planProgress.js';
 import { mergePlan, scaleRoundsForPlan } from './goalMode.js';
-import { mirrorConversation, buildMirrorPrompt } from './mirrorConversation.js';
+import { mirrorConversation, buildMirrorPrompt, buildForkPrompt } from './mirrorConversation.js';
 
 /**
  * 主题变化通知。
@@ -203,6 +203,48 @@ export const useStore = create((set, get) => ({
     }));
     persist();
     return copy;
+  },
+
+  /**
+   * 把一条对话分成几路,每路一个 git worktree、一条分支、一个独立对话。
+   *
+   * 返回 [{name, ok, convId, path, branch, error}] —— **逐条报结果**,
+   * 不是整体成功/失败:建到第三条时仓库出问题,前两条是真的建好了,
+   * 笼统报一句"失败"会让人以为什么都没发生,然后重来一次,
+   * 结果撞上"目录已存在"。
+   */
+  forkConversation: async (convId, specs = []) => {
+    const src = get().conversations[convId];
+    if (!src) return [];
+
+    const detect = await window.api.worktree.detect({ hostId: src.hostId, cwd: src.cwd })
+      .catch((e) => ({ ok: false, error: e.message }));
+    if (!detect.ok) {
+      return specs.map((sp) => ({ name: sp.name, ok: false, error: detect.error || '无法分路' }));
+    }
+
+    const names = specs.map((sp) => sp.name);
+    const results = [];
+    for (const sp of specs) {
+      const slug = sp.slug;
+      const r = await window.api.worktree.create({
+        hostId: src.hostId, root: detect.root, slug, branch: sp.branch
+      }).catch((e) => ({ ok: false, error: e.message }));
+
+      if (!r.ok) { results.push({ name: sp.name, ok: false, error: r.error }); continue; }
+
+      const copy = mirrorConversation(src, { title: sp.name, cwd: r.path });
+      copy.forkOf = src.id;
+      copy.forkFocus = sp.name;
+      copy.forkBranch = r.branch;
+      /* 兄弟路的名字要带上 —— 提示词里会写明"别碰这些",
+         这是防止几路互相越界最直接的一招。 */
+      copy.forkSiblings = names.filter((n) => n !== sp.name);
+      set((s) => ({ conversations: { ...s.conversations, [copy.id]: copy } }));
+      results.push({ name: sp.name, ok: true, convId: copy.id, path: r.path, branch: r.branch, reused: r.reused });
+    }
+    persist();
+    return results;
   },
 
   /** 通用字段更新:只改几个字段、不想为每个字段单写一个 action 时用 */
@@ -750,7 +792,16 @@ export async function sendToAgent(hostId, convId, text, files = [], opts = {}) {
        用完立刻清掉标记,否则每一轮都会重发一遍摘要(白烧 token)。 */
     if (conv?.needsContextReplay) {
       const digest = buildContextDigest(conv.messages);
-      if (digest) prompt = buildMirrorPrompt(digest, text);
+      /* 分路比普通镜像多一层:要划清边界(本路做什么、别路做什么),
+         否则模型会顺手去改别路正在做的东西。 */
+      if (conv.forkOf) {
+        prompt = `${buildForkPrompt({
+          digest, focus: conv.forkFocus || conv.title,
+          branch: conv.forkBranch, path: conv.cwd, siblings: conv.forkSiblings || []
+        })}\n————\n用户新指令: ${text}`;
+      } else if (digest) {
+        prompt = buildMirrorPrompt(digest, text);
+      }
       st.updateConvFields(convId, { needsContextReplay: false });
     } else if (conv && conv.lastTurnAgent && conv.lastTurnAgent !== conv.agent) {
       // 引擎切换后的首条消息:注入此前对话摘要,实现 codex/claude 共用上下文

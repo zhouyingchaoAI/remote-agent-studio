@@ -8,6 +8,7 @@ import { matchCommands, applyCompletion, parseSlash, parseGoalArgs, helpText } f
 import { buildDecomposePrompt, defaultPlanPath } from '../planProgress.js';
 import { toAttachment, attachmentProblem } from '../attachmentFile.js';
 import { shortenPath } from '../shortenPath.js';
+import ForkDialog from './ForkDialog.jsx';
 import { CLAUDE_MODELS, modelVersionProblem } from '../claudeModels.js';
 import {
   createGoal, buildContinuePrompt, resumeGoalPatch, setGoalMaxRounds, setGoalTokenBudget,
@@ -196,6 +197,7 @@ export default function ChatPanel({ hostId }) {
 function ConversationHome({ hostId }) {
   const conversations = useStore((s) => s.conversations);
   const [creating, setCreating] = useState(false);
+  const [forking, setForking] = useState(null);   // 正在分路的那条对话
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
   const list = Object.values(conversations)
@@ -225,9 +227,10 @@ function ConversationHome({ hostId }) {
         <div className="muted center pad">{q ? '没有匹配的对话' : '还没有对话。点「新建对话」选择项目目录和 agent 开始。'}</div>
       ) : (
         <div className="conv-list">
-          {list.map((c) => <ConvCard key={c.id} conv={c} />)}
+          {list.map((c) => <ConvCard key={c.id} conv={c} onFork={setForking} />)}
         </div>
       )}
+      {forking && <ForkDialog conv={forking} onClose={() => setForking(null)} />}
     </div>
   );
 }
@@ -253,7 +256,7 @@ function conversationToMarkdown(conv) {
   return lines.join('\n');
 }
 
-function ConvCard({ conv }) {
+function ConvCard({ conv, onFork }) {
   const setActiveConv = useStore((s) => s.setActiveConv);
   const del = useStore((s) => s.deleteConversation);
   const rename = useStore((s) => s.renameConversation);
@@ -294,6 +297,10 @@ function ConvCard({ conv }) {
           onClick={(e) => { e.stopPropagation(); useStore.getState().addSplit(conv.hostId, conv.id); }}>⊞</button>
         <button className="icon-btn" title="重命名"
           onClick={(e) => { e.stopPropagation(); setDraftTitle(conv.title); setEditing(true); }}>✎</button>
+        {/* 分路:一条对话拆成几路,各做一个功能,各自一个 git worktree。
+            和镜像的差别是**目录也独立** —— 几路同时改同一批文件就是竞态。 */}
+        <button className="icon-btn" title="分路(拆成几条并行,各自独立工作区)"
+          onClick={(e) => { e.stopPropagation(); onFork(conv); }}>⑂</button>
         {/* 镜像:留着原对话不动,复制一份接着试。
             引擎那边会开一条**新线程** —— 复制会话 ID 的话两个对话会抢同一把
             写锁,正是之前查了很久的「一直连不上」。 */}

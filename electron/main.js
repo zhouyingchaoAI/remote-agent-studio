@@ -3056,6 +3056,36 @@ ipcMain.handle('goal:readPlan', async (_e, { hostId, path: p } = {}) => {
   }
 });
 
+/* ---- 分路(git worktree):一条对话拆成几路,各做一个功能 ----
+ *
+ * 独立目录是这件事的**前提**,不是锦上添花:几路共用一个工作目录的话,
+ * 几个智能体会同时改同一批文件,互相覆盖,而且谁也不知道被谁覆盖了。
+ * 那不是并行,是竞态。 */
+const worktree = require('./ssh/worktree');
+
+ipcMain.handle('worktree:detect', async (_e, { hostId, cwd } = {}) => {
+  const s = getSession(hostId);
+  const r = await s.ssh.exec(worktree.buildDetectRepoCommand(cwd), { timeoutMs: 15000 });
+  return worktree.parseDetect(r.stdout || '');
+});
+
+ipcMain.handle('worktree:create', async (_e, { hostId, root, slug, branch, base } = {}) => {
+  const cmd = worktree.buildCreateWorktreeCommand({ root, slug, branch, base });
+  if (!cmd) return { ok: false, error: '参数不完整' };
+  const s = getSession(hostId);
+  /* git worktree add 要复制整棵工作树,大仓库会跑一会儿。
+     给足时间 —— 超时中断会留下一个半成品目录,比慢更麻烦。 */
+  const r = await s.ssh.exec(cmd, { timeoutMs: 180000 });
+  if (r.code === 124) return { ok: false, error: '创建超时(仓库较大时可稍后重试)' };
+  return worktree.parseCreate(r.stdout || '');
+});
+
+ipcMain.handle('worktree:list', async (_e, { hostId, root } = {}) => {
+  const s = getSession(hostId);
+  const r = await s.ssh.exec(worktree.buildListCommand(root), { timeoutMs: 15000 });
+  return worktree.parseList(r.stdout || '');
+});
+
 ipcMain.handle('tasks:snapshot', (_e, scope = {}) => tasksSnapshot(scope));
 
 /* 诊断:把这一轮扫描的原始输出摆出来。

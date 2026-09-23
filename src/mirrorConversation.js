@@ -97,6 +97,44 @@ export function nextMirrorTitle(title) {
  * 必须说清楚"这些是之前聊过的、不用重做" —— 不说的话,模型很可能
  * 把摘要里提到的事情再做一遍,而那些事在磁盘上早就做完了。
  */
+/**
+ * 分路第一轮的提示词。
+ *
+ * 和普通镜像的差别在于**必须划清边界**:几路在同时跑,
+ * 各自一个 git worktree、一条分支。不说清楚的话,模型会顺手去改
+ * 别路正在做的东西 —— 在各自的 worktree 里改不会冲突,
+ * 但合并时会撞成一团,而那时候已经很难看出是谁碰的。
+ */
+export function buildForkPrompt({ digest, focus, branch, path: wtPath, siblings = [] }) {
+  const lines = [
+    '【分路 · 独立工作区】这条对话是从一条主线对话分出来的,',
+    '专门负责其中一件事。现在有几路在并行,各自一个 git worktree。',
+    '',
+    `本路负责:${focus}`,
+    wtPath ? `工作目录:${wtPath}` : '',
+    branch ? `所在分支:${branch}` : ''
+  ].filter(Boolean);
+
+  if (siblings.length) {
+    lines.push(
+      '',
+      `其他几路在做(**不要碰**):${siblings.join('、')}`,
+      '越界修改在各自 worktree 里不会立刻冲突,但合并时会撞成一团,',
+      '而且那时候很难看出是谁改的。有依赖就说出来,不要自己顺手做掉。'
+    );
+  }
+
+  if (digest) {
+    lines.push('', '以下是主线对话此前的记录摘要,作为背景:', '', digest);
+  }
+  lines.push(
+    '',
+    '注意:摘要里已完成的工作**不要重做** —— 这条分路是从主线的提交点切出来的,',
+    '那些改动都已经在代码里了。需要确认就直接读文件。'
+  );
+  return lines.join('\n');
+}
+
 export function buildMirrorPrompt(digest, userText) {
   if (!digest) return userText;
   return [

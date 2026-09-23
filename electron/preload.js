@@ -141,6 +141,11 @@ contextBridge.exposeInMainWorld('api', {
     deployPrompt: invoke('prism:deployPrompt')
   },
   goal: { check: invoke('goal:check'), readPlan: invoke('goal:readPlan') },
+  worktree: {
+    detect: invoke('worktree:detect'),
+    create: invoke('worktree:create'),
+    list: invoke('worktree:list')
+  },
   brief: {
     get: invoke('brief:get'),
     run: invoke('brief:run'),

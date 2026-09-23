@@ -164,9 +164,17 @@ test('第一轮用完就清掉标记', () => {
 });
 
 test('镜像交接和引擎切换交接是互斥的两条分支', () => {
-  // 同时走会发两份摘要
+  /* 同时走会发两份摘要。
+     中间还夹着"分路"那一支(它也是 needsContextReplay 的一种),
+     所以这里取整段来判,而不是卡一个固定的字符窗口 ——
+     窗口开小了,以后每加一个分支这条测试就误报一次。 */
   const store = read('src/store.js');
-  assert.match(store, /needsContextReplay\)[\s\S]{0,400}\} else if \(conv && conv\.lastTurnAgent/);
+  const start = store.indexOf('if (conv?.needsContextReplay)');
+  const next = store.indexOf('} else if (conv && conv.lastTurnAgent', start);
+  assert.ok(start > 0 && next > start, '两条分支必须是 if / else if 关系');
+  // 中间不能再出现第二个独立的 if(那就不是互斥了)
+  const between = store.slice(start, next);
+  assert.ok(!/\n    if \(/.test(between), '中间出现了同级的独立 if,可能会重复交接');
 });
 
 test('界面上标出"镜像副本 · 共用工作目录"', () => {
