@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { applyTheme, DEFAULT_THEME } from './themes.js';
 import { parsePlan, parseProseProgress } from './planProgress.js';
 import { mergePlan, scaleRoundsForPlan } from './goalMode.js';
+import { mirrorConversation, buildMirrorPrompt } from './mirrorConversation.js';
 
 /**
  * 主题变化通知。
@@ -184,6 +185,34 @@ export const useStore = create((set, get) => ({
     }));
     persist();
     return conv;
+  },
+
+  /**
+   * 镜像一条对话:保留历史,但开一条全新的引擎会话。
+   *
+   * 关键取舍全在 mirrorConversation.js 里 —— 尤其是**引擎会话 ID 不能复制**,
+   * 复制了就是两个对话抢同一条线程的写锁。
+   */
+  mirrorConversation: (convId, opts = {}) => {
+    const src = get().conversations[convId];
+    if (!src) return null;
+    const copy = mirrorConversation(src, opts);
+    set((s) => ({
+      conversations: { ...s.conversations, [copy.id]: copy },
+      activeConvByHost: { ...s.activeConvByHost, [copy.hostId]: copy.id }
+    }));
+    persist();
+    return copy;
+  },
+
+  /** 通用字段更新:只改几个字段、不想为每个字段单写一个 action 时用 */
+  updateConvFields: (convId, patch) => {
+    set((s) => {
+      const c = s.conversations[convId];
+      if (!c) return {};
+      return { conversations: { ...s.conversations, [convId]: { ...c, ...patch } } };
+    });
+    persist();
   },
 
   pushMessage: (convId, msg) => {
@@ -713,10 +742,18 @@ export async function sendToAgent(hostId, convId, text, files = [], opts = {}) {
     const attachments = files.length
       ? await window.api.attachments.prepare({ hostId, convId, messageId, files })
       : [];
-    // 引擎切换后的首条消息:注入此前对话摘要,实现 codex/claude 共用上下文
     const conv = st.conversations[convId];
     let prompt = text;
-    if (conv && conv.lastTurnAgent && conv.lastTurnAgent !== conv.agent) {
+    /* 镜像出来的对话,第一轮要把历史交接给新线程。
+       引擎侧的线程不支持分叉,所以上下文只能由我们这边补 ——
+       这和切换引擎是同一个问题的两种形态,共用 buildContextDigest。
+       用完立刻清掉标记,否则每一轮都会重发一遍摘要(白烧 token)。 */
+    if (conv?.needsContextReplay) {
+      const digest = buildContextDigest(conv.messages);
+      if (digest) prompt = buildMirrorPrompt(digest, text);
+      st.updateConvFields(convId, { needsContextReplay: false });
+    } else if (conv && conv.lastTurnAgent && conv.lastTurnAgent !== conv.agent) {
+      // 引擎切换后的首条消息:注入此前对话摘要,实现 codex/claude 共用上下文
       const digest = buildContextDigest(conv.messages);
       if (digest) {
         const other = conv.lastTurnAgent === 'codex' ? 'Codex' : 'Claude Code';

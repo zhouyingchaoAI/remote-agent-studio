@@ -598,6 +598,8 @@ progress { width: 140px; height: 6px; }
 .model-picker { display: inline-flex; gap: 4px; align-items: center; }
 .model-input { max-width: 150px; padding: 4px 8px; font-size: 12px; }
 .conv-card-path { font-family: Menlo, monospace; }
+/* 镜像副本标记:和源对话共用工作目录,这点必须看得见 */
+.conv-card-mirror { color: var(--accent); }
 /* 路径、命令这类要逐字看的内容用等宽 —— 比例字体下 l/1/I 分不清 */
 .mono { font-family: Menlo, Consolas, monospace; word-break: break-all; }
 /* 模型版本不足的提示:黄色警示,不拦着不让选 —— 检测可能不准,

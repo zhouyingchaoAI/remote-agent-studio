@@ -294,6 +294,15 @@ function ConvCard({ conv }) {
           onClick={(e) => { e.stopPropagation(); useStore.getState().addSplit(conv.hostId, conv.id); }}>⊞</button>
         <button className="icon-btn" title="重命名"
           onClick={(e) => { e.stopPropagation(); setDraftTitle(conv.title); setEditing(true); }}>✎</button>
+        {/* 镜像:留着原对话不动,复制一份接着试。
+            引擎那边会开一条**新线程** —— 复制会话 ID 的话两个对话会抢同一把
+            写锁,正是之前查了很久的「一直连不上」。 */}
+        <button className="icon-btn" title="镜像这条对话(保留历史,开新会话)"
+          onClick={(e) => {
+            e.stopPropagation();
+            const copy = useStore.getState().mirrorConversation(conv.id);
+            if (copy) useStore.getState().setActiveConv(conv.hostId, copy.id);
+          }}>⧉</button>
         <button className="icon-btn danger" title="删除"
           onClick={async (e) => {
             e.stopPropagation();
@@ -302,6 +311,9 @@ function ConvCard({ conv }) {
             del(conv.id);
           }}>✕</button>
       </div>
+      {/* 标明来历。镜像出来的对话和原对话共用同一个工作目录,
+          不标的话很容易对着"以为是副本"的那个做破坏性操作。 */}
+      {conv.mirrorOf && <div className="conv-card-mirror muted small">⧉ 镜像副本 · 与源对话共用工作目录</div>}
       <div className="conv-card-path muted small" title={conv.cwd || '~'}>{shortenPath(conv.cwd)}</div>
       {last && <div className="conv-card-last muted small">最近: {last.text.slice(0, 60)}</div>}
       <div className="conv-card-meta muted small">{conv.messages.length} 条消息 · {when}</div>
