@@ -1484,21 +1484,47 @@ function ArtifactFile({ hostId, remotePath, name }) {
   );
 }
 
+/**
+ * 已解析图片的进程内缓存。
+ *
+ * 原来每次挂载都重新走一遍 IPC —— 而一次解析要在远端 stat、读完整文件、
+ * 再 base64 传回来。切对话、分屏、滚动窗口滑动,任何一次重挂载都会让
+ * 旧图重新转圈。放在模块作用域而不是组件里,正是为了让它**跨挂载存活**。
+ *
+ * 不做失效:同一路径的内容变了,主进程那边的缓存键带着 mtime+size,
+ * 会返回新的 payload,这里跟着更新即可。
+ */
+const imageMemo = new Map();
+const IMAGE_MEMO_MAX = 32;
+
 function ImagePreview({ hostId, convId, remotePath, name, compact = false }) {
-  const [image, setImage] = useState(null);
+  const memoKey = `${hostId}|${convId}|${remotePath}`;
+  // 有缓存就直接拿来当初始值 —— 连一帧"加载中"都不闪
+  const [image, setImage] = useState(() => imageMemo.get(memoKey) || null);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let active = true;
-    setImage(null);
+    const cached = imageMemo.get(memoKey);
+    /* **有缓存就不清空。** 原来无条件 setImage(null),
+       于是每次重挂载都会先闪一下"图片加载中…"。
+       重试(attempt 变化)时才该真的重来一遍。 */
+    if (!cached) setImage(null);
     setError('');
     window.api.attachments.resolveImage({ hostId, convId, remotePath })
-      .then((result) => { if (active) setImage(result); })
-      .catch((reason) => { if (active) setError(reason.message); });
+      .then((result) => {
+        imageMemo.set(memoKey, result);
+        if (imageMemo.size > IMAGE_MEMO_MAX) imageMemo.delete(imageMemo.keys().next().value);
+        if (active) setImage(result);
+      })
+      .catch((reason) => {
+        // 已经有图在显示时,后台校验失败不该把它换成报错
+        if (active && !imageMemo.get(memoKey)) setError(reason.message);
+      });
     return () => { active = false; };
-  }, [hostId, convId, remotePath, attempt]);
+  }, [hostId, convId, remotePath, memoKey, attempt]);
 
   if (error) return (
     <div className="image-error">

@@ -144,9 +144,12 @@ test('remote image cache keys include the complete remote path', async () => {
   const ssh = {
     exec: async (command) => {
       if (command.includes('__RAS_HOME__')) return { code: 0, stdout: '__RAS_HOME__/home/test__RAS_HOME__', stderr: '' };
-      if (command.startsWith('readlink -f')) {
+      /* 探测命令从「readlink 一次 + stat 一次」合并成了一条,
+         这个假 shell 也跟着改 —— 它模拟的是远端 shell,命令变了就得跟。
+         输出两行:真实路径 / "大小 mtime"(后者用于缓存指纹)。 */
+      if (command.includes('readlink -f')) {
         const match = command.match(/'([^']+)'/);
-        return { code: 0, stdout: `${match[1]}\n`, stderr: '' };
+        return { code: 0, stdout: `${match[1]}\n1 1700000000\n`, stderr: '' };
       }
       return { code: 0, stdout: '1\n', stderr: '' };
     },
