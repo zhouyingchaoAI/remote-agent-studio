@@ -10,6 +10,7 @@ import { toAttachment, attachmentProblem } from '../attachmentFile.js';
 import { shortenPath } from '../shortenPath.js';
 import ForkDialog from './ForkDialog.jsx';
 import { CLAUDE_MODELS, modelVersionProblem } from '../claudeModels.js';
+import { mergeModels } from '../mergeModels.js';
 import {
   createGoal, buildContinuePrompt, resumeGoalPatch, setGoalMaxRounds, setGoalTokenBudget,
   fmtTokens, GOAL_DEFAULT_MAX_ROUNDS, GOAL_EXTEND_ROUNDS, GOAL_DEFAULT_TOKEN_BUDGET
@@ -886,6 +887,7 @@ function ChatView({ hostId, conv, split = false }) {
           agent={conv.agent}
           value={conv.model || ''}
           disabled={running}
+          hostId={hostId}
           /* 环境检测本来就拿到了 claude 版本号,拿来比一下就能在选之前提示 */
           cliVersion={hostEnv?.claude || ''}
           onChange={(m) => { setStarted(false); updateConversationModel(conv.id, m); }}
@@ -1137,13 +1139,61 @@ const agentCliInstalled = (env, agent) => {
 const CUSTOM_MODEL = '__custom__';
 const EMPTY_QUEUE = []; // 稳定引用:避免 selector 每次返回新数组导致无限重渲染
 
-function ModelPicker({ agent, value, disabled, onChange, cliVersion = '' }) {
+/**
+ * 已发现模型的缓存(渲染端)。主进程也有一层 6 小时的缓存,
+ * 这一层是为了**切对话/重挂载时不再发一次 IPC** —— 同一台机器同一个引擎,
+ * 一个会话里问一次就够了。
+ */
+const discoveredModels = new Map();   // `${hostId}|${agent}` -> {models, error}
+
+function useDiscoveredModels(hostId, agent, enabled) {
+  const key = `${hostId}|${agent}`;
+  const [state, setState] = useState(() => discoveredModels.get(key) || null);
+  const [busy, setBusy] = useState(false);
+
+  const load = React.useCallback(async (force = false) => {
+    if (!enabled || !hostId) return;
+    setBusy(true);
+    try {
+      const r = await window.api.models.discover({ hostId, engine: agent, force });
+      const next = { models: r.models || [], error: r.ok ? '' : (r.error || '') };
+      discoveredModels.set(key, next);
+      setState(next);
+    } catch (e) {
+      setState({ models: [], error: e.message });
+    } finally {
+      setBusy(false);
+    }
+  }, [hostId, agent, key, enabled]);
+
+  useEffect(() => {
+    const cached = discoveredModels.get(key);
+    if (cached) { setState(cached); return; }
+    /* 自动查一次。**失败不打扰** —— 拿不到就用内置清单,
+       用户没要求这件事,不该因为它失败就弹一个错误挡在面前。 */
+    load(false);
+  }, [key, load]);
+
+  return { ...(state || { models: [], error: '' }), busy, reload: () => load(true) };
+}
+
+function ModelPicker({ agent, value, disabled, onChange, cliVersion = '', hostId = '' }) {
   /* 预设项既可能是纯字符串(codex/deepseek),也可能是 {value,label,minCli}
      (claude —— 新模型有 CLI 版本门槛)。两种都认,省得为了加一个字段
      把另外两个引擎的列表也改一遍。 */
-  const presets = (MODEL_PRESETS[agent] || []).map(
+  /* dsh 没有 --model,查也没意义 */
+  const canDiscover = agent !== 'dsh';
+  const found = useDiscoveredModels(hostId, agent, canDiscover);
+
+  const builtin = (MODEL_PRESETS[agent] || []).map(
     (m) => (typeof m === 'string' ? { value: m, label: m } : m)
   );
+  /* **以端点说的为准,内置清单只补位。**
+     端点列出来的才是这台机器此刻真能用的;内置清单的唯一作用
+     是发现失败时不至于两手空空。
+     没被列出来的预设仍然保留 —— 有些中转不在 /v1/models 里公布全部模型,
+     直接指定却能用,删掉等于替用户断定"这个不能用",而我们并不知道。 */
+  const presets = mergeModels(found.models, builtin);
   const presetValues = presets.map((p) => p.value);
   /* 版本不够时在**选之前**就说清楚。
      不拦着不让选 —— 检测可能不准,而拦错了是凭空堵住一个本来能用的模型;
@@ -1196,9 +1246,22 @@ function ModelPicker({ agent, value, disabled, onChange, cliVersion = '' }) {
         <option value="">{
           agent === 'deepseek' ? '默认(deepseek-v4-pro[1m])' :
           agent === 'dsh' ? '由 dsh profile 决定(此处选择无效)' : '默认模型(跟随 CLI 配置)'}</option>
-        {presets.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+        {/* 端点确认可用的排前面并标出来。没标的是内置清单里的,
+            可能可用也可能不可用 —— 这个区别对自建端点尤其要紧。 */}
+        {presets.map((m) => (
+          <option key={m.value} value={m.value}>
+            {m.discovered === false && found.models.length ? `${m.label}(未列出)` : m.label}
+          </option>
+        ))}
         <option value={CUSTOM_MODEL}>自定义…</option>
       </select>
+      {canDiscover && (
+        <button type="button" className="icon-btn" disabled={found.busy}
+          title={found.error
+            ? `自动获取模型列表失败:${found.error}\n点击重试(当前用的是内置清单)`
+            : `已从端点获取 ${found.models.length} 个模型,点击刷新`}
+          onClick={found.reload}>{found.busy ? '⋯' : '⟳'}</button>
+      )}
       {versionNote && <span className="model-warn" title={versionNote}>⚠ 版本不足</span>}
     </>
   );
@@ -1768,7 +1831,7 @@ function SessionSetup({ hostId, onCancel }) {
         <label>工作目录({hostId === 'local' ? '本机' : '远程'})
           <RemoteDirPicker hostId={hostId} value={cwd} onChange={setCwd} />
         </label>
-        <label>模型(可选)<ModelPicker agent={agent} value={model} onChange={setModel} disabled={agent === 'dsh'} /></label>
+        <label>模型(可选)<ModelPicker agent={agent} value={model} onChange={setModel} hostId={hostId} disabled={agent === 'dsh'} /></label>
         <div className="system-mode-setting">
           <label className="row checkbox">
             <input
