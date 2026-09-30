@@ -1,29 +1,48 @@
 /**
  * Claude Code 的模型预设与版本门槛。
  *
- * ── 为什么要管版本 ──
+ * ── 为什么优先给别名 ──
  *
- * 新模型对 CLI 有最低版本要求(Fable 5 要 2.1.170+)。远端那台机器上的
- * claude 往往是几个月前装的 —— 选了新模型,CLI 会甩一句自己的错误退出,
- * 而用户看到的只是"又失败了",完全联想不到是**版本太旧**。
+ * `fable` / `opus` / `sonnet` / `haiku` 是**别名**,各自指向该家族的最新版,
+ * 并且随提供方(Anthropic API / Bedrock / Foundry)解析到不同版本。
+ * 用别名的好处是模型换代时这份列表不用跟着改 ——
+ * 而每次换代都手工改一遍列表,迟早会漏掉一次,留下一个已经退役的名字。
  *
- * 环境检测本来就拿到了 claude 版本号,拿来一比就能在**选之前**说清楚。
- * 这比事后解析 CLI 的报错可靠得多:报错文案会变,版本号不会。
+ * 钉死版本的完整 ID 也留几个:要复现某次结果、或者要避开一次换代时,
+ * 别名帮不上忙。
+ *
+ * ── 为什么要管版本门槛 ──
+ *
+ * 新模型对 CLI 有最低版本要求。远端那台机器上的 claude 往往是几个月前装的,
+ * 选了新模型 → CLI 甩一句自己的错误退出 → 用户只看到"又失败了",
+ * 完全联想不到是**版本太旧**。
+ *
+ * 门槛只挂在**钉死版本的 ID** 上,不挂别名:别名在老版本上会解析到
+ * 老模型,照样能跑,标门槛反而会误报。
+ *
+ * 数字来自 docs.claude.com 的 Claude Code 模型配置页(2026-09 核对)。
+ * 它会随版本变,所以这里**只警告、不禁用** —— 我们的数字过期时,
+ * 不该把一个本来能用的模型堵死。
  */
 
-/**
- * 预设列表。
- *
- * 保留 sonnet / opus / haiku 这三个短别名:它们跟随各家族最新版,
- * 用户也早就习惯了。新模型用完整标识符 —— 短别名有没有对应的写法
- * 我没有依据,而写错一个别名的代价是"选了就报错"。
- */
 export const CLAUDE_MODELS = [
-  { value: 'claude-fable-5-1', label: 'fable 5.1', minCli: '2.1.255' },
-  { value: 'claude-fable-5', label: 'fable 5', minCli: '2.1.170' },
-  { value: 'opus', label: 'opus' },
-  { value: 'sonnet', label: 'sonnet' },
-  { value: 'haiku', label: 'haiku' }
+  /* 别名:日常首选。顺序按"多数人该先看到哪个"排,不是按能力排 —— */
+  { value: 'sonnet', label: 'sonnet · 日常编码' },
+  { value: 'opus', label: 'opus · 复杂推理' },
+  { value: 'fable', label: 'fable · 最强,长任务' },
+  { value: 'haiku', label: 'haiku · 快而省' },
+  /* opusplan:计划阶段用 opus、执行阶段自动换 sonnet。
+     长任务里这个组合最省钱,但名字看不出来,所以标注一下。 */
+  { value: 'opusplan', label: 'opusplan · 计划 opus / 执行 sonnet' },
+  { value: 'sonnet[1m]', label: 'sonnet[1m] · 100 万上下文' },
+  { value: 'opus[1m]', label: 'opus[1m] · 100 万上下文' },
+
+  /* 钉死版本:复现结果、或想避开一次换代时用 */
+  { value: 'claude-fable-5-1', label: 'fable 5.1(钉版)', minCli: '2.1.257' },
+  { value: 'claude-fable-5', label: 'fable 5(钉版)', minCli: '2.1.170' },
+  { value: 'claude-opus-5-5', label: 'opus 5.5(钉版)', minCli: '2.1.280' },
+  { value: 'claude-opus-5', label: 'opus 5(钉版)' },
+  { value: 'claude-sonnet-5', label: 'sonnet 5(钉版)' }
 ];
 
 /**

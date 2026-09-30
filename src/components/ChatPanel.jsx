@@ -1100,7 +1100,22 @@ function ChatView({ hostId, conv, split = false }) {
 /* 模型选择器:预设 + 自定义输入,留空表示跟随 CLI 自身配置(~/.codex/config.toml 等)
  * deepseek 留空时后端默认 deepseek-v4-pro[1m] */
 const MODEL_PRESETS = {
-  codex: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5-codex', 'gpt-5'],
+  /* Codex(2026-09 按 developers.openai.com/codex/models 核对)。
+     排序按官方的推荐顺序,不是按发布时间 —— 列表是给人选的,
+     第一个应该是"多数情况下该选的那个"。
+     已退役的 gpt-5 / gpt-5-codex / gpt-5.4 / gpt-5.3-codex-spark 都拿掉了:
+     留着只会让人选中一个已经不存在的模型,然后收到一句没头没尾的报错。
+     (自建/中转端点的自定义模型名走「自定义…」那一项,不受这里影响。) */
+  codex: [
+    { value: 'gpt-6.1-sol', label: 'gpt-6.1-sol · 推荐,近 Astra 能力、成本更低' },
+    { value: 'gpt-6-astra', label: 'gpt-6-astra · 最强,最难的端到端工作' },
+    { value: 'gpt-6-luna', label: 'gpt-6-luna · 最快最省,重复性任务' },
+    { value: 'gpt-6-sol', label: 'gpt-6-sol · 上一代 Sol' },
+    // 5.6 系在换代过渡期仍然可用,而且不少自建端点就叫这几个名字
+    { value: 'gpt-5.6-sol', label: 'gpt-5.6-sol' },
+    { value: 'gpt-5.6-terra', label: 'gpt-5.6-terra' },
+    { value: 'gpt-5.6-luna', label: 'gpt-5.6-luna' }
+  ],
   /* claude 这份带版本门槛(新模型对 CLI 有最低版本要求),
      所以单独放在 claudeModels.js 里,是 {value,label,minCli} 结构。 */
   claude: CLAUDE_MODELS,
