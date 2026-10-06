@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -118,7 +119,10 @@ test('代码库里不再有 grok 引擎的任何残留(迁移映射除外)', () 
     'electron/ssh/AgentSession.js', 'electron/ssh/Installer.js', 'electron/main.js',
     'electron/store.js', 'electron/preload.js', 'electron/skills.js', 'electron/mobileOps.js',
     'src/store.js', 'src/components/ChatPanel.jsx', 'src/components/SetupPanel.jsx',
-    'src/components/EngineStatus.jsx', 'src/components/SkillsPanel.jsx'
+    'src/components/EngineStatus.jsx', 'src/components/SkillsPanel.jsx',
+    // ChatPanel 拆出来的几个也要查,否则残留搬个家就逃过了
+    'src/components/Message.jsx', 'src/components/ToolMessages.jsx', 'src/components/ImageMessages.jsx',
+    'src/components/ModelPicker.jsx', 'src/components/GoalBar.jsx', 'src/components/ConversationHome.jsx'
   ]) {
     // src/store.js 里保留 LEGACY_AGENTS 是有意的:历史对话要能打开
     const body = read(f).split('\n')
@@ -199,7 +203,7 @@ test('history 有上限,不会把提示词无限撑大', () => {
 });
 
 test('从对话记录抽历史:认 role:agent,滤掉错误与工具噪音', () => {
-  const src = read('src/components/ChatPanel.jsx');
+  const src = readChatSources();
   // store 里引擎消息是 role:'agent',写成 'assistant' 会一条都抽不到
   assert.match(src, /m\.role === 'agent' && \(m\.kind === 'text' \|\| m\.kind === 'result'\)/);
   assert.ok(!/m\.role === 'assistant'/.test(src), 'store 里没有 assistant 这个 role');

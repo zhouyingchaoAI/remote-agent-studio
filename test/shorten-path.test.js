@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -76,7 +77,7 @@ test('空值和垃圾输入不炸', () => {
 
 test('顶栏用缩短版,完整路径放 tooltip', () => {
   /* 缩短是为了好看,但完整路径不能没处看 —— 要往终端里粘的时候就得它。 */
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   assert.match(chat, /title=\{`\$\{conv\.cwd \|\| '~'\}\\n\(点击复制\)`\}/);
   assert.match(chat, /\{shortenPath\(conv\.cwd\)\}/);
 });

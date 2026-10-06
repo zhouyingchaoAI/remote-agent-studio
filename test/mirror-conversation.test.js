@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -180,7 +181,7 @@ test('镜像交接和引擎切换交接是互斥的两条分支', () => {
 test('界面上标出"镜像副本 · 共用工作目录"', () => {
   /* 两条对话对着同一个目录。不标的话,很容易以为副本是独立沙箱,
      在里面做破坏性操作 —— 而它改的是同一批文件。 */
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   assert.match(chat, /conv\.mirrorOf &&/);
   assert.match(chat, /共用工作目录/);
 });

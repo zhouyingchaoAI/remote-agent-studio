@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -24,7 +25,7 @@ test('复制/保存图片的 IPC 三处齐全', () => {
 });
 
 test('渲染层调用的正是这几个方法名', () => {
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   assert.ok(chat.includes('window.api.clipboard.writeImage('), '图片复制未接线');
   assert.ok(chat.includes('window.api.clipboard.saveImageAs('), '图片另存为未接线');
 
@@ -47,7 +48,7 @@ test('样式允许框选:代码区必须能用鼠标选中', () => {
 });
 
 test('图片操作按钮在缩略图和大图两处都有', () => {
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   const uses = chat.match(/<ImageActions/g) || [];
   assert.ok(uses.length >= 2, `ImageActions 应在两处出现,实际 ${uses.length}`);
   assert.ok(chat.includes('lightbox-bar'), '大图下方缺操作条');

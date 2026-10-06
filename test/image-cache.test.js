@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
@@ -17,7 +18,7 @@ const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
  * ============================================================ */
 
 const svc = read('electron/chat/AttachmentService.js');
-const chat = read('src/components/ChatPanel.jsx');
+const chat = readChatSources();
 
 /* ---------------------------------------------- 主进程缓存 */
 

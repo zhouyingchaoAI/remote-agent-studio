@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -327,7 +328,7 @@ test('再大的计划也不能超过硬上限', () => {
 test('设定目标后第一轮是拆解,不是"继续推进"', () => {
   /* 一上来就说"继续推进",模型只能边想边做,
      进度就永远只能用轮次表示 —— 而轮次说不出还剩多少活儿。 */
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   assert.match(chat, /sendToAgent\(hostId, conv\.id, buildDecomposePrompt\(fresh\)/);
   assert.match(chat, /planPath \|\| defaultPlanPath\(conv\.id\)/, '没给路径要用默认的');
 });
@@ -349,7 +350,7 @@ test('读到过文件就不再退回正文自述', () => {
 
 test('界面上区分"清单"和"模型自述的步数"', () => {
   /* 两者长得一样的话,人会把后者也当成确凿进度。 */
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   assert.match(chat, /disabled=\{!hasSteps\}/);
   assert.match(chat, /自述/);
 });

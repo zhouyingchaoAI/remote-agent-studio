@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -58,7 +59,7 @@ test('grok 引擎看 grok 命令', () => {
 /* ---------------- 接线 ---------------- */
 
 test('徽标挂在对话框顶栏,而不是只在环境配置页', () => {
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   assert.match(chat, /<EngineStatus hostId=\{hostId\} engine=\{conv\.agent\}/);
   assert.match(chat, /import EngineStatus/);
 });

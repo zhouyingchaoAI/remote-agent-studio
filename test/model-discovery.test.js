@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const http = require('http');
@@ -185,13 +186,13 @@ test('只缓存成功的结果', () => {
 
 test('发现失败时不打扰,静默退回内置清单', () => {
   /* 用户没要求这件事。因为它失败就弹个错误挡在面前,是喧宾夺主。 */
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   assert.match(chat, /load\(false\)/);
   // 失败信息只在刷新按钮的 tooltip 里
   assert.match(chat, /自动获取模型列表失败/);
 });
 
 test('dsh 不查 —— 它没有 --model', () => {
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   assert.match(chat, /const canDiscover = agent !== 'dsh'/);
 });

@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
@@ -18,7 +19,7 @@ const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
  * 不是修卡顿。
  * ============================================================ */
 
-const chat = read('src/components/ChatPanel.jsx');
+const chat = readChatSources();
 
 /* ---------------------------------------------- 渲染:memo 三件套 */
 

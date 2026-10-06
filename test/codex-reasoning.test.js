@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -56,7 +57,7 @@ test('不设置时不往命令里塞空参数残留', () => {
 });
 
 test('只对 codex 生效:其他引擎没有这个开关', () => {
-  const ui = read('src/components/ChatPanel.jsx');
+  const ui = readChatSources();
   assert.match(ui, /conv\.agent === 'codex' && \(/);
   assert.match(ui, /reasoningEffort: conv\.agent === 'codex'/);
 

@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -43,7 +44,7 @@ test('提供另存与在文件夹中显示的通道', () => {
 });
 
 test('前端渲染文件卡片并能保存', () => {
-  const src = read('src/components/ChatPanel.jsx');
+  const src = readChatSources();
   assert.match(src, /case 'file':/);
   assert.match(src, /function ArtifactFile/);
   assert.match(src, /window\.api\.artifacts\.saveAs/);

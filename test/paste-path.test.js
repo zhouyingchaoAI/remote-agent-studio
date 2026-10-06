@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -65,7 +66,7 @@ test('主进程能读 Finder 的文件引用,而不只是纯文本', () => {
 });
 
 test('粘完就打开目录列表并停在该目录,而不是弹回 HOME', () => {
-  const ui = read('src/components/ChatPanel.jsx');
+  const ui = readChatSources();
   // 原来 toggle 写死 load('~'),刚粘完的路径会被丢掉
   assert.match(ui, /load\(value\?\.trim\(\) \|\| '~'\)/);
   assert.match(ui, /const applyPasted = \(raw, opts\) => \{[\s\S]{0,200}setOpen\(true\);[\s\S]{0,40}load\(next\)/);

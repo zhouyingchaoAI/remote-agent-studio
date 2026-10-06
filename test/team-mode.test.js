@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -128,7 +129,7 @@ test('换引擎跑这一轮必须先 start 再 send,否则会被自己 cancel �
   // agent:start 会 cancel 已存在的会话,顺序错了就把刚发出的这轮掐死
   assert.match(store, /await window\.api\.agent\.start\(\{[\s\S]{0,600}?\}\);[\s\S]{0,120}await sendToAgent/);
   // 在途时 ChatPanel 的 effect 也不能重启
-  const ui = read('src/components/ChatPanel.jsx');
+  const ui = readChatSources();
   assert.match(ui, /if \(useStore\.getState\(\)\.agentRunning\[conv\.id\]\) \{ setStarted\(true\); return; \}/);
 });
 

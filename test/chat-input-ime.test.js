@@ -1,10 +1,9 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 
 test('chat input does not send while an IME composition is active', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'ChatPanel.jsx'), 'utf8');
+  const source = readChatSources();
   assert.match(source, /onCompositionStart/);
   assert.match(source, /onCompositionEnd/);
   assert.match(source, /nativeEvent\.isComposing/);

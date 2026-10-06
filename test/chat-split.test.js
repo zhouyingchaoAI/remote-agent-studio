@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -51,7 +52,7 @@ test('删除对话要从分屏里摘掉,否则留一个空壳面板', () => {
 });
 
 test('分屏渲染:一个时走原路径,多个才铺网格', () => {
-  const ui = read('src/components/ChatPanel.jsx');
+  const ui = readChatSources();
   assert.match(ui, /if \(paneConvs\.length === 1\) \{/);
   assert.match(ui, /chat-split panes-\$\{Math\.min\(paneConvs\.length, MAX_PANES\)\}/);
   // 面板里已删除的对话要滤掉
@@ -59,14 +60,14 @@ test('分屏渲染:一个时走原路径,多个才铺网格', () => {
 });
 
 test('只能并排同主机的对话', () => {
-  const ui = read('src/components/ChatPanel.jsx');
+  const ui = readChatSources();
   assert.match(ui, /c\.hostId === hostId && !onScreen\.has\(c\.id\)/);
   // 跨主机并排看没意义:cwd 与引擎都对不上,还容易对着错的机器发指令
   assert.match(ui, /很容易对着错的机器发指令/);
 });
 
 test('关本屏不等于删对话', () => {
-  const ui = read('src/components/ChatPanel.jsx');
+  const ui = readChatSources();
   assert.match(ui, /关掉这一屏\(对话本身不会删除,后台照常跑\)/);
   assert.match(ui, /closeSplit\(hostId, conv\.id\)/);
 });

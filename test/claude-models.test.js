@@ -1,10 +1,8 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
-const fs = require('fs');
-const path = require('path');
 const { loadEsm } = require('./helpers/loadEsm');
 
-const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 const M = loadEsm('src/claudeModels.js');
 
 /* ============================================================
@@ -114,7 +112,7 @@ test('没有门槛的模型和未知模型都不提示', () => {
 
 /* ---------------------------------------------- 接线 */
 
-const chat = read('src/components/ChatPanel.jsx');
+const chat = readChatSources();
 
 test('预设列表同时兼容字符串和对象两种写法', () => {
   /* codex/deepseek 还是纯字符串列表。为了给 claude 加一个字段
@@ -139,7 +137,7 @@ test('Codex 列表已退役的型号都清掉了', () => {
   /* gpt-5 / gpt-5-codex 早就从 Codex 退役(gpt-5.4 2026-08-31、
      gpt-5.3-codex-spark 2026-09-14、gpt-5.5 2026-10-14)。
      留在列表里只会让人选中一个不存在的模型,然后收到一句没头没尾的报错。 */
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   const seg = chat.slice(chat.indexOf('codex: ['), chat.indexOf('deepseek: ['));
   for (const dead of ['gpt-5-codex', "'gpt-5'", 'gpt-5.4', 'gpt-5.3-codex-spark', 'gpt-5.5']) {
     assert.ok(!seg.includes(dead), `${dead} 已退役,不该还在预设里`);
@@ -148,7 +146,7 @@ test('Codex 列表已退役的型号都清掉了', () => {
 
 test('Codex 列表含当前推荐型号,且推荐的排第一', () => {
   /* 列表是给人选的,第一个应该是"多数情况下该选的那个"。 */
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   const seg = chat.slice(chat.indexOf('codex: ['), chat.indexOf('deepseek: ['));
   for (const id of ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna']) {
     assert.ok(seg.includes(id), `缺少 ${id}`);
@@ -157,7 +155,7 @@ test('Codex 列表含当前推荐型号,且推荐的排第一', () => {
 });
 
 test('5.6 系保留 —— 过渡期仍可用,自建端点也常用这几个名字', () => {
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   const seg = chat.slice(chat.indexOf('codex: ['), chat.indexOf('deepseek: ['));
   assert.ok(seg.includes('gpt-5.6-terra'));
 });

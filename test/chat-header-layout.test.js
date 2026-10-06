@@ -1,10 +1,11 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
 const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
-const chat = read('src/components/ChatPanel.jsx');
+const chat = readChatSources();
 const css = read('src/styles.css');
 
 /* ============================================================

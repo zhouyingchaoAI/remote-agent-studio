@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -101,7 +102,7 @@ test('主进程那四个必填字段一个不少', () => {
 
 /* ---------------------------------------------- 接线 */
 
-const chat = read('src/components/ChatPanel.jsx');
+const chat = readChatSources();
 
 test('附件在入口就归一化,不留 File 实例', () => {
   assert.match(chat, /Array\.from\(rawFiles \|\| \[\]\)\.map\(toAttachment\)/);

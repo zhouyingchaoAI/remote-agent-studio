@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -180,7 +181,7 @@ test('下发按钮只在远程、且本机已登录时出现', () => {
  * 发现没登录还得切到环境配置、登完再切回来。 */
 
 test('对话顶栏有 GitHub 徽标,和引擎徽标同一个形态', () => {
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   assert.match(chat, /<GithubBadge hostId=\{hostId\}/);
   // 主机名要传进去:弹层里得写清是给哪台主机登录(上一轮就栽在这)
   assert.match(chat, /hostLabel=\{hostName\}/);
@@ -203,7 +204,7 @@ test('弹层里登录成功后徽标要自己刷新', () => {
 test('/github 支持 status / login / sync', () => {
   const cmds = read('src/slashCommands.js');
   assert.match(cmds, /name: 'github'/);
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   for (const sub of ['status', 'login', 'sync']) {
     assert.match(chat, new RegExp(`sub === '${sub}'`), `缺 /github ${sub}`);
   }
@@ -212,7 +213,7 @@ test('/github 支持 status / login / sync', () => {
 });
 
 test('一次性码是异步事件,从聊天发起时要贴回对话', () => {
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   /* login 的 IPC 要到流程结束才 resolve,码走的是 github:progress。
      不订阅的话「正在申请一次性码…」之后就再无下文。 */
   assert.match(chat, /ghFromChat\.current = true/);

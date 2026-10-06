@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -129,7 +130,7 @@ test('本轮结束会把还挂着"运行中"的命令收掉', () => {
 
 /* ---------------------------------------------- 界面 */
 
-const chat = read('src/components/ChatPanel.jsx');
+const chat = readChatSources();
 
 test('跑着的输出默认展开', () => {
   /* 命令跑了十分钟你却要先点一下才能看见它在干什么,等于这个日志不存在。 */

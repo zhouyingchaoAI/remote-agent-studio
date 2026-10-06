@@ -1,10 +1,11 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
 test('ChatPanel exposes the system-mode toggle, confirmation, badge, restart, and permission hint action', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'ChatPanel.jsx'), 'utf8');
+  const source = readChatSources();
 
   assert.match(source, /const \[permissionMode, setPermissionMode\] = useState\(/);
   assert.match(source, /defaultPermissionMode \|\| 'workspace'/);

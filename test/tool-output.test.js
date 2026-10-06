@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readChatSources } = require('./helpers/chatSource');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -24,7 +25,7 @@ test('tool 消息会渲染它携带的 output', () => {
   /* 这是"完全不知道中间过程"的根因:codex 新格式把命令输出挂在 tool 消息的
      output 字段上,而渲染器只画命令、**从来不看 output** ——
      于是对话里只剩一行命令和一段结论,没法验证结论对不对。 */
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   assert.match(chat, /<ToolOutput output=\{m\.output\} exitCode=\{m\.exitCode\} \/>/);
   assert.match(chat, /function ToolCall/);
 });
@@ -42,7 +43,7 @@ test('后端在 tool 消息上带出输出和退出码', () => {
 
 test('长命令能展开看全,不是硬截断了事', () => {
   // 200 字符经常正好把命令切在关键参数上
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   assert.match(chat, /showFull \|\| !long \? detail : `\$\{detail\.slice\(0, 200\)\}…`/);
 });
 
@@ -120,7 +121,7 @@ test('没有退出码时按关键词判断,用于决定要不要默认展开', (
 
 test('失败的输出默认展开', () => {
   // 成功的折起来省地方;失败的那条正是你想看的,不该还要多点一下
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   assert.match(chat, /const failed = looksFailed\(output, exitCode\);/);
   /* 还在跑的也默认展开 —— 想看进度的时刻正是它还在跑的时刻。
      两个条件都要在,少一个就有一类输出要多点一下才能看见。 */
@@ -129,7 +130,7 @@ test('失败的输出默认展开', () => {
 
 test('退出码非 0 时显著标出来', () => {
   // 失败的命令和成功的长得一样,是这个界面最早的问题之一
-  const chat = read('src/components/ChatPanel.jsx');
+  const chat = readChatSources();
   assert.match(chat, /exit-bad/);
   assert.match(chat, /退出码/);
 });
