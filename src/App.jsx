@@ -41,6 +41,7 @@ import BrowserPanel from './components/BrowserPanel.jsx';
 import ErrorLogPanel from './components/ErrorLogPanel.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 import BgTasksDrawer, { BgTasksBadge } from './components/BgTasksDrawer.jsx';
+import { runE2E } from './e2e.js';
 
 /* 按使用频次排:对话、终端、文件是日常主力,放最左边(离鼠标最近、
    也最先被眼睛扫到);速览/图谱/技能是偶尔用;配置类沉到最右。 */
@@ -74,8 +75,12 @@ export default function App() {
     loadSettings();
     loadHosts();
     loadConversations();
-    const offStatus = window.api.ssh.onStatus(({ hostId, status, detail }) =>
-      useStore.getState().setStatus(hostId, status, detail));
+    /* 端到端冒烟:只在 --ras-e2e 下真的跑,平时这行什么都不做。
+       放在三个 load 之后、监听器之前 —— 它要等 hosts 加载完,
+       而回复要靠下面的 onMessage 监听才能落到 store。 */
+    runE2E();
+    const offStatus = window.api.ssh.onStatus(({ hostId, status, detail, autoReconnect }) =>
+      useStore.getState().setStatus(hostId, status, detail, autoReconnect));
     const offLog = window.api.setup.onLog(({ hostId, text }) =>
       useStore.getState().appendSetupLog(hostId, text));
     // 手机端新开的对话:接纳进来,否则它的消息会因对话不存在而被丢弃
@@ -96,6 +101,11 @@ export default function App() {
           codexStarted: msg.codexStarted,
           lastTurnAgent: msg.agent
         });
+        if (st.connectionPaused[convId]) {
+          st.pushMessage(convId, { role: 'agent', kind: 'raw',
+            text: '网络连接曾中断。连接及代理会自动恢复；本轮执行结果可能不完整，请确认进度后手动继续，排队消息暂不发送。', ts: Date.now() });
+          return;
+        }
         // 有排队消息则自动发送下一条
         const next = st.shiftQueued(convId);
         const conv = st.conversations[convId];
@@ -183,6 +193,7 @@ export default function App() {
          * 用闭包里那份旧的就等于白读了。 */
         const goalStep = () => {
           const st = useStore.getState();
+          if (st.connectionPaused[convId]) return;
           const conv = st.conversations[convId];
           if (!(conv?.goal?.status === 'active' && conv.goal.text)) return;
           const agentTexts = conv.messages

@@ -67,13 +67,23 @@ test('拿不到线程 id 也能给出说明', () => {
 
 /* ---------------------------------------------- 接线 */
 
-test('撞锁后把 thread id 丢掉,下一轮开新线程', () => {
-  /* 不丢的话下一轮还 resume 同一个 id,再撞同一把锁 ——
-     这正是"一直连不上"的成因。丢掉之后对话能继续走下去。 */
-  const s = read('electron/ssh/AgentSession.js');
-  const seg = s.slice(s.indexOf('isThreadLockError(detail)'));
-  assert.match(seg.slice(0, 600), /this\.codexSessionId = null/);
-  assert.match(seg.slice(0, 600), /this\.codexStarted = false/);
+test('撞锁后保留原会话，不悄悄新开线程', async () => {
+  // 锁未释放时明确暂停，不能靠丢弃上下文来假装恢复成功。
+  const { EventEmitter } = require('node:events');
+  const { AgentSession } = require('../electron/ssh/AgentSession');
+  const stream = new EventEmitter();
+  stream.stderr = new EventEmitter();
+  const session = new AgentSession({ execStream: async () => {
+    setImmediate(() => { stream.stderr.emit('data', Buffer.from(REAL)); stream.emit('close', 1); });
+    return stream;
+  } }, null, { agent: 'codex' });
+  session.codexSessionId = 'original-thread';
+  session.codexStarted = true;
+  await session.send('continue');
+  assert.equal(session.codexSessionId, 'original-thread');
+  assert.equal(session.codexStarted, true);
+  assert.match(session.buildCommand('continue'), /resume 'original-thread'/);
+  assert.doesNotMatch(describeThreadLock(REAL), /已自动改用新线程/);
 });
 
 test('清空的 id 能落到存储里,不被旧值盖回去', () => {
@@ -81,6 +91,5 @@ test('清空的 id 能落到存储里,不被旧值盖回去', () => {
      下一轮又会 resume 那个锁着的线程。 */
   const store = read('src/store.js');
   const fn = store.slice(store.indexOf('updateConvResume:'), store.indexOf('setConversationGoal:'));
-  assert.match(fn, /\.\.\.c, claudeSessionId, codexSessionId, codexStarted/);
   assert.ok(!/codexSessionId \|\|/.test(fn), '不能用 || 兜底,那会让清空失效');
 });

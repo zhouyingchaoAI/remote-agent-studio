@@ -48,6 +48,11 @@ export default function HostForm() {
   return (
     <div className="form-page">
       <h2>{editingHost.id ? '编辑主机' : '添加主机'}</h2>
+      <p className="muted small">
+        {editingHost.id
+          ? '修改连接地址、端口不会新建对话：原聊天记录、工作目录和续聊标识保持不变。切换内网 / 外网地址时请编辑此主机，不要另加一台主机。请确保仍连接同一服务器、同一用户。'
+          : '如果只是切换已有服务器的内网 / 外网地址，请取消并编辑原主机；添加主机会建立独立的对话列表。'}
+      </p>
       <div className="form-grid">
         <label>备注名<input value={form.name} onChange={set('name')} placeholder="如: 开发机-A100" /></label>
         <label>主机地址 *<input value={form.host} onChange={set('host')} placeholder="192.168.1.100 或 域名" /></label>

@@ -16,15 +16,15 @@ test('codex resumes by exact session id when available', () => {
   assert.doesNotMatch(command, /resume --last/);
 });
 
-test('codex falls back to resume --last without a session id', () => {
+test('codex refuses ambiguous resume without a session id', () => {
   const session = new AgentSession(null, null, {
     agent: 'codex', cwd: '/workspace', permissionMode: 'workspace'
   });
   session.codexStarted = true;
 
-  const command = session.buildCommand('continue');
-
-  assert.match(command, /resume --last/);
+  assert.throws(() => session.buildCommand('continue'), /会话.*标识/);
+  session.ssh = { isWindowsNative: true };
+  assert.throws(() => session.buildCommand('continue'), /会话.*标识/);
 });
 
 test('switching model mid-conversation keeps -m before the resume subcommand', () => {

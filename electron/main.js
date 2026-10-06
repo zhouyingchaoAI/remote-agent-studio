@@ -148,6 +148,9 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      /* E2E 标记用 additionalArguments 传:沙箱里的 preload 读不到主进程的 env,
+         但能读 process.argv —— 这是 Electron 文档给的正道。 */
+      additionalArguments: process.env.RAS_E2E === '1' ? ['--ras-e2e'] : [],
       // 内置浏览器面板需要 <webview>:用来打开 dsh 配置界面、远程起的 Web 服务等。
       // webview 内部保持默认的沙箱与 contextIsolation,不开 nodeIntegration。
       webviewTag: true
@@ -444,12 +447,13 @@ ipcMain.handle('ssh:connect', async (_e, hostConfig) => {
   const id = hostConfig.id;
   if (sessions.has(id)) sessions.get(id).ssh.disconnect();
   const logSetup = (t) => send('setup:log', { hostId: id, text: t });
-  hostConfig = { ...hostConfig, verifyHostKey: makeHostKeyVerifier(hostConfig, logSetup) };
+  hostConfig = { ...hostConfig, autoReconnect: loadProxies()[id]?.autoReconnect === true,
+    verifyHostKey: makeHostKeyVerifier(hostConfig, logSetup) };
   const ssh = new SSHManager(hostConfig);
   const proxy = new ProxyService(ssh);
   const installer = new Installer(ssh, proxy);
   ssh.on('status', (st) => {
-    send('ssh:status', { hostId: id, ...st });
+    send('ssh:status', { hostId: id, ...st, autoReconnect: ssh.config.autoReconnect === true });
     send('setup:log', { hostId: id, text: `[SSH] ${st.status}${st.detail ? ': ' + st.detail : ''}\n` });
   });
   sessions.set(id, { ssh, proxy, installer, agents: new Map(), hostConfig });
@@ -792,9 +796,12 @@ ipcMain.handle('proxy:configure', async (_e, { hostId, cfg }) => {
   const s = getSession(hostId);
   const log = (t) => send('setup:log', { hostId, text: t });
   const r = await s.proxy.configure(await resolveProxyCfg(cfg, hostId), log);
+  s.ssh.config.autoReconnect = cfg.autoReconnect === true;
   saveProxy(hostId, cfg); // 记住原始配置(autoLanIp 保持动态),下次连接自动恢复
   return r;
 });
+
+ipcMain.handle('proxy:get', (_e, hostId) => loadProxies()[hostId] || null);
 
 /** 返回本机局域网 IP(供 direct 模式自动填入/实时解析) */
 function isPrivateIpv4(ip) {
@@ -3172,4 +3179,11 @@ ipcMain.handle('bg:stop-task', async (_e, { hostId, pid } = {}) => {
   // 停掉后立刻重扫一次,免得面板上还挂着一个已经没了的任务
   await bgScanHost(hostId).catch(() => {});
   return { ok, output: (r.stdout || '').replace('__STOP_SENT__', '').trim() };
+});
+
+/* ---- 端到端冒烟(RAS_E2E=1)----
+   必须放在文件最末:它要覆盖掉上面注册的 agent:start / agent:send。 */
+require('./e2e').installE2E({
+  ipcMain, app, send,
+  log: (t) => { try { require('./logger').log?.(t); } catch (_) {} console.log(t); }
 });

@@ -3,7 +3,7 @@
  * 把事件解析为统一的聊天消息结构发给前端。
  *
  * 每轮对话 = 一次远程 exec(non-interactive + resume),避免 PTY 抓屏的脆弱性:
- *   codex : codex exec --json [resume --last] "<prompt>"
+ *   codex : codex exec --json [resume <session-id>] "<prompt>"
  *   claude: claude -p --output-format stream-json --verbose [--resume <id>] "<prompt>"
  */
 const { EventEmitter } = require('events');
@@ -180,6 +180,9 @@ class AgentSession extends EventEmitter {
 
   buildCommand(prompt, turn = {}) {
     const { agent, cwd, model, permissionMode } = this.opts;
+    if (agent === 'codex' && this.codexStarted && !this.codexSessionId) {
+      throw new Error('原会话缺少续聊标识，已暂停发送以保护上下文。请恢复原会话标识，或明确新建对话；不会自动续接最近的其他会话。');
+    }
     const attachments = Array.isArray(turn.attachments) ? turn.attachments : [];
     const context = [];
     if (attachments.length) {
@@ -220,10 +223,10 @@ class AgentSession extends EventEmitter {
           .join(' ');
         const effort = codexReasoningFlag(this.opts.reasoningEffort, model);
         const flags = `--json --skip-git-repo-check ${approval} ${modelArg} ${effort} ${images} ${writableDirs}`;
-        // 优先用会话 ID 精确 resume;仅在拿不到 ID 时退回 --last(同目录多会话时可能串线)
+        // 只按当前对话的精确 ID 续接，禁止使用同目录的最近会话。
         const resume = this.codexSessionId
           ? `resume ${powershellQuote(this.codexSessionId)} `
-          : (this.codexStarted ? 'resume --last ' : '');
+          : '';
         return `${cd}& codex.cmd exec ${flags} ${resume}${powershellQuote(fullPrompt)}`;
       }
       const permission = permissionMode === 'system'
@@ -270,11 +273,9 @@ class AgentSession extends EventEmitter {
       // 会影响用户在终端里的其他 codex 会话
       const effort = codexReasoningFlag(this.opts.reasoningEffort, model);
       const flags = `--json --skip-git-repo-check ${approval} ${m} ${effort} ${images} ${writableDirs}`;
-      // 优先用会话 ID 精确 resume;仅在拿不到 ID 时退回 --last(同目录多会话时可能串线)
+      // 只按当前对话的精确 ID 续接。
       if (this.codexSessionId)
         return wrap(`codex exec ${flags} resume ${shellQuote(this.codexSessionId)} ${q}`);
-      if (this.codexStarted)
-        return wrap(`codex exec ${flags} resume --last ${q}`);
       return wrap(`codex exec ${flags} ${q}`);
     }
     // claude / deepseek(共用 claude CLI)
@@ -387,12 +388,7 @@ class AgentSession extends EventEmitter {
             const r = describeExit(code, this.dshBuffer, this.lastStderr);
             this._emitMsg({ kind: 'error', text: r.message });
           } else if (isThreadLockError(detail)) {
-            /* **线程锁冲突:必须把 thread id 丢掉。**
-               不丢的话下一轮还会 `resume <同一个 id>`,再撞同一把锁 ——
-               用户看到的就是"一直连不上",而它跟网络毫无关系。
-               丢掉之后下一轮开新线程,对话能继续走下去。 */
-            this.codexSessionId = null;
-            this.codexStarted = false;
+            // 线程被占用不代表用户同意丢弃上下文。保留精确 ID，待解锁后续接。
             this._emitMsg({ kind: 'error', text: describeThreadLock(detail) });
           } else {
             this._emitMsg({
@@ -458,8 +454,7 @@ class AgentSession extends EventEmitter {
       });
       await this.ssh.exec(buildReleaseCommand(pids), { timeoutMs: RELEASE_GRACE_MS + 6000 });
     } catch (_) {
-      /* 清不掉也接着往下走:真撞上锁了,上面还有一层"丢掉 thread id
-         开新线程"的兜底。两层都失败才会让用户看到错误。 */
+      // 清理失败仍尝试精确续接；若遇锁冲突，保留会话 ID 并明确报错。
     }
   }
 

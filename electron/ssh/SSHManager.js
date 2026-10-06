@@ -23,6 +23,8 @@ class SSHManager extends EventEmitter {
     this.manualClose = false;        // 用户主动断开时不做自动重连
     this.reconnectTimer = null;
     this.reconnectAttempt = 0;
+    this.reconnectBlocked = false;
+    this.connectPromise = null;
     // 通道闸门:主动排队,而不是等 sshd 拒绝再报「Channel open failure」
     this.channels = new ChannelPool();
     this.sftpRelease = null;
@@ -34,12 +36,21 @@ class SSHManager extends EventEmitter {
     this.emit('status', { status, detail });
   }
 
-  async connect() {
-    if (this.status === 'connected') return;
+  connect() {
+    if (this.status === 'connected') return Promise.resolve();
+    if (this.connectPromise) return this.connectPromise;
+    this.connectPromise = this._connect().finally(() => { this.connectPromise = null; });
+    return this.connectPromise;
+  }
+
+  async _connect() {
     this.manualClose = false;
+    this.reconnectBlocked = false;
     this._setStatus('connecting');
     const conn = new Client();
     this.client = conn;
+    let established = false;
+    const current = () => this.client === conn && !this.manualClose;
 
     const connectCfg = {
       host: this.config.host,
@@ -78,17 +89,41 @@ class SSHManager extends EventEmitter {
         .on('keyboard-interactive', (name, instr, lang, prompts, finish) => {
           finish(prompts.map(() => this.config.password || ''));
         })
-        .on('ready', () => {
-          this.reconnectAttempt = 0;
-          this.channels.reset();               // 新连接,旧名额一并作废
-          this._setStatus('connected');
-          resolve();
-          // 探到真实 MaxSessions 才能把闸门开到刚好,不阻塞连接完成
-          this.detectMaxSessions().catch(() => {});
+        .on('ready', async () => {
+          if (!current()) return reject(new Error('连接已取消'));
+          try {
+            // 新 transport 必须先恢复所有代理监听,再对调用方宣布可用。
+            for (const [remotePort, t] of this.reverseTunnels) {
+              await new Promise((ok, fail) => conn.forwardIn('127.0.0.1', remotePort,
+                (err) => err ? fail(err) : ok()));
+              if (!current()) throw new Error('连接已取消');
+              this.emit('tunnel', { remotePort, ...t, active: true });
+            }
+            established = true;
+            this.reconnectAttempt = 0;
+            this.channels.reset();
+            this._setStatus('connected');
+            resolve();
+            this.detectMaxSessions().catch(() => {});
+          } catch (err) {
+            reject(err);
+            if (current()) {
+              this._setStatus('error', `代理隧道恢复失败: ${err.message}`);
+              conn.destroy();
+            }
+          }
         })
-        .on('error', (err) => { this._setStatus('error', err.message); reject(err); })
+        .on('error', (err) => {
+          if (!current()) return reject(err);
+          this.reconnectBlocked = err.level === 'client-authentication'
+            || /authentication|permission denied|host.*(denied|verification)|host key/i.test(err.message);
+          this._setStatus('error', err.message);
+          reject(err);
+        })
         .on('close', () => {
-          const wasConnected = this.status === 'connected';
+          reject(new Error('SSH 连接已断开'));
+          if (!current()) return;
+          this.client = null;
           this.sftpSession = null;
           this.sftpRelease = null;
           this.sftpPromise = null;
@@ -97,7 +132,7 @@ class SSHManager extends EventEmitter {
           this.channels.reset(new Error('SSH 连接已断开'));
           if (this.status !== 'error') this._setStatus('disconnected');
           // 意外掉线 -> 指数退避自动重连(用户主动断开除外)
-          if (wasConnected && !this.manualClose) this._scheduleReconnect();
+          if (established && !this.reconnectBlocked) this._scheduleReconnect();
         })
         .on('tcp connection', (info, accept, rejectConn) => {
           this._handleReverseConnection(info, accept, rejectConn);
@@ -109,37 +144,34 @@ class SSHManager extends EventEmitter {
   disconnect() {
     this.manualClose = true;
     clearTimeout(this.reconnectTimer);
-    if (this.client) { try { this.client.end(); } catch (_) {} }
+    this.reconnectTimer = null;
+    if (this.client) { try { this.client.destroy(); } catch (_) {} }
     this.client = null;
+    this.sftpSession = null;
+    this.sftpPromise = null;
+    this.sftpRelease = null;
+    this.shells.clear();
+    this.channels.reset(new Error('SSH 连接已断开'));
     this._setStatus('disconnected');
   }
 
-  /** 意外掉线后的自动重连:1s/2s/4s/8s/16s 五次,成功后重建反向隧道 */
+  /** 网络切换恢复:退避上限 30 秒;显式开启的主机持续等待网络恢复。 */
   _scheduleReconnect() {
-    if (this.reconnectAttempt >= 5) {
+    if (this.manualClose || this.reconnectBlocked || this.reconnectTimer) return;
+    if (!this.config.autoReconnect && this.reconnectAttempt >= 5) {
       this._setStatus('error', '自动重连失败(已重试 5 次),请手动重新连接');
       this.reconnectAttempt = 0;
       return;
     }
     this.reconnectAttempt += 1;
-    const delay = 1000 * Math.pow(2, this.reconnectAttempt - 1);
-    this._setStatus('connecting', `连接已断开,${Math.round(delay / 1000)}s 后自动重连 (${this.reconnectAttempt}/5)`);
-    clearTimeout(this.reconnectTimer);
+    const delay = Math.min(30000, 1000 * Math.pow(2, this.reconnectAttempt - 1));
+    this._setStatus('connecting', `连接已断开,${Math.round(delay / 1000)}s 后自动重连 (第 ${this.reconnectAttempt} 次)`);
     this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
       if (this.manualClose) return;
       try {
         this.status = 'disconnected'; // 允许 connect() 重新执行
         await this.connect();
-        // 重建之前的反向隧道
-        for (const [remotePort, t] of [...this.reverseTunnels]) {
-          try {
-            await new Promise((resolve, reject) =>
-              this.client.forwardIn('127.0.0.1', remotePort, (err) => (err ? reject(err) : resolve())));
-            this.emit('tunnel', { remotePort, ...t, active: true });
-          } catch (_) {
-            this.emit('status', { status: 'connected', detail: `隧道 ${remotePort} 重建失败,请到环境配置页重新应用代理` });
-          }
-        }
       } catch (_) {
         this._scheduleReconnect();
       }

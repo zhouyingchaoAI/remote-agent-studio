@@ -16,12 +16,13 @@ test('codex places image flags before resume and includes file/artifact context'
     agent: 'codex', cwd: '/workspace', permissionMode: 'workspace'
   });
   session.codexStarted = true;
+  session.codexSessionId = 'attachment-thread';
 
   const command = session.buildCommand('create a preview', turn);
 
   assert.match(command, /--image '\/home\/test\/uploads\/reference image\.png'/);
   assert.match(command, /--add-dir '\/home\/test\/\.remote-agent-studio\/artifacts\/c1\/m1'/);
-  assert.ok(command.indexOf('--image') < command.indexOf('resume --last'));
+  assert.ok(command.indexOf('--image') < command.indexOf("resume 'attachment-thread'"));
   assert.match(command, /\/home\/test\/uploads\/brief\.md/);
   assert.match(command, /\/home\/test\/\.remote-agent-studio\/artifacts\/c1\/m1/);
 });

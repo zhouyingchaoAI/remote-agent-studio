@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('api', {
     detectLocalClaude: invoke('setup:detectLocalClaude'),
     testRemoteAgent: invoke('setup:testRemoteAgent'),
     configureProxy: invoke('proxy:configure'),
+    getProxy: invoke('proxy:get'),
     lanIp: invoke('net:lanIp'),
     exportDiagnostics: invoke('diag:export'),
     onLog: on('setup:log')
@@ -142,6 +143,12 @@ contextBridge.exposeInMainWorld('api', {
   },
   goal: { check: invoke('goal:check'), readPlan: invoke('goal:readPlan') },
   models: { discover: invoke('models:discover') },
+  /* 端到端冒烟。enabled 只在主进程带了 --ras-e2e 时为真,
+     正常运行时渲染层看到的是 false,脚本一行都不会跑。 */
+  e2e: {
+    enabled: process.argv.includes('--ras-e2e'),
+    report: invoke('e2e:report')
+  },
   worktree: {
     detect: invoke('worktree:detect'),
     create: invoke('worktree:create'),

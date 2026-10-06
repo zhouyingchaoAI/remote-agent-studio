@@ -95,11 +95,16 @@ export const useStore = create((set, get) => ({
   setPendingBrowserUrl: (url) => set({ pendingBrowserUrl: url }),
   // 网络中断后的自动续跑次数(按对话计,用户发新消息时清零)
   autoResumeCount: {},
+  connectionPaused: {}, // 网络切换后只恢复连接,任务需用户明确继续
   setAutoResumeCount: (convId, n) =>
     set((s) => ({ autoResumeCount: { ...s.autoResumeCount, [convId]: n } })),
   setEditingHost: (h) => set({ editingHost: h }),
-  setStatus: (hostId, status, detail) =>
+  setStatus: (hostId, status, detail, autoReconnect = false) =>
     set((s) => ({
+      connectionPaused: autoReconnect && status !== 'connected' && s.statuses[hostId] === 'connected'
+        ? { ...s.connectionPaused, ...Object.fromEntries(Object.values(s.conversations)
+          .filter((c) => c.hostId === hostId).map((c) => [c.id, true])) }
+        : s.connectionPaused,
       statuses: { ...s.statuses, [hostId]: status },
       statusDetails: { ...s.statusDetails, [hostId]: detail || '' }
     })),
@@ -423,7 +428,10 @@ export const useStore = create((set, get) => ({
         conversations: {
           ...s.conversations,
           [convId]: {
-            ...c, claudeSessionId, codexSessionId, codexStarted,
+            ...c,
+            ...(claudeSessionId !== undefined ? { claudeSessionId } : {}),
+            ...(codexSessionId !== undefined ? { codexSessionId } : {}),
+            ...(codexStarted !== undefined ? { codexStarted } : {}),
             ...(lastTurnAgent ? { lastTurnAgent } : {})
           }
         }
@@ -743,6 +751,7 @@ export function buildContextDigest(messages = [], maxChars = 6000) {
  */
 export async function runAsAgent(hostId, convId, agent, model, prompt) {
   const st = useStore.getState();
+  if (st.connectionPaused[convId]) return;
   const conv = st.conversations[convId];
   if (!conv) return;
   st.setAgentRunning(convId, true);
@@ -774,6 +783,14 @@ export async function runAsAgent(hostId, convId, agent, model, prompt) {
 
 export async function sendToAgent(hostId, convId, text, files = [], opts = {}) {
   const st = useStore.getState();
+  if (opts.auto && st.connectionPaused[convId]) return;
+  if (!opts.auto && st.connectionPaused[convId]) {
+    if (st.statuses[hostId] !== 'connected') {
+      st.pushMessage(convId, { role: 'agent', kind: 'error', text: '正在恢复网络连接,请连接成功后再继续。', ts: Date.now() });
+      return;
+    }
+    useStore.setState({ connectionPaused: { ...st.connectionPaused, [convId]: false } });
+  }
   const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   if (!opts.auto) {
     resetAutoReplies(convId);        // 人工发言重置自动确认计数
@@ -784,6 +801,11 @@ export async function sendToAgent(hostId, convId, text, files = [], opts = {}) {
     const attachments = files.length
       ? await window.api.attachments.prepare({ hostId, convId, messageId, files })
       : [];
+    if (useStore.getState().connectionPaused[convId]) {
+      st.setAgentRunning(convId, false);
+      st.pushMessage(convId, { role: 'agent', kind: 'error', text: '准备发送时网络中断，本条未发送，请连接恢复后重试。', ts: Date.now() });
+      return;
+    }
     const conv = st.conversations[convId];
     let prompt = text;
     /* 镜像出来的对话,第一轮要把历史交接给新线程。

@@ -16,7 +16,8 @@
     "test": "node --test",
     "lint": "eslint .",
     "format": "prettier --write \"{electron,src,test,scripts}/**/*.{js,jsx}\"",
-    "format:check": "prettier --check \"{electron,src,test,scripts}/**/*.{js,jsx}\""
+    "format:check": "prettier --check \"{electron,src,test,scripts}/**/*.{js,jsx}\"",
+    "e2e": "npm run build && RAS_E2E=1 electron ."
   },
   "dependencies": {
     "electron-updater": "^6.3.9",

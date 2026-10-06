@@ -18,9 +18,26 @@ export default function SetupPanel({ hostId, host }) {
   const [directPort, setDirectPort] = useState('7890');
   const [lanIp, setLanIp] = useState('');
   const [remotePort, setRemotePort] = useState('18080');
+  const [autoReconnect, setAutoReconnect] = useState(false);
   const [apiAgent, setApiAgent] = useState('claude');
   const [apiKey, setApiKey] = useState('');
   const logRef = useRef(null);
+
+  useEffect(() => {
+    let active = true;
+    window.api.setup.getProxy(hostId).then((cfg) => {
+      if (!active) return;
+      setProxyMode(cfg?.mode || 'direct');
+      setLocalProxyHost(cfg?.localProxyHost || '127.0.0.1');
+      setLocalProxyPort(String(cfg?.localProxyPort || 7890));
+      setRemotePort(String(cfg?.remotePort || 18080));
+      setAutoReconnect(cfg?.autoReconnect === true);
+      setDirectAutoIp(cfg?.autoLanIp !== false && !cfg?.directProxyUrl);
+      setDirectProxyUrl(cfg?.directProxyUrl || '');
+      setDirectPort(String(cfg?.port || 7890));
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [hostId]);
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -56,7 +73,7 @@ export default function SetupPanel({ hostId, host }) {
     let cfg;
     if (proxyMode === 'none') cfg = { mode: 'none' };
     else if (proxyMode === 'tunnel')
-      cfg = { mode: 'tunnel', localProxyHost, localProxyPort: Number(localProxyPort), remotePort: Number(remotePort) };
+      cfg = { mode: 'tunnel', localProxyHost, localProxyPort: Number(localProxyPort), remotePort: Number(remotePort), autoReconnect };
     else if (directAutoIp)
       cfg = { mode: 'direct', autoLanIp: true, port: Number(directPort) || 7890 };
     else
@@ -167,6 +184,8 @@ export default function SetupPanel({ hostId, host }) {
               <label>本机侧代理地址<input value={localProxyHost} onChange={(e) => setLocalProxyHost(e.target.value)} placeholder="127.0.0.1 或局域网 IP" /></label>
               <label>本机侧代理端口<input value={localProxyPort} onChange={(e) => setLocalProxyPort(e.target.value)} placeholder="7890" /></label>
               <label>远程监听端口<input value={remotePort} onChange={(e) => setRemotePort(e.target.value)} placeholder="18080" /></label>
+              <label><input type="checkbox" checked={autoReconnect} onChange={(e) => setAutoReconnect(e.target.checked)} />网络切换后自动恢复连接和代理</label>
+              <p className="muted small">断网时持续退避重试，连接恢复后重建隧道；手动断开或认证异常时停止。中断的任务需手动继续，不自动重放。</p>
             </div>
           )}
           <label className="radio">
