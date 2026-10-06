@@ -56,7 +56,9 @@ export function CodeBlock({ code, lang }) {
   );
 }
 
-export default function Markdown({ text = '', onFileLink }) {
+/* memo:正文不变就别重新解析。配合 Message 的 memo 用 ——
+   一条消息的 text 只在它自己流式更新时才变,其余 199 条完全不该动。 */
+function Markdown({ text = '', onFileLink }) {
   const parts = String(text).split('```');
   const out = [];
   parts.forEach((part, i) => {
@@ -86,3 +88,5 @@ export default function Markdown({ text = '', onFileLink }) {
   });
   return <div className="md">{out}</div>;
 }
+
+export default React.memo(Markdown);

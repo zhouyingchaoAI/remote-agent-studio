@@ -616,12 +616,33 @@ export const useStore = create((set, get) => ({
 }));
 
 let saveTimer = null;
+/* 上次送去持久化时各对话的 updatedAt。
+   只把变过的送过 IPC —— 原来每 300ms 把全部对话整个结构化克隆一遍发过去,
+   对话一多就是每秒几 MB 的无谓序列化。磁盘那层本来就按对话分文件、
+   按 updatedAt 跳过,瓶颈只在这段 IPC。 */
+const sentAt = new Map();
+
 function persist() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    const convos = Object.values(useStore.getState().conversations);
-    window.api.convos.save(convos).catch(() => {});
+    const all = Object.values(useStore.getState().conversations);
+    const changed = all.filter((c) => sentAt.get(c.id) !== c.updatedAt);
+    /* ids 必须每次都带全:主进程靠它清理已删除对话的文件。
+       只发脏对话而不发 id 列表,删掉的对话会在磁盘上永远留着。 */
+    const ids = all.map((c) => c.id);
+    if (!changed.length && sentAt.size === ids.length) return;
+    window.api.convos.save({ changed, ids })
+      .then(() => { for (const c of changed) sentAt.set(c.id, c.updatedAt); })
+      .catch(() => {});
+    // 删掉的对话从记录里清掉,否则 size 对不上会一直触发空保存
+    for (const id of [...sentAt.keys()]) if (!ids.includes(id)) sentAt.delete(id);
   }, 300);
+}
+
+/** 持久化记录重置:加载对话后调用,避免把刚从磁盘读出来的东西再原样写回去 */
+export function markPersisted(convos) {
+  sentAt.clear();
+  for (const c of convos || []) if (c?.id) sentAt.set(c.id, c.updatedAt);
 }
 
 /**
@@ -873,5 +894,7 @@ export async function loadConversations() {
   const map = {};
   for (const c of list) map[c.id] = normalizeConversation(c);
   useStore.setState({ conversations: map });
+  // 刚从磁盘读出来的,不需要再原样写回去
+  markPersisted(Object.values(map));
   if (list.some((c) => c.permissionMode !== map[c.id].permissionMode)) persist();
 }

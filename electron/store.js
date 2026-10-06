@@ -74,13 +74,21 @@ function loadConvos() {
   } catch (_) { return []; }
 }
 
-function saveConvos(convos) {
+/**
+ * 两种入参都认:
+ *   · 新:{ changed: [脏对话], ids: [全部 id] } —— 渲染端只发变过的,省掉每 300ms
+ *     把全部对话结构化克隆一遍的开销;ids 用来清理已删除对话的文件
+ *   · 旧:[全部对话] —— 兼容手机端等还没改的调用方
+ */
+function saveConvos(payload) {
   fs.mkdirSync(convDir(), { recursive: true });
-  const alive = new Set();
+  const isNew = payload && !Array.isArray(payload) && Array.isArray(payload.changed);
+  const convos = isNew ? payload.changed : (payload || []);
+  const allIds = isNew ? payload.ids : convos.map((c) => c && c.id).filter(Boolean);
+  const alive = new Set((allIds || []).map((id) => `${safeConvId(id)}.json`));
   for (const c of convos) {
     if (!c || !c.id) continue;
     const fid = safeConvId(c.id);
-    alive.add(`${fid}.json`);
     if (convSavedAt.get(c.id) === c.updatedAt) continue; // 未变化,跳过
     const file = path.join(convDir(), `${fid}.json`);
     const tmp = `${file}.tmp`;

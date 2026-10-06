@@ -425,6 +425,16 @@ function ChatView({ hostId, conv, split = false }) {
   const listRef = useRef(null);
   const composingRef = useRef(false);
   const [filePreview, setFilePreview] = useState(null); // {path, name}
+  /* 传给 Message 的回调必须引用稳定,否则 React.memo 形同虚设:
+     每次渲染新建一个箭头函数,200 条消息就全部重渲染。
+     send / changePermissionMode 本身每次渲染都是新的,所以用 ref 中转。 */
+  const sendRef = useRef(null);
+  const permRef = useRef(null);
+  const onQuickReply = React.useCallback((t) => sendRef.current?.(t), []);
+  const onEnableSystemMode = React.useCallback(() => permRef.current?.('system'), []);
+  const onFileLink = React.useCallback((p) => setFilePreview({
+    path: p, name: p.replace(/[\\/]+$/, '').split(/[\\/]/).pop()
+  }), []);
   const [visibleCount, setVisibleCount] = useState(200); // 长对话窗口化渲染
   const [slashIndex, setSlashIndex] = useState(0);       // 斜杠命令菜单选中项
   const permissionMode = conv.permissionMode || (conv.autoApprove ? 'system' : 'workspace');
@@ -858,6 +868,9 @@ function ChatView({ hostId, conv, split = false }) {
     updateConversationPermission(conv.id, nextMode);
   };
 
+  sendRef.current = send;
+  permRef.current = changePermissionMode;
+
   return (
     <div className="chat-panel">
       <div className="chat-header">
@@ -978,11 +991,11 @@ function ChatView({ hostId, conv, split = false }) {
           const realIndex = conv.messages.length - arr.length + i;
           return (
             <Message key={`${m.ts || 0}_${realIndex}`} m={m} hostId={hostId} convId={conv.id}
-              onEnableSystemMode={() => changePermissionMode('system')}
+              onEnableSystemMode={onEnableSystemMode}
               isLast={realIndex === conv.messages.length - 1}
               running={running}
-              onQuickReply={(t) => send(t)}
-              onFileLink={(p) => setFilePreview({ path: p, name: p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() })} />
+              onQuickReply={onQuickReply}
+              onFileLink={onFileLink} />
           );
         })}
         {running && <div className="typing"><span /><span /><span /> {hostId === 'local' ? '本地' : '远程'}执行中...</div>}
@@ -1421,7 +1434,19 @@ function VoiceReplyButton({ mode, options, onReply }) {
   );
 }
 
-function Message({ m, hostId, convId, onEnableSystemMode, isLast, running, onQuickReply, onFileLink }) {
+/**
+ * **memo 是长对话流式输出时最关键的一处优化。**
+ *
+ * 不包的话,每来一个 delta,窗口内的 200 条消息**全部**重渲染,
+ * 每条都重新解析一遍 Markdown —— 流式输出每秒十几次 delta,
+ * 就是每秒几千次 Markdown 解析。2000 条的对话一输出就卡,根因在这儿,
+ * 不在持久化(那个量过,每次才 1.5ms)。
+ *
+ * memo 生效的前提是 props 稳定:store 只替换被改动的那条消息对象,
+ * 其余保持引用不变;三个回调在 ChatView 里用 useCallback 固定住。
+ * 少做任何一项,memo 都形同虚设 —— 下面的测试会守着。
+ */
+const Message = React.memo(function Message({ m, hostId, convId, onEnableSystemMode, isLast, running, onQuickReply, onFileLink }) {
   const [open, setOpen] = useState(false);
   if (m.role === 'user')
     return (
@@ -1518,7 +1543,7 @@ function Message({ m, hostId, convId, onEnableSystemMode, isLast, running, onQui
     default:
       return <div className="msg thin"><pre className="dim">{m.text || JSON.stringify(m)}</pre></div>;
   }
-}
+});
 
 /**
  * 非图片产物(docx/pdf/xlsx/zip…)的下载入口。
