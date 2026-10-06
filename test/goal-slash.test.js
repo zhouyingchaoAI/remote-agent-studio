@@ -322,8 +322,10 @@ test('验收命令跑不起来时暂停,而不是当成"未达成"', () => {
 
 test('验收在主进程执行且有超时', () => {
   // 验收命令挂住会让整个目标循环停住,而那看起来就像"任务还在跑"
-  const main = read('electron/main.js');
+  // handler 已按领域搬到 electron/ipc/goal.js;main.js 只负责注册
+  const main = read('electron/ipc/goal.js');
   assert.match(main, /ipcMain\.handle\('goal:check'/);
+  assert.match(read('electron/main.js'), /require\('\.\/ipc\/goal'\)\.register/, 'main.js 必须把它注册进去');
   assert.match(main, /timeoutMs: 60000/);
   // 输出会进提示词发给模型
   assert.match(main, /redact\(`\$\{r\.stdout/);

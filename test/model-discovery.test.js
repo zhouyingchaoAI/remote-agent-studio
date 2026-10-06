@@ -172,14 +172,14 @@ for (const [name, merge] of [['主进程', d.mergeModels], ['渲染端', M.merge
 test('查询要带上引擎环境前缀,否则密钥是空的', () => {
   /* 密钥在 ~/.remote-agent-env.sh 里。不 source 一遍,
      ${OPENAI_API_KEY} 就是空的 —— 结果永远 401,而且看着像密钥配错了。 */
-  const main = read('electron/main.js');
+  const main = read('electron/ipc/models.js');
   assert.match(main, /AGENT_ENV_PREFIX\} \$\{cmd\}/);
 });
 
 test('只缓存成功的结果', () => {
   /* 失败多半是暂时的(密钥刚配好、网络抖一下)。
      把失败缓存住,用户改完配置也要等 6 小时才生效,等于把人困住。 */
-  const main = read('electron/main.js');
+  const main = read('electron/ipc/models.js');
   assert.match(main, /if \(result\.ok\) modelCache\.set/);
 });
 

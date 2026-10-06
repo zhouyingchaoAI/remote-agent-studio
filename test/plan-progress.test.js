@@ -357,8 +357,8 @@ test('界面上区分"清单"和"模型自述的步数"', () => {
 test('默认计划路径里的 ~ 会被展开', () => {
   /* 整段引起来的话 `~` 不展开,会去找一个名字里真带波浪号的目录 ——
      而默认路径正是 `~/.remote-agent-studio/…`,不处理这个功能默认就是坏的。 */
-  const main = read('electron/main.js');
-  const h = main.slice(main.indexOf(`ipcMain.handle('goal:readPlan'`), main.indexOf(`ipcMain.handle('tasks:snapshot'`));
+  const main = read('electron/ipc/goal.js');
+  const h = main.slice(main.indexOf(`ipcMain.handle('goal:readPlan'`), main.length);
   assert.match(h, /startsWith\('~\/'\)/);
   assert.match(h, /"\$HOME"/);
 
@@ -397,8 +397,8 @@ test('计划文件路径拼进 shell 前必须被引用', () => {
 
 test('用的是仓库里那个 shellQuote,没有再手写一份引用逻辑', () => {
   /* 每多一份引用实现,就多一处会出错、且不会被上面那条测试覆盖的地方。 */
-  const main = read('electron/main.js');
-  const h = main.slice(main.indexOf(`ipcMain.handle('goal:readPlan'`), main.indexOf(`ipcMain.handle('tasks:snapshot'`));
+  const main = read('electron/ipc/goal.js');
+  const h = main.slice(main.indexOf(`ipcMain.handle('goal:readPlan'`), main.length);
   assert.match(h, /shellQuote\(file\)/);
   assert.ok(!/replace\(\/'\/g/.test(h), '不该在这里再写一遍单引号转义');
 });
@@ -406,7 +406,7 @@ test('用的是仓库里那个 shellQuote,没有再手写一份引用逻辑', ()
 test('读计划失败不抛错 —— 它只是观察窗口,不该打断对话', () => {
   /* 文件还没被创建、路径写错、主机刚好断了,都只是"这次没读到"。
      让它抛出去会把整轮目标推进打断,代价远大于少显示一次进度。 */
-  const main = read('electron/main.js');
+  const main = read('electron/ipc/goal.js');
   const h = main.slice(main.indexOf(`ipcMain.handle('goal:readPlan'`));
   assert.match(h.slice(0, 1400), /catch \(e\)[\s\S]*?return \{ ok: false/);
   assert.match(h.slice(0, 1400), /code === 124/, '超时(124)不会抛,必须显式判');

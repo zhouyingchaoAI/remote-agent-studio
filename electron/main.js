@@ -3002,134 +3002,16 @@ ipcMain.handle('bg:snapshot', () => bgSnapshot());
 
 /* 面板要的是**所有**后台任务,不只是下载。
    应用侧任务来自 IPC 包装的自动登记,主机侧来自进程扫描,这里合成一份。 */
-/**
- * 跑一条目标的验收命令。
+/* ---- 按领域拆出去的 IPC(electron/ipc/*)----
  *
- * 这是目标模式里唯一的**硬判据**:模型说"已完成"的成本是零,
- * 而 `npm test` / `curl -fsS .../health` 的退出码不会撒谎。
- *
- * 命令是用户在 /goal --check 里自己写的,所以这里不做白名单 ——
- * 但**有超时**:验收命令挂住会让整个目标循环停在那儿,
- * 而那看起来就像"任务还在跑",最难察觉。
- */
-ipcMain.handle('goal:check', async (_e, { hostId, command } = {}) => {
-  const cmd = String(command || '').trim();
-  if (!cmd) throw new Error('没有验收命令');
-  const s = getSession(hostId);
-  const r = await s.ssh.exec(
-    `${hostId === LOCAL_ID ? '' : Installer.BIN_PATH + ' '}${cmd}`,
-    { timeoutMs: 60000 });
-  return {
-    code: r.code,
-    // 输出会进提示词发给模型,照例脱敏
-    output: require('./errorLog').redact(`${r.stdout || ''}\n${r.stderr || ''}`.trim().slice(-4000))
-  };
-});
-
-/**
- * 读计划文件。
- *
- * 目标模式原来只能显示"第 12 轮",而轮次不含任何信息 —— 看不出在做第几件事、
- * 总共几件。让智能体自己维护一份 markdown 清单(它本来就爱写 progress.md),
- * 应用每轮读一次,就能变成「第 3 / 18 步」。
- *
- * 读**失败一律返回空**而不是抛错:文件还没被创建、路径写错、主机暂时断开,
- * 这些都不该把整轮对话打断 —— 计划只是个观察窗口,不是必需品。
- */
-ipcMain.handle('goal:readPlan', async (_e, { hostId, path: p } = {}) => {
-  const file = String(p || '').trim();
-  if (!file) return { ok: false, text: '', error: '没有计划文件路径' };
-  /* 路径来自用户输入,会拼进 shell —— 用仓库里已有的 shellQuote,
-     不要在这儿再手写一遍引用逻辑。shell 引用的边角情况多到没法靠肉眼判断,
-     每多一份实现就多一处会出错的地方。
-
-     `~/` 要单独处理:整段引起来的话 `~` 不会展开,会去找一个名字里
-     真带波浪号的目录 —— 默认计划路径正是 `~/.remote-agent-studio/…`,
-     不处理的话这个功能默认就是坏的。展开交给 shell 的 $HOME,
-     剩下的部分照常引用,注入面没变大。 */
-  const quoted = file.startsWith('~/')
-    ? `"$HOME"/${shellQuote(file.slice(2))}`
-    : shellQuote(file);
-  try {
-    const s = getSession(hostId);
-    // 计划文件不该很大;截断避免有人把日志当计划
-    const r = await s.ssh.exec(`head -c 60000 ${quoted} 2>/dev/null`, { timeoutMs: 15000 });
-    if (r.code === 124) return { ok: false, text: '', error: '读取超时' };
-    const text = String(r.stdout || '');
-    if (!text.trim()) return { ok: false, text: '', error: '文件为空或不存在' };
-    return { ok: true, text };
-  } catch (e) {
-    return { ok: false, text: '', error: e.message };
-  }
-});
-
-/* ---- 分路(git worktree):一条对话拆成几路,各做一个功能 ----
- *
- * 独立目录是这件事的**前提**,不是锦上添花:几路共用一个工作目录的话,
- * 几个智能体会同时改同一批文件,互相覆盖,而且谁也不知道被谁覆盖了。
- * 那不是并行,是竞态。 */
-const worktree = require('./ssh/worktree');
-
-ipcMain.handle('worktree:detect', async (_e, { hostId, cwd } = {}) => {
-  const s = getSession(hostId);
-  const r = await s.ssh.exec(worktree.buildDetectRepoCommand(cwd), { timeoutMs: 15000 });
-  return worktree.parseDetect(r.stdout || '');
-});
-
-ipcMain.handle('worktree:create', async (_e, { hostId, root, slug, branch, base } = {}) => {
-  const cmd = worktree.buildCreateWorktreeCommand({ root, slug, branch, base });
-  if (!cmd) return { ok: false, error: '参数不完整' };
-  const s = getSession(hostId);
-  /* git worktree add 要复制整棵工作树,大仓库会跑一会儿。
-     给足时间 —— 超时中断会留下一个半成品目录,比慢更麻烦。 */
-  const r = await s.ssh.exec(cmd, { timeoutMs: 180000 });
-  if (r.code === 124) return { ok: false, error: '创建超时(仓库较大时可稍后重试)' };
-  return worktree.parseCreate(r.stdout || '');
-});
-
-ipcMain.handle('worktree:list', async (_e, { hostId, root } = {}) => {
-  const s = getSession(hostId);
-  const r = await s.ssh.exec(worktree.buildListCommand(root), { timeoutMs: 15000 });
-  return worktree.parseList(r.stdout || '');
-});
-
-/* ---- 模型列表自动发现 ----
- *
- * 写死的清单有两个躲不开的问题:永远落后一轮,而且对自建/中转端点
- * 完全无关(那里的模型叫 gpt-5.6-terra 这种名字,官方列表里一个都没有)。
- * 端点自己知道答案,问它一次即可。
- *
- * 结果按 主机+引擎 缓存:每次打开对话都去问一遍,既慢又没必要 ——
- * 模型列表几周才变一次。 */
-const modelDiscovery = require('./ssh/modelDiscovery');
-/* 复用执行引擎时那份环境前缀 —— 密钥在 ~/.remote-agent-env.sh 里,
-   不 source 一遍 ${OPENAI_API_KEY} 就是空的,结果永远 401。 */
-const { AGENT_ENV: AGENT_ENV_PREFIX } = require('./ssh/agentEnv');
-const MODEL_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const modelCache = new Map();   // `${hostId}|${engine}` -> {at, result}
-
-ipcMain.handle('models:discover', async (_e, { hostId, engine, baseUrl, envKey, force } = {}) => {
-  const key = `${hostId}|${engine}`;
-  const hit = modelCache.get(key);
-  if (!force && hit && Date.now() - hit.at < MODEL_CACHE_TTL_MS) {
-    return { ...hit.result, cached: true };
-  }
-  const cmd = modelDiscovery.buildDiscoverCommand({ engine, baseUrl, envKey });
-  if (!cmd) return { ok: false, error: '端点或密钥变量名不合法', models: [] };
-  try {
-    const s = getSession(hostId);
-    /* 带上引擎环境前缀:密钥在 ~/.remote-agent-env.sh 里,
-       不 source 一遍的话 ${OPENAI_API_KEY} 是空的,结果永远是 401。 */
-    const r = await s.ssh.exec(`${AGENT_ENV_PREFIX} ${cmd}`, { timeoutMs: 30000 });
-    if (r.code === 124) return { ok: false, error: '查询超时', models: [] };
-    const result = modelDiscovery.parseDiscover(r.stdout || '');
-    // 只缓存成功的:失败多半是暂时的(密钥没配好、网络抖),缓存住会把人困住
-    if (result.ok) modelCache.set(key, { at: Date.now(), result });
-    return result;
-  } catch (e) {
-    return { ok: false, error: e.message, models: [] };
-  }
-});
+ * main.js 原来 3000 多行、148 个 handler,改一处要读一千行。
+ * 新领域一律放 electron/ipc/<领域>.js,导出 register(ctx) 只拿自己要的依赖;
+ * 这里只负责把共享状态递过去。老的 handler 逐步往外搬,搬的时候不改逻辑 ——
+ * 两件事混在一个提交里,出了问题分不清是搬坏的还是改坏的。 */
+const ipcCtx = { ipcMain, getSession, LOCAL_ID, Installer, shellQuote };
+require('./ipc/goal').register(ipcCtx);
+require('./ipc/worktree').register(ipcCtx);
+require('./ipc/models').register(ipcCtx);
 
 ipcMain.handle('tasks:snapshot', (_e, scope = {}) => tasksSnapshot(scope));
 
