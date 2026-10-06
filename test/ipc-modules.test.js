@@ -51,6 +51,36 @@ for (const f of modules) {
   });
 }
 
+test('同一个通道不能出现在两个模块里', () => {
+  /* 这条是被真实事故逼出来的:拆分时切片边界算错,goal:readPlan 同时落到了
+     goal.js 和 worktree.js。原来的检查只看"模块 vs main.js",两个模块之间
+     的重复一个都没抓到 —— 后注册的悄悄覆盖先注册的,lint 报的还是一个
+     不相干的 "shellQuote 未定义"。模块之间也必须互斥。 */
+  const owner = new Map();
+  for (const f of modules) {
+    for (const m of read(`electron/ipc/${f}`).matchAll(/ipcMain\.handle\('([^']+)'/g)) {
+      const ch = m[1];
+      assert.ok(!owner.has(ch), `通道 ${ch} 同时出现在 ${owner.get(ch)} 和 ${f}`);
+      owner.set(ch, f);
+    }
+  }
+});
+
+test('模块里引用的标识符都来自 ctx 或自己的 require', () => {
+  /* 搬家时最容易漏的就是闭包变量:在 main.js 里能用,搬出去就是 undefined,
+     而且要等那个 handler 被调用时才炸。lint 能抓到一部分,这里再补一道。 */
+  for (const f of modules) {
+    const src = read(`electron/ipc/${f}`);
+    const params = (src.match(/function register\(\{([^}]*)\}\)/) || [])[1] || '';
+    const provided = new Set(params.split(',').map((x) => x.trim()).filter(Boolean));
+    for (const need of ['getSession', 'shellQuote', 'LOCAL_ID', 'Installer']) {
+      if (new RegExp(`\\b${need}\\b`).test(src.replace(/function register\([^)]*\)/, ''))) {
+        assert.ok(provided.has(need), `${f} 用到了 ${need} 但 register 没有从 ctx 里取`);
+      }
+    }
+  }
+});
+
 test('register 用桩 ctx 能跑通,不在注册阶段就炸', () => {
   for (const f of modules) {
     const calls = [];
